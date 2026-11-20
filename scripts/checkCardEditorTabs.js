@@ -268,6 +268,9 @@ async function mount(page, o) {
       }
       if (/\/api\/bfp\/upload-url$/.test(us)) r = { ok: true, status: 200, json: () => Promise.resolve({ signedUrl: "https://storage.example.com/put/bg.png", publicUrl: "https://cdn.example.com/card/bg.png" }) };
       if (/^https:\/\/storage\.example\.com\//.test(us)) r = { ok: true, status: 200, json: () => Promise.resolve({}) };
+      // NAMED (Nov 20 2026, P2-2): after the PUT the page asks the server to check the stored file (POST
+      // /api/bfp/upload-check, lib/uploadCheck.js); BEFORE there was no such call. A good file answers { ok, type }.
+      if (/\/api\/bfp\/upload-check$/.test(us)) r = { ok: true, status: 200, json: () => Promise.resolve({ ok: true, type: "image" }) };
     }
     const p = Promise.resolve(r || { ok: false, status: 500, json: () => Promise.resolve({ error: "check" }), blob: () => Promise.resolve({ type: "", size: 0 }) });
     p.catch(() => {});

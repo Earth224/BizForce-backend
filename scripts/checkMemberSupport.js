@@ -161,8 +161,9 @@ const MUTATIONS = {
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE the anchor was "2026-11-07". AFTER "2026-11-08", the version the
   // Etsy privacy sentence set; the mutation still winds it back before this check's change.
   // NAMED (Nov 14 2026, L1): BEFORE the anchor was "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube text set;
+  // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
   // the mutation still winds it back before this check's change.
-  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-14\";", "const TERMS_VERSION = \"2026-10-26\";"]],
+  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-20\";", "const TERMS_VERSION = \"2026-10-26\";"]],
   // support's ledger legs are described differently, so the shared total in SQL misses them
   "support-debit-not-transfer": [["mig", "v_balance := bfc_transfer(p_from, p_to, p_amount, 'Transfer');", "v_balance := bfc_transfer(p_from, p_to, p_amount, case when p_kind = 'support' then 'Support' else 'Transfer' end);"]]
 };

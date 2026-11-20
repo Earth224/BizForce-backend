@@ -352,10 +352,12 @@ const THEMED = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
    as the pop-out above. */
 /* NAMED BEFORE → AFTER (Nov 19 2026, P2-1). BEFORE: 61 pages loaded bf-theme.js. AFTER: 63; home.html and inbox.html,
    the phone app shell's Home and Inbox, are new and wear the member's theme, held to the same rules as the pop-out above. */
-const NEW_PAGES = ["music-popout.html", "media.html", "mailbox.html", "shopify-requests.html", "home.html", "inbox.html"];
+/* NAMED BEFORE → AFTER (Nov 20 2026, P2-2). BEFORE: 63. AFTER: 65; moderation.html (the owner's queue) and copyright.html (the
+   notice form) are new and wear the member's theme, held to the same rules. */
+const NEW_PAGES = ["music-popout.html", "media.html", "mailbox.html", "shopify-requests.html", "home.html", "inbox.html", "moderation.html", "copyright.html"];
 const RULE = (() => { const m = /var RULE =\n([\s\S]*?);\n/.exec(FILES[THEME]); try { return m ? vm.runInNewContext(m[1]) : ""; } catch (e) { return ""; } })();
 check("A0. scripts/bf-theme.js carries the rule, with html::before and body::before", /html::before/.test(RULE) && /body::before/.test(RULE));
-check("A1. 63 pages load scripts/bf-theme.js", THEMED.length === 63 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
+check("A1. 65 pages load scripts/bf-theme.js", THEMED.length === 65 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
 const firstInHead = THEMED.filter(f => { const m = /<head>\s*([\s\S]*?)\n/.exec(FILES[f]); return !m || m[1].trim() !== TAG; });
 check("A1. ... as the first element of <head>, before any style or script", firstInHead.length === 0, firstInHead.join(", "));
 const inlineLeft = THEMED.concat([SHELL]).filter(f => /body::before\s*\{[^{}]*background/i.test(noComments(f === SHELL ? FILES[f] : stylesOf(FILES[f]))));
@@ -1051,7 +1053,8 @@ async function routesAndLib(lifted) {
     // NAMED (Nov 5 2026, mailbox connection): BEFORE 59 pages in the list; AFTER 60, with mailbox.html.
     // NAMED (Nov 15 2026, W3): BEFORE 60 pages in the list; AFTER 61, with shopify-requests.html.
     // NAMED (Nov 19 2026, P2-1): BEFORE 61 pages in the list; AFTER 63, with home.html and inbox.html.
-    r.body.created_id === row.id && r.body.pages.length === 63 && r.body.pages.some(p => (p.key || p.file || p) === "media.html" || JSON.stringify(p).indexOf("media.html") !== -1) &&
+    // NAMED (Nov 20 2026, P2-2): BEFORE 63 pages in the list; AFTER 65, with moderation.html and copyright.html.
+    r.body.created_id === row.id && r.body.pages.length === 65 && r.body.pages.some(p => (p.key || p.file || p) === "media.html" || JSON.stringify(p).indexOf("media.html") !== -1) &&
     r.body.pages.some(p => (p.key || p.file || p) === "mailbox.html" || JSON.stringify(p).indexOf("mailbox.html") !== -1));
   fake.db.member_themes.push({ id: "bbbbbbbb-0000-4000-8000-000000000009", user_id: OTHER, name: "Theirs", theme: LIBX.DEFAULT_THEME });
   r = await callRoute(L, "get", "/api/themes");

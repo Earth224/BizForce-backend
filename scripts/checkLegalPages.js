@@ -491,8 +491,12 @@ const fmt = n => Number(n).toLocaleString("en-US");
     dom.window.fetch = () => { throw new Error("no fetch expected"); };
     dom.window.eval(FE["scripts/bf-legal-footer.js"]);
     const links = [...dom.window.document.querySelectorAll("[data-bf-legal-footer] a")].map(a => a.textContent + " " + a.getAttribute("href"));
-    check("H2. it draws Terms · Privacy · Refunds · Contact · Your data, to lib/legal.js's paths",
-      same(links, ["Terms " + LEGAL.PAGES.terms, "Privacy " + LEGAL.PAGES.privacy, "Refunds " + LEGAL.PAGES.refund, "Contact " + LEGAL.PAGES.contact, "Your data " + LEGAL.PAGES.yourData]), JSON.stringify(links));
+    // NAMED (Nov 20 2026, P2-2): BEFORE the five links only; AFTER also "Copyright notices" (copyright.html) on a second
+    // line (.line2, after the nav), so the five keep their places.
+    const line2 = [...dom.window.document.querySelectorAll("[data-bf-legal-footer] > .line2 a")].map(a => a.textContent + " " + a.getAttribute("href"));
+    check("H2. it draws Terms · Privacy · Refunds · Contact · Your data, to lib/legal.js's paths, then Copyright notices on a second line",
+      same(links, ["Terms " + LEGAL.PAGES.terms, "Privacy " + LEGAL.PAGES.privacy, "Refunds " + LEGAL.PAGES.refund, "Contact " + LEGAL.PAGES.contact, "Your data " + LEGAL.PAGES.yourData, "Copyright notices /copyright.html"]) &&
+      same(line2, ["Copyright notices /copyright.html"]), JSON.stringify(links));
 
     async function notice(answer) {
       const d = new JSDOM("<!DOCTYPE html><html><head></head><body><main id=\"m\">page</main>" + FOOTER_TAGS.split("\n")[0] + "</body></html>", { url: "https://bizforceai.net/dashboard.html", runScripts: "outside-only" });
@@ -852,7 +856,9 @@ const fmt = n => Number(n).toLocaleString("en-US");
         .every(x => sec.indexOf(x) !== -1)));
     check("P11. (g) where to write with privacy questions: " + LEGAL.CONTACT_EMAIL + ", a mailto link",
       every(sec => sec.indexOf("<p>Questions about how BizForce AI uses Google user data: <a href=\"mailto:" + LEGAL.CONTACT_EMAIL + "\">" + LEGAL.CONTACT_EMAIL + "</a>.</p>") !== -1));
-    check("P12. a privacy-only clarification: TERMS_VERSION stays " + LEGAL.TERMS_VERSION + " (as W3 decided)", LEGAL.TERMS_VERSION === "2026-11-14");
+    // NAMED (Nov 20 2026, P2-2): BEFORE TERMS_VERSION stayed 2026-11-14 (W3's privacy-only clarification). AFTER P2-2 moved it to
+    // 2026-11-20 for the community rules; W3's clarification itself needed no new version, and none was made for it.
+    check("P12. W3's privacy-only clarification made no new version; P2-2's community rules moved TERMS_VERSION to " + LEGAL.TERMS_VERSION, LEGAL.TERMS_VERSION === "2026-11-20");
   }
 
   check("no network was touched", NETWORK.length === 0, NETWORK.join(", "));

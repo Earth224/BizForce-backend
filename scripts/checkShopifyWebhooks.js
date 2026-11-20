@@ -135,7 +135,9 @@ const MUTATIONS = {
   "sweep-every-50-minutes": ["server",
     "shutdownControl.trackInterval(\"shopifyWebhookSweepTick\", setInterval(shopifyWebhookSweepTick, 300000));", "shutdownControl.trackInterval(\"shopifyWebhookSweepTick\", setInterval(shopifyWebhookSweepTick, 3000000));"],
   "reminder-off-chain": ["server",
-    "        .then(shopifyDataRequestReminderTick);\n", ";\n"],
+    // NAMED (Nov 20 2026, P2-2): BEFORE the reminder ended the chain ("        .then(shopifyDataRequestReminderTick);"). AFTER P2-2's two
+    // steps follow it on its line; the mutation takes the reminder out and leaves them.
+    "        .then(shopifyDataRequestReminderTick).then(", "        .then("],
   // P (W3): the privacy sentence and the yourData / backup wording.
   "privacy-fields-dropped": ["legal",
     "\"the order ids it names and the request id, never the customer's name, email or phone number.\"", "\"the request id, never the customer's name, email or phone number.\""],
@@ -842,9 +844,10 @@ async function limiterProbe() {
   const mainBlock = /if \(require\.main === module\) \{\n    shutdownControl\.trackInterval\("shopifyWebhookSweepTick", setInterval\(shopifyWebhookSweepTick, 300000\)\);/.test(FILES.server);
   check("L1. the sweep runs every 5 minutes (300000 ms) through shutdownControl.trackInterval, only when server.js is the program", mainBlock);
   check("L2. the reminder is a step of the 04:45 UTC chain, after the renewal emails",
-    FILES.server.indexOf(".then(renewalEmailsTick)\n        .then(shopifyDataRequestReminderTick);\n    }, {") !== -1);
+    // NAMED (Nov 20 2026, P2-2): BEFORE the reminder was last. AFTER P2-2's two steps follow it on its line.
+    FILES.server.indexOf(".then(renewalEmailsTick)\n        .then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick);\n    }, {") !== -1);
   check("L3. lib/jobSchedules.js lists the sweep (every 300000 ms) and the reminder's job_runs row in the 04:45 entry",
-    FILES.jobs.indexOf("{ tick: \"shopifyWebhookSweepTick\", every_ms: 300000, jobs: [] }") !== -1 && FILES.jobs.indexOf("\"shopify_data_request_reminder\"] },") !== -1);
+    FILES.jobs.indexOf("{ tick: \"shopifyWebhookSweepTick\", every_ms: 300000, jobs: [] }") !== -1 && FILES.jobs.indexOf("\"shopify_data_request_reminder\",\n      // Nov 20 2026, P2-2") !== -1);   // NAMED (Nov 20 2026, P2-2): BEFORE it ended the entry ("] },"); AFTER P2-2's two rows follow it
   check("L4. the owner address is the ops alerts' own (OPS_ALERT_EMAIL, else BACKUP_EMAIL_TO): no new variable",
     FILES.hooks.indexOf("require(\"./opsAlert\").opsAlertRecipient(env || {})") !== -1 && !/process\.env\.[A-Z_]*EMAIL/.test(FILES.hooks) &&
     OPS_REAL.opsAlertRecipient({ BACKUP_EMAIL_TO: "b@example.test" }) === "b@example.test");
@@ -859,8 +862,9 @@ async function limiterProbe() {
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
+  // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
   check("R1. 184_shopify_webhook_requests.sql is the only 184, only 185_shopify_uninstall_hook.sql, 186_member_videos_duration.sql and 187_member_video_parts.sql are above it (checkYoutubeUploads G14); its VERIFY query is verify/184_verify.sql",
-    highest === 190 && migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 184; }).join() === "185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql" &&
+    highest === 192 && migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 184; }).join() === "185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql" &&
     migFiles.filter(function (x) { return /^184_/.test(x); }).join() === "184_shopify_webhook_requests.sql" &&
     fs.existsSync(path.join(migDir, "verify", "184_verify.sql")), highest);
   check("R2. migration 184 adds request_details, answered_at, owner_notified_at and the partial index on received_at WHERE processed_at IS NULL, in BEGIN/COMMIT, and drops nothing",

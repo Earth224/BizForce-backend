@@ -81,10 +81,21 @@
                        settings, profile and privacy changed on purpose and each
                        has a named desktop-baseline-p21-<page>.json, read after the
                        batch files and HQ1's (see the P2-1 report for the proof).
+                       NAMED (Nov 20 2026, P2-2): the legal footer's second line
+                       (Copyright notices) grows every page's footer by 22.8 px;
+                       desktop-baseline-p22-footer.json holds those 76 pages, and
+                       p22-settings, p22-terms, p22-privacy and p22-new (copyright,
+                       moderation) the pages P2-2 changed on purpose; the proof is
+                       Downloads\phone1\p22-desktop-proof.json.
      PHONE_P21=1           only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
                            at 360, 390 and 430; screenshots to Downloads\p21.
+     PHONE_P22=1           only P2-2's own screens (p22Run): the report, block and
+                           mute menu and its sheets, Settings, Blocked and muted,
+                           moderation.html (owner and not), copyright.html and its
+                           counter form, the owner's waiting count; at 360, 390
+                           and 430; screenshots to Downloads\p22.
 
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
@@ -132,7 +143,8 @@ const ALL = Object.keys(MAP.pages).map(k => String(MAP.pages[k].p || "/" + k).re
 let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
+// NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -236,6 +248,10 @@ const HQ1_OUT = process.env.PHONE_HQ1_OUT || path.join(os.homedir(), "Downloads"
 const P21 = process.env.PHONE_P21 === "1";
 const P21_WIDTHS = String(process.env.PHONE_P21_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
 const P21_OUT = process.env.PHONE_P21_OUT || path.join(os.homedir(), "Downloads", "p21");
+// NAMED (Nov 20 2026, P2-2): PHONE_P22=1 runs only P2-2's own screens (p22Run, at the end of this file)
+const P22 = process.env.PHONE_P22 === "1";
+const P22_WIDTHS = String(process.env.PHONE_P22_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const P22_OUT = process.env.PHONE_P22_OUT || path.join(os.homedir(), "Downloads", "p22");
 const BAR_HIDDEN = ["app.html", "reset-password.html", "verify-email.html", "terms.html", "privacy.html", "refund.html", "contact.html",
   "music-popout.html", "card-view.html", "blogpost.html", "blogindex.html", "oracle.html", "mychart.html", "calendar.html", "synastry.html", "the-third.html"];
 const BAR_ACTIVE = { "home.html": "home", "inbox.html": "inbox", "messages.html": "inbox", "proposals.html": "inbox", "profile.html": "profile", "settings.html": "profile" };
@@ -353,7 +369,9 @@ function api(method, u, request) {
   if (HQ1 && /^\/api\/music\/tracks\/[^/]+\/url$/.test(p)) return { url: ORIGIN + "/__hq1/tone.wav", expires_at: new Date(Date.now() + 3600e3).toISOString() };
   // NAMED (Nov 19 2026, P2-1): with PHONE_P21=1, Home, the Inbox, the profile and Settings, Local answer the fixtures
   // above (p21Api). Without it every one of them answers {} as before, so the page runs and their baselines are unchanged.
-  if (P21) { const a = p21Api(method, p); if (a !== undefined) return a; }
+  // NAMED (Nov 20 2026, P2-2): with PHONE_P22=1, P2-2's fixtures (p22Api), then P2-1's (the Inbox thread needs them).
+  if (P22) { const a = p22Api(method, p); if (a !== undefined) return a; }
+  if (P21 || P22) { const a = p21Api(method, p); if (a !== undefined) return a; }
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -597,8 +615,12 @@ const ORBIT = String.raw`(function(){
       try {
         if (u.origin === origin || u.protocol === "data:" || u.protocol === "blob:") await cdp.send("Fetch.continueRequest", { requestId });
         else if (u.hostname === API_HOST) {
-          const body = request.method === "OPTIONS" ? "" : J(api(request.method, u, request));
-          await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(body).toString("base64"),
+          // NAMED (Nov 20 2026, P2-2): an answer may carry its own status ({ __status, __body }: moderation.html for a
+          // member who is not the owner); every other answer is 200 as before.
+          const ans = request.method === "OPTIONS" ? "" : api(request.method, u, request);
+          const code = ans && ans.__status ? ans.__status : 200;
+          const body = ans === "" ? "" : J(ans && ans.__status ? ans.__body : ans);
+          await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: code, body: Buffer.from(body).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,PATCH,DELETE,OPTIONS" }] });
         } else if (HQ1 && request.url === MOON_PHOTO) {
@@ -626,6 +648,7 @@ const ORBIT = String.raw`(function(){
     ORIGIN = origin;
     if (HQ1) { await hq1Run(cdp, origin); PAGES = []; }
     else if (P21) { await p21Run(cdp, origin); PAGES = []; }
+    else if (P22) { await p22Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-2)
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -1074,4 +1097,170 @@ async function p21Run(cdp, origin) {
     await shotPage(cdp, path.join(P21_OUT, name + "-390-full.png"), 390);
   }
   console.log("    screenshots: " + P21_OUT);
+}
+
+/* ══ P2-2 (Nov 20 2026): PHONE_P22=1 ═══════════════════════════════════════════════════════════════════════════════════
+   P2-2's own screens at PHONE_P22_WIDTHS (default 360, 390, 430), screenshots at 390 x 844 to PHONE_P22_OUT (default
+   Downloads\p22): the three-dot menu on an Inbox thread, its Report sheet (13 reasons) and its Block confirmation;
+   Settings, Blocked and muted; moderation.html as the owner (the Waiting tab, an item) and as anyone else (one line);
+   copyright.html (the notice, with ?where= filled in) and its counter-notice form; and the owner's waiting count on the
+   dashboard. The fixtures below answer only with PHONE_P22=1 (and P2-1's, which the Inbox thread needs). */
+const P22_NID = uid(7001), P22_QID = uid(7002), P22_ITEM = uid(7003);
+const P22S = { notOwner: false };
+const P22_FIX = {
+  relation: { user_id: P21_PEER, self: false, blocked: false, muted: false },
+  safety: { blocks: [{ user_id: P21_PEER2, since: ago(48), username: "lee-ceramics", name: "Lee Ceramics", avatar_url: null }],
+    mutes: [{ user_id: P21_PEER, since: ago(72), username: "pat", name: "Pat's Pantry", avatar_url: null }] },
+  waiting: { tab: "waiting", items: [
+    { id: P22_QID, object_type: "listing", object_id: P22_ITEM, owner_id: P21_PEER, author: "@pat", source: "report", priority: 1, report_count: 3, state: "hidden", auto_hidden: true, created_at: ago(5) },
+    { id: uid(7004), object_type: "profile", object_id: P21_PEER2, owner_id: P21_PEER2, author: "@lee-ceramics", source: "policy_screen", priority: 2, report_count: 0, state: "waiting", auto_hidden: false, created_at: ago(30) }
+  ] },
+  item: { item: { id: P22_QID, object_type: "listing", object_id: P22_ITEM, owner_id: P21_PEER, source: "report", priority: 1, report_count: 3, state: "hidden", auto_hidden: true, created_at: ago(5) },
+    content: { title: "Spring cake", text: "Fresh spring cakes, made to order.", link: "/listing/spring-cake", media: [{ url: P21_IMG[0], type: "image/png" }] },
+    author: { id: P21_PEER, name: "@pat", joined: "2026-10-01", account_age_days: 50, past_removals: 0, banned: false },
+    reports: [{ id: "r1", reporter: "@lee-ceramics", reason: "copyright", detail: "These are my photos.", status: "open", created_at: ago(6) },
+      { id: "r2", reporter: "@rose", reason: "spam", detail: null, status: "open", created_at: ago(5) }],
+    findings: [{ field: "description", rule: "prohibited", category: "alcohol", term: "wine" }], notices: [] },
+  storage: { buckets: [{ bucket: "bf-public", bytes: 312 * 1048576, files: 1840, partial: false }, { bucket: "bf-video", bytes: 96 * 1048576, files: 41, partial: false }],
+    total_bytes: 408 * 1048576, limit_bytes: 1073741824, percent: 39.8, partial: false, measured_at: new Date(NOW).toISOString(), cached: false },
+  counter: { notice: { id: P22_NID, status: "removed", received: "2026-11-18", object_type: "listing", title: "Spring cake", work: "A photo of my wedding cake" } }
+};
+function p22Api(method, p) {
+  if (p === "/api/inbox/counts") return Object.assign({}, P21_FIX.counts, { moderation: 3 });
+  if (p === "/api/me/relation") return P22_FIX.relation;
+  if (p === "/api/me/safety") return P22_FIX.safety;
+  if (p.indexOf("/api/admin/moderation") === 0 && P22S.notOwner) return { __status: 403, __body: { error: "Admin access required" } };
+  if (p === "/api/admin/moderation") return P22_FIX.waiting;
+  if (p === "/api/admin/moderation/storage") return P22_FIX.storage;
+  if (p === "/api/admin/moderation/item/" + P22_QID) return P22_FIX.item;
+  if (p === "/api/copyright/counter/" + P22_NID && method === "GET") return P22_FIX.counter;
+  return undefined;
+}
+// The open sheet (scripts/bf-safety.js): inside the screen, every choice and button at least 44 px, focus inside it.
+const P22_SHEET = String.raw`(function(){
+  var s = document.getElementById("bf-safety"); if (!s || s.hidden) return null;
+  var r = s.getBoundingClientRect(), W = innerWidth, H = innerHeight;
+  var ctl = [].slice.call(s.querySelectorAll(".bf-safety-item,.bf-safety-btn,.bf-safety-close,.bf-safety-reason")).filter(function(n){ var q = n.getBoundingClientRect(); return q.width > 0 && q.height > 0; });
+  var small = ctl.filter(function(n){ var q = n.getBoundingClientRect(); return q.width < 43.5 || q.height < 43.5; }).map(function(n){ var q = n.getBoundingClientRect(); return n.className + " " + Math.round(q.width) + "x" + Math.round(q.height); });
+  return { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom), W: W, H: H, scrolls: s.scrollHeight > s.clientHeight + 1,
+    title: (s.querySelector("h2") || {}).textContent || "", items: [].map.call(s.querySelectorAll(".bf-safety-item"), function(n){ return n.textContent.replace(/\s+/g, " ").trim(); }),
+    reasons: s.querySelectorAll("input[name=bf-safety-reason]").length, controls: ctl.length, small: small, focus: s.contains(document.activeElement),
+    hscroll: document.documentElement.scrollWidth > W + 1 };
+})()`;
+async function p22Run(cdp, origin) {
+  fs.mkdirSync(P22_OUT, { recursive: true });
+  console.log("browserCheckPhone P2-2 (the report, block and mute menu, Settings, Moderation, Copyright, the owner's count) at " + P22_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const viewShot = async (file) => { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P22_OUT, file), Buffer.from(r.data, "base64")); };
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    check(at + "no text cut off", m.clipped.length === 0, J(m.clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const deco = m.deco.filter(x => !(opts && opts.sheet && /^div#bf-safety-backdrop /.test(x)));
+    check(at + "decoration is under the text" + (opts && opts.sheet ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && /^div#bf-safety(-backdrop)? /.test(x)));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
+    return m;
+  };
+  const sheetOk = (at, s, w, h, what) => check(at + what + ": the sheet is inside the screen, every choice at least 44 px, focus in it, no sideways scroll",
+    !!s && s.l >= -1 && s.r <= w + 1 && s.t >= 0 && s.b <= h + 1 && s.small.length === 0 && s.focus && !s.hscroll, J(s));
+  const openMenu = async () => { await ev("(function(){var b=document.querySelector('#openMenu .bf-safety-dots');if(b)b.click();return !!b;})()"); await sleep(600); };
+
+  for (const w of P22_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) await viewShot(name + "-390x844.png"); };
+
+    // 1. the menu on an Inbox thread, then Report, then Block
+    P22S.notOwner = false;
+    await open(cdp, origin, "inbox.html?with=" + P21_PEER, w, h, true);
+    let at = "P22 inbox thread at " + w + ": ";
+    const dots = await ev("(function(){var b=document.querySelector('#openMenu .bf-safety-dots');if(!b)return null;var r=b.getBoundingClientRect();return {w:Math.round(r.width),h:Math.round(r.height),label:b.getAttribute('aria-label'),right:Math.round(r.right)};})()");
+    check(at + "the three-dot button is in the thread's header, 44 x 44 or more, named for the member (Report in it is about their latest message)", !!dots && dots.w >= 44 && dots.h >= 44 && dots.right <= w && dots.label === "More options for this profile", J(dots));
+    await openMenu();
+    let s = await ev(P22_SHEET);
+    at = "P22 menu at " + w + ": ";
+    sheetOk(at, s, w, h, "Options");
+    check(at + "Report, Block, Mute and Send a copyright notice", !!s && s.items.length === 4 && /^Report this message$/.test(s.items[0]) && s.items.some(t => /^Block /.test(t)) && s.items.some(t => /^Mute /.test(t)) &&
+      s.items[3] === "Send a copyright notice", J(s && s.items));
+    await pageChecks(at, { sheet: true });
+    await shot("menu");
+    await ev("(function(){var b=document.querySelector('#bf-safety [data-act=report]');if(b)b.click();return !!b;})()"); await sleep(500);
+    s = await ev(P22_SHEET);
+    at = "P22 report sheet at " + w + ": ";
+    sheetOk(at, s, w, h, "Report this message");
+    check(at + "the 13 reasons, each a 44 px choice; the sheet scrolls when taller than the screen", !!s && s.reasons === 13 && s.title === "Report this message", J(s && { reasons: s.reasons, title: s.title, scrolls: s.scrolls }));
+    await pageChecks(at, { sheet: true });
+    await shot("report-sheet");
+    await ev("(function(){var b=document.getElementById('bf-safety-cancel');if(b)b.click();return !!b;})()"); await sleep(300);
+    await openMenu();
+    await ev("(function(){var b=document.querySelector('#bf-safety [data-act=block]');if(b)b.click();return !!b;})()"); await sleep(500);
+    s = await ev(P22_SHEET);
+    at = "P22 block confirmation at " + w + ": ";
+    sheetOk(at, s, w, h, "Block");
+    check(at + "asks first, with Block and Cancel, focus on Cancel", !!s && /^Block .+\?$/.test(s.title) && (await ev("document.activeElement && document.activeElement.id")) === "bf-safety-block-no", J(s && s.title));
+    await shot("block-confirm");
+    await ev("(function(){var b=document.getElementById('bf-safety-block-no');if(b)b.click();return true;})()"); await sleep(300);
+
+    // 2. Settings, Blocked and muted
+    await open(cdp, origin, "settings.html#blocked", w, h, true);
+    at = "P22 settings blocked at " + w + ": ";
+    const st = await ev("(function(){var p=document.getElementById('panel-safety'),l=document.getElementById('safetyList');if(!p||!l)return null;var r=p.getBoundingClientRect();" +
+      "return {shown:r.width>0&&r.height>0,rows:l.querySelectorAll('li').length,buttons:[].map.call(l.querySelectorAll('button[data-undo]'),function(b){var q=b.getBoundingClientRect();return b.textContent.trim()+' '+Math.round(q.width)+'x'+Math.round(q.height);})};})()");
+    check(at + "#blocked opens the section: one blocked, one muted, with Unblock and Unmute of 44 px or more", !!st && st.shown && st.rows === 2 && st.buttons.length === 2 &&
+      /^Unblock /.test(st.buttons[0]) && /^Unmute /.test(st.buttons[1]) && st.buttons.every(b => b.split(" ").pop().split("x").every(n => Number(n) >= 44)), J(st));
+    await ev("(function(){var p=document.getElementById('panel-safety');if(p)p.scrollIntoView();return true;})()"); await sleep(200);
+    await pageChecks(at);
+    await shot("settings-blocked");
+
+    // 3. moderation.html as the owner: the Waiting tab, then an item
+    await open(cdp, origin, "moderation.html", w, h, true);
+    at = "P22 moderation (owner) at " + w + ": ";
+    const mo = await ev("(function(){var v=document.getElementById('ownerView'),o=document.getElementById('ownerOnly');return {view:!v.hidden,only:!o.hidden,tabs:document.querySelectorAll('.tab-btn').length,cards:document.querySelectorAll('#area .card').length,storage:(document.getElementById('storageBody')||{}).textContent||''};})()");
+    check(at + "the owner sees the four tabs, the two waiting items and the storage panel", mo.view && !mo.only && mo.tabs === 4 && mo.cards === 2 && /408\.0 MB of 1024\.0 MB used/.test(mo.storage), J(mo));
+    await pageChecks(at);
+    await shot("moderation");
+    await ev("(function(){var b=document.querySelector('[data-open]');if(b)b.click();return !!b;})()"); await sleep(700);
+    at = "P22 moderation item at " + w + ": ";
+    const it = await ev("(function(){var a=document.querySelectorAll('[data-act]');return {acts:[].map.call(a,function(b){var q=b.getBoundingClientRect();return b.getAttribute('data-act')+' '+Math.round(q.height);}),reports:document.querySelectorAll('.detail .list .card').length,title:(document.querySelector('.detail h2')||{}).textContent||''};})()");
+    check(at + "the item: its title, two reports, and Keep, Hide, Remove, Remove and ban (each 44 px or more)", it.title === "Spring cake" && it.reports === 2 &&
+      J(it.acts.map(a => a.split(" ")[0])) === J(["keep", "hide", "remove", "ban"]) && it.acts.every(a => Number(a.split(" ")[1]) >= 44), J(it));
+    await pageChecks(at);
+    await shot("moderation-item");
+
+    // 4. moderation.html as anyone else
+    P22S.notOwner = true;
+    await open(cdp, origin, "moderation.html", w, h, true);
+    at = "P22 moderation (not the owner) at " + w + ": ";
+    const no = await ev("(function(){return {view:!document.getElementById('ownerView').hidden,only:!document.getElementById('ownerOnly').hidden,text:document.getElementById('ownerOnly').textContent,cards:document.querySelectorAll('#area .card').length};})()");
+    check(at + "one line, and nothing else drawn", !no.view && no.only && no.text === "This page is for the site owner." && no.cards === 0, J(no));
+    await pageChecks(at);
+    await shot("moderation-not-owner");
+    P22S.notOwner = false;
+
+    // 5. copyright.html: the notice (where filled in), then the counter-notice
+    await open(cdp, origin, "copyright.html?where=" + encodeURIComponent("https://bizforceai.net/listing/spring-cake"), w, h, true);
+    at = "P22 copyright notice at " + w + ": ";
+    const cn = await ev("(function(){return {where:document.getElementById('nWhere').value,form:!document.getElementById('noticeView').hidden,counter:!document.getElementById('counterView').hidden,checks:[].map.call(document.querySelectorAll('.check'),function(c){return Math.round(c.getBoundingClientRect().height);})};})()");
+    check(at + "the notice form, where filled in from ?where=", cn.form && !cn.counter && cn.where === "https://bizforceai.net/listing/spring-cake", J(cn));
+    await pageChecks(at);
+    await shot("copyright");
+    if (w === 390) await shotPage(cdp, path.join(P22_OUT, "copyright-390-full.png"), 390);
+    await open(cdp, origin, "copyright.html?counter=" + P22_NID, w, h, true);
+    at = "P22 counter-notice at " + w + ": ";
+    const cc = await ev("(function(){var f=document.getElementById('counterForm');return {form:!f.hidden,facts:(document.getElementById('counterFacts')||{}).textContent||'',notice:!document.getElementById('noticeView').hidden};})()");
+    check(at + "signed in, the member's own counter form, with what was removed", cc.form && !cc.notice && /Spring cake/.test(cc.facts) && /A photo of my wedding cake/.test(cc.facts), J(cc));
+    await pageChecks(at);
+    await shot("copyright-counter");
+
+    // 6. the owner's waiting count on the dashboard
+    await open(cdp, origin, "dashboard.html", w, h, true);
+    at = "P22 dashboard at " + w + ": ";
+    const dc = await ev("(function(){var e=document.getElementById('ownerModeration');if(!e)return null;var a=e.querySelector('a'),r=a?a.getBoundingClientRect():null;return {shown:!e.hidden,text:e.textContent.trim(),href:a&&a.getAttribute('href'),h:r&&Math.round(r.height)};})()");
+    check(at + "the owner sees \"3 items waiting for review\", a link to Moderation of 44 px or more", !!dc && dc.shown && /^3 items waiting for review/.test(dc.text) && dc.href === "/moderation.html" && dc.h >= 44, J(dc));
+    if (w === 390) { await ev("(function(){var e=document.getElementById('ownerModeration');if(e)e.scrollIntoView({block:'center'});return true;})()"); await sleep(200); await viewShot("dashboard-count-390x844.png"); }
+  }
+  console.log("    screenshots: " + P22_OUT);
 }

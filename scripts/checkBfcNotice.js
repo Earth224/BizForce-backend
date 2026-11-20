@@ -60,7 +60,10 @@ const SCRIPT_TAG = "<script src=\"/scripts/bf-bfc-notice.js\"></script>";
 /* Pages that mention BFC but show no balance and offer no BFC action. Each
    reason must stay true: section 4 fails an exempt page that calls a BFC route. */
 const EXEMPT = {
-  "dashboard.html": "link tiles to the wallet and to crowdfunding; it reads no balance and moves no BFC"
+  "dashboard.html": "link tiles to the wallet and to crowdfunding; it reads no balance and moves no BFC",
+  // NAMED (Nov 20 2026, P2-2): Settings, "Blocked and muted", says a blocked member can't send you BizCash; the page reads
+  // no balance and calls no BFC route (callsBfcRoute is false for it), so it names BizCash only to explain a block.
+  "settings.html": "names BizCash only to say what a block stops; it reads no balance and moves no BFC"
 };
 /* Routes where BFC is earned, sent, spent or shown. */
 const BFC_ROUTE = /\/api\/(wallet|marketplace|purchases|crowdfunding|certifications\/award)\b/;

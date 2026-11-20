@@ -166,7 +166,9 @@ function liftRoute(method, routePath, db, extra) {
   let handler = null;
   ctx.app = {}; ["get", "post", "put", "delete"].forEach(function (m) { ctx.app[m] = function () { handler = arguments[arguments.length - 1]; }; });
   vm.createContext(ctx);
-  vm.runInContext(MUT.closureFor(SRC, root), ctx);
+  // NAMED (Nov 20 2026, P2-2): the listing routes and executors screen text (policyScreen), which runs the real health-claims screen;
+  // closureWithCompliance brings its COMPLIANCE_ constants, which closureFor leaves out as stubs.
+  vm.runInContext(MUT.closureWithCompliance(SRC, root), ctx);
   return { handler: handler, ctx: ctx };
 }
 async function call(route, req) {
@@ -182,7 +184,9 @@ function executor(name, db) {
   const fnSrc = SRC.slice(start + 2 + name.length + 2, end);
   const ctx = context(db);
   vm.createContext(ctx);
-  vm.runInContext(MUT.closureFor(SRC, "this.__exec = " + fnSrc + ";"), ctx);
+  // NAMED (Nov 20 2026, P2-2): the listing routes and executors screen text (policyScreen), which runs the real health-claims screen;
+  // closureWithCompliance brings its COMPLIANCE_ constants, which closureFor leaves out as stubs.
+  vm.runInContext(MUT.closureWithCompliance(SRC, "this.__exec = " + fnSrc + ";"), ctx);
   return { run: ctx.__exec, ctx: ctx };
 }
 

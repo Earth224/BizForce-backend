@@ -2721,7 +2721,8 @@ function pageAnswers(over) {
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
   // the Etsy privacy sentence set (this change still set Nov 7).
   // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
-  check("G5. TERMS_VERSION is the latest change's, Nov 14 2026 (L1; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-14", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
+  check("G5. TERMS_VERSION is the latest change's, Nov 20 2026 (P2-2; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-20", LEGAL.TERMS_VERSION);
   const YD = realRequire("./lib/yourData");
   const ttEntry = (YD.DATA || []).filter(function (e) { return e.table === "member_tiktok_connections"; })[0] ||
     (FILES.yourData.indexOf("{ table: \"member_tiktok_connections\", group: \"account\"") !== -1 ? { select: (/table: "member_tiktok_connections"[\s\S]*?select: "([^"]*)"/.exec(FILES.yourData) || [])[1], onDelete: "delete" } : null);
@@ -2774,9 +2775,10 @@ function pageAnswers(over) {
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
-  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179 to 187, by name, are above it", highest === 190 &&
+  // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
+  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179 to 187, by name, are above it", highest === 192 &&
     migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql", highest);
   /* NAMED (Nov 17 2026, TK1): R1, the highest migration. 186_member_videos_duration.sql is the only 186 and the highest; it adds
      member_videos.duration_ms (integer, NULL) with the CHECK 1 ms to 4 hours, and its VERIFY is verify/186_verify.sql.
      NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER it is the only 186, and only
@@ -2785,8 +2787,8 @@ function pageAnswers(over) {
   const sql186 = m186.length === 1 ? read("supabase/migrations/" + m186[0]) : "";
   const verify186 = fs.existsSync(path.join(REPO, "supabase", "migrations", "verify", "186_verify.sql")) ? read("supabase/migrations/verify/186_verify.sql") : "";
   check("G15. R1. 186_member_videos_duration.sql is the only 186, and only 187_member_video_parts.sql is above it; duration_ms integer NULL, CHECK NULL or 1..14400000; VERIFY is verify/186_verify.sql",
-    highest === 190 && m186.join() === "186_member_videos_duration.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 186; }).join() === "187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql" &&
+    highest === 192 && m186.join() === "186_member_videos_duration.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 186; }).join() === "187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql" &&
     sql186.indexOf("ADD COLUMN IF NOT EXISTS duration_ms integer NULL;") !== -1 &&
     sql186.indexOf("CHECK (duration_ms IS NULL OR (duration_ms > 0 AND duration_ms <= 14400000))") !== -1 &&
     /member_videos_duration_check/.test(verify186) && /duration_ms/.test(verify186) && !/\b(INSERT|UPDATE|DELETE|ALTER|DROP)\b/i.test(verify186.replace(/--[^\n]*/g, "")), J([highest, m186]));

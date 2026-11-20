@@ -385,7 +385,25 @@ const ADDED = [
   ["put", "/api/me/place"],                                  // login-only: saves the member's own place, checked by lib/places.js (503 -> 504)
   ["get", "/api/bfp/profile/me/stats"],                      // login-only: the member's own sales count and BizCash balance (504 -> 505)
   ["get", "/api/bfp/profile/:userId/stats"],                 // PUBLIC, gated by ownerPagePublic: a public page's completed sales count only (505 -> 506)
-  ["get", "/api/home/starter"]                               // login-only: newest listings with a photo, shared campaigns, public member pages (506 -> 507)
+  ["get", "/api/home/starter"],                              // login-only: newest listings with a photo, shared campaigns, public member pages (506 -> 507)
+  // NAMED (Nov 20 2026, P2-2, migration 191): BEFORE 507 routes; AFTER 523, reports, blocks, mutes, the owner's moderation queue, copyright
+  // notices and the upload check (checkReports, checkBlocks, checkModerationQueue, checkCopyrightNotices, checkContentPolicy)
+  ["post", "/api/reports"],                                  // login-only, 20 an hour: one open report per member per item (507 -> 508)
+  ["post", "/api/blocks"],                                   // login-only, 60 changes an hour: the member's own block (508 -> 509)
+  ["delete", "/api/blocks/:userId"],                         // login-only: removes the member's own block (509 -> 510)
+  ["post", "/api/mutes"],                                    // login-only, 60 changes an hour: the member's own mute (510 -> 511)
+  ["delete", "/api/mutes/:userId"],                          // login-only: removes the member's own mute (511 -> 512)
+  ["get", "/api/me/safety"],                                 // login-only: the member's own blocks and mutes, for Settings (512 -> 513)
+  ["get", "/api/me/relation"],                               // login-only: whether the member blocked or muted someone; never whether they were blocked (513 -> 514)
+  ["get", "/api/admin/moderation"],                          // admin only, read-only: the queue's tabs (514 -> 515)
+  ["get", "/api/admin/moderation/storage"],                  // admin only, read-only: storage used against 1 GB (515 -> 516)
+  ["get", "/api/admin/moderation/item/:id"],                 // admin only, read-only: one queued item with its author's history and reports (516 -> 517)
+  ["post", "/api/admin/moderation/item/:id/decide"],         // admin only: keep, hide or remove, logged, the author and reporters told (517 -> 518)
+  ["post", "/api/admin/moderation/notice/:id/court-filed"],  // admin only: a countered notice whose claimant filed in court is not restored (518 -> 519)
+  ["post", "/api/copyright/notices"],                        // PUBLIC, 5 an hour per address: a copyright notice, queued at priority 1 (519 -> 520)
+  ["get", "/api/copyright/counter/:id"],                     // login-only: a notice about the member's own removed material (520 -> 521)
+  ["post", "/api/copyright/counter/:id"],                    // login-only, 5 an hour: the member's counter-notice (521 -> 522)
+  ["post", "/api/bfp/upload-check"]                          // login-only: the member's own just-uploaded file checked by its bytes; removed when refused (522 -> 523)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

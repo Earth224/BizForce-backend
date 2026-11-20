@@ -267,5 +267,53 @@ function runAllMutations(file, names, opts) {
   process.exit(ok ? 0 : 1);
 }
 
-module.exports={after,before,braceMatch,definitionOf,routeCode,STUBS,closureFor,fakeSupabase,build,call,strip,norm,F,AGENTS,
-  MUTATION_ANCHOR_EXIT,mutationAnchorError,replaceOnce,replaceRegexOnce,requireChanged,runAllMutations};
+/* NAMED (Nov 20 2026, P2-2): COMPLIANCE_DISCLAIMER and COMPLIANCE_PROFILES with every top-level definition they name, dependencies
+   first, so the real health-claims screen runs inside a route's context (moved here from _p21Harness.js, so every harness can use it).
+   closureWithCompliance(src, root): that code, then root's closure without them. */
+const COMPLIANCE_CACHE = new Map();
+function complianceCode(src) {
+  if (COMPLIANCE_CACHE.has(src.length)) return COMPLIANCE_CACHE.get(src.length);
+  const seen = new Set(), order = [];   // depth first: a definition after everything it names
+  (function visit(name) {
+    if (seen.has(name)) return;
+    seen.add(name);
+    if (STUBS.has(name) && !/^COMPLIANCE_/.test(name)) return;
+    const def = definitionOf(src, name);
+    if (!def) return;
+    try { new vm.Script(def); } catch (e) { return; }
+    new Set(def.match(/[A-Za-z_$][A-Za-z0-9_$]*/g)).forEach(function (id) { if (id !== name) visit(id); });
+    order.push([name, def]);
+  })("COMPLIANCE_PROFILES");
+  const v = { names: order.map(function (o) { return o[0]; }), code: order.map(function (o) { return o[1]; }).join("\n\n") };
+  COMPLIANCE_CACHE.set(src.length, v);
+  return v;
+}
+
+function closureWithCompliance(src, root) {
+  const c = complianceCode(src);
+  const added = c.names.filter(function (n) { return !STUBS.has(n); });
+  added.forEach(function (n) { STUBS.add(n); });
+  try { return c.code + "\n\n" + closureForRaw(src, root); } finally { added.forEach(function (n) { STUBS.delete(n); }); }
+}
+
+/* NAMED (Nov 20 2026, P2-2): the only lines P2-2 added to dashboard.html (the owner's moderation count, after the hero, and
+   bf-safety.js before the footer). The checks that hold dashboard.html to an older commit byte for byte take out exactly
+   these, each of which must be there once; if one is missing or doubled the text is returned with a marker, so their
+   comparisons fail rather than pass. */
+const P22_DASH_LINES = [
+  "<!-- P2-2: the owner alone sees the moderation queue's waiting count here, only when above 0 (scripts/bf-safety.js ownerCount) -->",
+  "<p class=\"owner-moderation\" id=\"ownerModeration\" hidden style=\"text-align:center;margin:0 0 12px\"></p>",
+  "<script src=\"/scripts/bf-safety.js\"></script>",
+  "<script>if (window.BFSafety) window.BFSafety.ownerCount(document.getElementById(\"ownerModeration\"));</script>"
+];
+function withoutP22Dash(text) {
+  let out = String(text);
+  for (const l of P22_DASH_LINES) {
+    if (out.split(l + "\n").length !== 2) return out + "\n<!-- P2-2 LINE MISSING OR DOUBLED: " + l + " -->";
+    out = out.replace(l + "\n", "");
+  }
+  return out;
+}
+
+module.exports={complianceCode,closureWithCompliance,after,before,braceMatch,definitionOf,routeCode,STUBS,closureFor,fakeSupabase,build,call,strip,norm,F,AGENTS,
+  MUTATION_ANCHOR_EXIT,mutationAnchorError,replaceOnce,replaceRegexOnce,requireChanged,runAllMutations,P22_DASH_LINES,withoutP22Dash};

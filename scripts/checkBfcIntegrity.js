@@ -400,6 +400,9 @@ function buildRoutes(client, env) {
     supabase: client,
     console: { log() {}, warn() {}, error() {} },
     process: { env: env || {} },
+    // NAMED (Nov 20 2026, P2-2): the transfer asks lib/safety.js whether either member blocked the other; the route's
+    // require("./lib/...") loads the real module from the repo.
+    require: function (p) { return require(/^\.\//.test(p) ? path.join(REPO, p) : p); },
     requireAuth: 0, requireActiveSubscription: 0, bfcRecipientLookupLimiter: 0,
     getUserPlan: async function () { return { active: true, plan: "all_access", inactive_reason: null }; },
     BILLING_URL: "/billing.html",

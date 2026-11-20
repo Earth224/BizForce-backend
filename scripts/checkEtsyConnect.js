@@ -1375,7 +1375,8 @@ function allText(n) { return n ? n.textContent : ""; }
     FILES.backup.indexOf("member_store_connections: \"members' WooCommerce store keys and Shopify, Etsy and Amazon access (encrypted); members connect again\",") !== -1);
   const LEGAL = realRequire("./lib/legal");
   // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
-  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 14 2026 (L1; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
+  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 20 2026 (P2-2; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-20" && LEGAL.TERMS_UPDATED === "Last updated November 20, 2026", LEGAL.TERMS_VERSION);
   const ets = (FILES.readme.split("## Etsy app setup")[1] || "").split("\n## ")[0];
   check("G5. README: the two env var rows, and the Etsy app setup (the keystring and shared secret on Railway, the redirect exactly, the four scopes, the access tiers, x-api-key)",
     /\n\| `ETSY_KEYSTRING` \| none \| /.test(FILES.readme) && /\n\| `ETSY_SHARED_SECRET` \| none \| [^\n]*A secret; set it on Railway/.test(FILES.readme) &&
@@ -1402,9 +1403,10 @@ function allText(n) { return n ? n.textContent : ""; }
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
-  check("R1. 181_etsy_store.sql is the only 181, and only 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 190 &&
+  // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
+  check("R1. 181_etsy_store.sql is the only 181, and only 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 192 &&
     migFiles.filter(function (x) { return /^181_/.test(x); }).join() === "181_etsy_store.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 181; }).join() === "182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 181; }).join() === "182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql", highest);
   check("G8. no other new env var: lib/etsyAuth.js reads only ETSY_KEYSTRING and ETSY_SHARED_SECRET, lib/etsyApi.js reads none",
     (stripComments(FILES.auth).match(/env\.[A-Z_]+/g) || []).sort().join() === "env.ETSY_KEYSTRING,env.ETSY_KEYSTRING,env.ETSY_SHARED_SECRET,env.ETSY_SHARED_SECRET" &&
     !/process\.env|env\.[A-Z]/.test(stripComments(FILES.api)));

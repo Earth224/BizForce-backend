@@ -7050,6 +7050,14 @@ app.get("/api/profile/me", requireAuth, async function (req, res, next) {
 
 app.put("/api/profile/me", requireAuth, async function (req, res, next) {
   try {
+    // NAMED (Nov 20 2026, P2-2): the content policy screen on the profile's public text (contact_email and contact_phone
+    // are the member's own contact fields and are not screened for contact details)
+    const policyBody = req.body || {};
+    const screened = policyScreen({ full_name: policyBody.full_name, business_name: policyBody.business_name, bio: policyBody.bio,
+      industry: policyBody.industry, location: policyBody.location, products_services: policyBody.products_services,
+      seo_title: policyBody.seo_title, seo_description: policyBody.seo_description });
+    if (!screened.ok) return policyRefused(res, screened);
+    await policyQueue(screened, "profile", req.user.id, req.user.id);
     const allowed = [
       "full_name",
       "business_name",
@@ -8409,6 +8417,11 @@ app.get("/api/profile/by-id/:userId", requireAuth, async function (req, res, nex
       throw error;
     }
 
+    // NAMED (Nov 20 2026, P2-2): a member blocked either way is not available (lib/safety.js)
+    if (profile && await require("./lib/safety").blockedEitherWay(supabase, req.user.id, targetUserId)) {
+      return res.status(404).json({ error: "Profile not found" });
+    }
+
     if (!profile) {
       return res.status(404).json({ error: "Profile not found" });
     }
@@ -8432,7 +8445,9 @@ app.get("/api/conversations", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    return res.json({ conversations: data });
+    // NAMED (Nov 20 2026, P2-2): messages with a member blocked either way are left out
+    const blockedSet = await require("./lib/safety").blockedIds(supabase, req.user.id);
+    return res.json({ conversations: (data || []).filter(function (m) { return !blockedSet.has(m.sender_id === req.user.id ? m.receiver_id : m.sender_id); }) });
   } catch (error) {
     next(error);
   }
@@ -8450,6 +8465,9 @@ app.get("/api/messages/:userId", requireAuth, async function (req, res, next) {
     const cursor = IN.parseBefore(req.query.before);
     if (cursor.error) return res.status(400).json({ error: cursor.error });
     const limit = IN.pageLimit(req.query.limit);
+    // NAMED (Nov 20 2026, P2-2): a conversation with a member blocked either way is not available
+    const SF = require("./lib/safety");
+    if (await SF.blockedEitherWay(supabase, req.user.id, otherUserId)) return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable, reason: "not_available" });
 
     let query = supabase
       .from("messages")
@@ -8472,7 +8490,8 @@ app.get("/api/messages/:userId", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    return res.json(IN.threadPage(data || [], limit));
+    const hiddenMessages = await SF.hiddenAmong(supabase, "message", (data || []).map(function (m) { return m.id; }));
+    return res.json(IN.threadPage((data || []).filter(function (m) { return !hiddenMessages.has(m.id); }), limit));
   } catch (error) {
     next(error);
   }
@@ -8497,10 +8516,17 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
     if (receiverId === req.user.id) {
       return res.status(400).json({ error: "You cannot message yourself.", reason: "self_message" });
     }
+    // NAMED (Nov 20 2026, P2-2): the content policy screen; a message is private, so contact details are allowed in it
+    const screened = policyScreen({ content: content }, "private");
+    if (!screened.ok) return policyRefused(res, screened);
     const receiver = await supabase.from("users").select("id").eq("id", receiverId).maybeSingle();
     if (receiver.error) throw receiver.error;
     if (!receiver.data) {
       return res.status(404).json({ error: IN.RECEIVER_MISSING, reason: "unknown_receiver" });
+    }
+    // NAMED (Nov 20 2026, P2-2): a member blocked either way cannot be messaged; the answer never says why
+    if (await require("./lib/safety").blockedEitherWay(supabase, req.user.id, receiverId)) {
+      return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable, reason: "not_available" });
     }
 
     const { data, error } = await supabase
@@ -8519,6 +8545,7 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
     }
 
     var messageNotification = await supabase.from("notifications").insert(IN.messageNotice(receiverId, req.user.id, data.id));
+    await policyQueue(screened, "message", data.id, req.user.id);   // P2-2
 
     if (messageNotification.error) {
       console.warn("[notifications] insert failed for POST /api/messages — the route still succeeded, the user simply was not notified:", messageNotification.error.message || messageNotification.error);
@@ -8547,7 +8574,9 @@ app.get("/api/inbox/conversations", requireAuth, async function (req, res, next)
     const unread = await supabase.from("notifications").select("actor_id")
       .eq("user_id", req.user.id).eq("type", "message").eq("read", false).not("actor_id", "is", null);
     if (unread.error) throw unread.error;
-    const list = IN.groupConversations(rows.data || [], req.user.id, IN.unreadByActor(unread.data));
+    // NAMED (Nov 20 2026, P2-2): a conversation with a member blocked either way is left out
+    const blockedSet = await require("./lib/safety").blockedIds(supabase, req.user.id);
+    const list = IN.groupConversations(rows.data || [], req.user.id, IN.unreadByActor(unread.data)).filter(function (c) { return !blockedSet.has(c.other_id); });
     const ids = list.map(function (c) { return c.other_id; });
     let bf = { data: [] }, legacy = { data: [] };
     if (ids.length) {
@@ -8583,6 +8612,8 @@ app.get("/api/inbox/person/:userId", requireAuth, async function (req, res, next
     if (bf.error) throw bf.error;
     if (legacy.error) throw legacy.error;
     if (!user.data) return res.status(404).json({ error: IN.RECEIVER_MISSING });
+    // NAMED (Nov 20 2026, P2-2): a member blocked either way is not available
+    if (await require("./lib/safety").blockedEitherWay(supabase, req.user.id, id)) return res.status(404).json({ error: IN.RECEIVER_MISSING });
     return res.json({ person: Object.assign({ id: id }, IN.personFrom(bf.data, legacy.data)) });
   } catch (error) { next(error); }
 });
@@ -8611,7 +8642,205 @@ app.get("/api/inbox/counts", requireAuth, async function (req, res, next) {
     if (messages.error) throw messages.error;
     if (approvals.error) throw approvals.error;
     const n = notices.count || 0, m = messages.count || 0;
-    return res.json({ notifications: n, messages: m, approvals: approvals.count || 0, badge: n + m });
+    const counts = { notifications: n, messages: m, approvals: approvals.count || 0, badge: n + m };
+    /* NAMED (Nov 20 2026, P2-2): the owner alone also gets the moderation queue's waiting count (waiting, or hidden by the
+       reports and not yet decided), for her dashboard and Inbox. It is not in the badge. Nobody else's answer has the key. */
+    if (req.user.role === "admin") {
+      const waiting = await supabase.from("moderation_queue").select("id", { count: "exact", head: true }).or("state.eq.waiting,and(state.eq.hidden,decided_at.is.null)");
+      if (!waiting.error) counts.moderation = waiting.count || 0;
+    }
+    return res.json(counts);
+  } catch (error) { next(error); }
+});
+
+/* ══ P2-2 (Nov 20 2026): REPORT, BLOCK, MUTE (lib/safety.js, migration 191) ═══════════════════════════════════════
+   A report: 20 an hour (reportLimiter), one open per member per item, 13 reasons, 1000 characters of detail; it raises
+   the item's moderation queue row (minor_safety and copyright at priority 1) and auto-hides it at 3 distinct reporters
+   or 1 minor_safety report. Block and mute take { user_id } or { handle }; 60 changes an hour (blockLimiter). A block
+   is silent and works both ways (see lib/safety.js); a mute hides someone from the muter's lists and Home's People.
+   GET /api/me/safety lists the member's own blocks and mutes for Settings; GET /api/me/relation says whether the
+   member has blocked or muted someone (never whether they were blocked), for the three-dot menu's labels. */
+const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  keyGenerator: function (req) { return "report:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can send 20 reports an hour. Try again later.", reason: "rate_limited" }
+});
+const blockLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "block-mute:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many changes to who you block or mute. Try again in an hour.", reason: "rate_limited" }
+});
+
+app.post("/api/reports", requireAuth, reportLimiter, async function (req, res, next) {
+  try {
+    const r = await require("./lib/safety").fileReport(supabase, req.user.id, req.body, nowIso());
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+
+/* The member a block or mute names: { user_id } or { handle } (a storefront or listing knows only the handle). */
+async function safetyTargetId(body) {
+  const SF = require("./lib/safety");
+  body = body || {};
+  if (SF.isUuid(body.user_id)) {
+    const u = await supabase.from("users").select("id").eq("id", body.user_id).maybeSingle();
+    if (u.error) throw u.error;
+    return u.data ? u.data.id : null;
+  }
+  if (typeof body.handle === "string" && /^@?[a-z0-9_-]{3,30}$/i.test(body.handle.trim())) {
+    const p = await supabase.from("bf_profiles").select("user_id").ilike("username", body.handle.trim().replace(/^@/, "")).maybeSingle();
+    if (p.error) throw p.error;
+    return p.data ? p.data.user_id : null;
+  }
+  return null;
+}
+
+/* The two handlers each list's routes share: add (idempotent) and remove one member. */
+function safetyAdd(table, mine, theirs, flag) {
+  return async function (req, res, next) {
+    try {
+      const SF = require("./lib/safety");
+      const target = await safetyTargetId(req.body);
+      if (!target) return res.status(404).json({ error: SF.MESSAGES.noMember });
+      if (target === req.user.id) return res.status(400).json({ error: SF.MESSAGES.self });
+      const row = { created_at: nowIso() };
+      row[mine] = req.user.id; row[theirs] = target;
+      const saved = await supabase.from(table).upsert(row, { onConflict: mine + "," + theirs, ignoreDuplicates: true });
+      if (saved.error) throw saved.error;
+      return res.status(201).json({ user_id: target, [flag]: true });
+    } catch (error) { next(error); }
+  };
+}
+function safetyRemove(table, mine, theirs, flag) {
+  return async function (req, res, next) {
+    try {
+      const SF = require("./lib/safety");
+      if (!SF.isUuid(req.params.userId)) return res.status(404).json({ error: SF.MESSAGES.noMember });
+      const gone = await supabase.from(table).delete().eq(mine, req.user.id).eq(theirs, req.params.userId);
+      if (gone.error) throw gone.error;
+      return res.json({ user_id: req.params.userId, [flag]: false });
+    } catch (error) { next(error); }
+  };
+}
+app.post("/api/blocks", requireAuth, blockLimiter, safetyAdd("member_blocks", "blocker_id", "blocked_id", "blocked"));
+app.delete("/api/blocks/:userId", requireAuth, blockLimiter, safetyRemove("member_blocks", "blocker_id", "blocked_id", "blocked"));
+app.post("/api/mutes", requireAuth, blockLimiter, safetyAdd("member_mutes", "muter_id", "muted_id", "muted"));
+app.delete("/api/mutes/:userId", requireAuth, blockLimiter, safetyRemove("member_mutes", "muter_id", "muted_id", "muted"));
+
+app.get("/api/me/safety", requireAuth, async function (req, res, next) {
+  try {
+    const IN = require("./lib/inbox");
+    const [blocks, mutes] = await Promise.all([
+      supabase.from("member_blocks").select("blocked_id, created_at").eq("blocker_id", req.user.id).order("created_at", { ascending: false }).limit(1000),
+      supabase.from("member_mutes").select("muted_id, created_at").eq("muter_id", req.user.id).order("created_at", { ascending: false }).limit(1000)
+    ]);
+    if (blocks.error) throw blocks.error;
+    if (mutes.error) throw mutes.error;
+    const ids = (blocks.data || []).map(function (b) { return b.blocked_id; }).concat((mutes.data || []).map(function (m) { return m.muted_id; }));
+    let bf = { data: [] }, legacy = { data: [] };
+    if (ids.length) {
+      [bf, legacy] = await Promise.all([
+        supabase.from("bf_profiles").select("user_id, username, display_name, avatar_url").in("user_id", ids),
+        supabase.from("profiles").select("user_id, full_name, business_name, logo_url").in("user_id", ids)
+      ]);
+      if (bf.error) throw bf.error;
+      if (legacy.error) throw legacy.error;
+    }
+    const by = function (rows) { const m = {}; (rows || []).forEach(function (r) { m[r.user_id] = r; }); return m; };
+    const bfBy = by(bf.data), legacyBy = by(legacy.data);
+    const person = function (id, at) { return Object.assign({ user_id: id, since: at }, IN.personFrom(bfBy[id], legacyBy[id])); };
+    return res.json({ blocks: (blocks.data || []).map(function (b) { return person(b.blocked_id, b.created_at); }),
+      mutes: (mutes.data || []).map(function (m) { return person(m.muted_id, m.created_at); }) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/me/relation", requireAuth, async function (req, res, next) {
+  try {
+    const SF = require("./lib/safety");
+    let target = await safetyTargetId({ user_id: req.query.user_id, handle: req.query.handle });
+    /* Or the owner of an item the menu is on (a campaign card or a listing knows no owner id): a listing, a campaign, or a
+       message the member sent or received. */
+    if (!target && ["listing", "campaign", "message"].indexOf(req.query.object_type) !== -1 && SF.isUuid(req.query.object_id)) {
+      const item = await SF.describeObject(supabase, req.query.object_type, req.query.object_id);
+      if (item && (req.query.object_type !== "message" || item.owner_id === req.user.id || item.receiver_id === req.user.id)) target = item.owner_id || null;
+    }
+    if (!target) return res.status(404).json({ error: SF.MESSAGES.noMember });
+    const [b, m] = await Promise.all([
+      supabase.from("member_blocks").select("blocked_id").eq("blocker_id", req.user.id).eq("blocked_id", target).maybeSingle(),
+      supabase.from("member_mutes").select("muted_id").eq("muter_id", req.user.id).eq("muted_id", target).maybeSingle()
+    ]);
+    if (b.error) throw b.error;
+    if (m.error) throw m.error;
+    return res.json({ user_id: target, self: target === req.user.id, blocked: !!b.data, muted: !!m.data });
+  } catch (error) { next(error); }
+});
+
+/* ══ P2-2 (Nov 20 2026): THE MODERATION QUEUE, the owner's moderation.html (lib/moderation.js) ═════════════════════
+   requireAuth + requireAdmin on every route. Tabs, an item, a decision (keep, hide, remove; "Remove and ban" is remove
+   then the existing POST /api/admin/ban/:userId), the court filing on a countered notice, and the storage panel. */
+app.get("/api/admin/moderation", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    const r = await require("./lib/moderation").queueList(supabase, String(req.query.tab || "waiting"));
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+app.get("/api/admin/moderation/storage", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    return res.json(await require("./lib/storageUsage").measure(supabase, { fresh: req.query.fresh === "1" }));
+  } catch (error) { next(error); }
+});
+app.get("/api/admin/moderation/item/:id", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    const r = await require("./lib/moderation").itemDetail(supabase, req.params.id, nowIso());
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+app.post("/api/admin/moderation/item/:id/decide", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    const body = req.body || {};
+    const r = await require("./lib/moderation").decide(supabase, { adminId: req.user.id, id: req.params.id, action: body.action, note: body.note, nowIso: nowIso() });
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+app.post("/api/admin/moderation/notice/:id/court-filed", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    const r = await require("./lib/moderation").courtFiled(supabase, req.params.id, req.user.id, nowIso());
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+
+/* ══ P2-2 (Nov 20 2026): COPYRIGHT NOTICES, the public copyright.html (lib/safety.js, lib/moderation.js) ═══════════
+   A notice needs no sign-in: 5 an hour from one address (copyrightLimiter). It writes copyright_notices and puts the
+   item in the queue at priority 1. A counter-notice comes from the member whose material was removed, signed in. */
+const copyrightLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can send 5 notices an hour. Try again later.", reason: "rate_limited" }
+});
+app.post("/api/copyright/notices", copyrightLimiter, async function (req, res, next) {
+  try {
+    const r = await require("./lib/moderation").submitNotice(supabase, req.body, nowIso());
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+app.get("/api/copyright/counter/:id", requireAuth, async function (req, res, next) {
+  try {
+    const r = await require("./lib/moderation").counterView(supabase, req.user.id, req.params.id);
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+app.post("/api/copyright/counter/:id", requireAuth, copyrightLimiter, async function (req, res, next) {
+  try {
+    const r = await require("./lib/moderation").submitCounter(supabase, req.user.id, req.params.id, req.body, nowIso());
+    return res.status(r.status).json(r.body);
   } catch (error) { next(error); }
 });
 
@@ -11865,6 +12094,9 @@ const PROPOSAL_EXECUTORS = {
     const tags = Array.isArray(payload.tags)
       ? payload.tags.map(function (t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10)
       : [];
+    // NAMED (Nov 20 2026, P2-2): the content policy screen, as on the create route; a refusal fails the proposal with its sentence
+    const screened = policyScreen({ title: title, description: description, tags: tags });
+    if (!screened.ok) throw new Error("publish_listing: " + screened.error);
 
     const { data, error } = await insertListingWithSlug({
       seller_id: proposal.user_id, title, description,
@@ -11906,6 +12138,7 @@ const PROPOSAL_EXECUTORS = {
       throw error;
     }
 
+    await policyQueue(screened, "listing", data.id, proposal.user_id);   // P2-2
     return {
       listing_id: data.id,
       title: data.title,
@@ -11997,6 +12230,10 @@ const PROPOSAL_EXECUTORS = {
     if (!changedFields.length) {
       throw new Error("update_listing: the proposal contained no changes to apply");
     }
+    // NAMED (Nov 20 2026, P2-2): the content policy screen, as on the edit route
+    const screened = policyScreen({ title: updates.title, description: updates.description, tags: updates.tags });
+    if (!screened.ok) throw new Error("update_listing: " + screened.error);
+    await policyQueue(screened, "listing", listingId, proposal.user_id);
 
     // Same guard as the route: an active listing must keep a BFC price above 0.
     const finalPriceBfc = updates.price_bfc !== undefined ? updates.price_bfc : existing.price_bfc;
@@ -18011,6 +18248,14 @@ app.get("/api/business-profile", requireAuth, async (req, res) => {
                                               failing it */
 app.post("/api/business-profile", requireAuth, async function (req, res) {
   try {
+    // NAMED (Nov 20 2026, P2-2): the content policy screen on the business profile's public fields
+    {
+      const pb = req.body || {};
+      const screened = policyScreen({ business_name: pb.business_name, industry: pb.industry, location: pb.location, website: pb.website,
+        offer: pb.offer, products_services: pb.products_services });
+      if (!screened.ok) return policyRefused(res, screened);
+      await policyQueue(screened, "profile", req.user.id, req.user.id);
+    }
     /* THE THREE THAT ARE NOT CLIENT FIELDS, so they are set directly and are
        always present. Everything after this is conditional. */
     var payload = { user_id: req.user.id };
@@ -32043,6 +32288,34 @@ function blueskyClaimsRefusal(text) {
   };
 }
 
+/* ── P2-2 (Nov 20 2026): THE CONTENT POLICY SCREEN on every text a member writes for others (lib/contentPolicy.js) ──
+   policyScreen runs the claims screen above exactly as it is, then the prohibited-items list, the links rule and (in
+   public text) the contact-details rule. A refusal is a 400 with one sentence (policyRefused). An unclear match is
+   saved and the item waits in the moderation queue, source policy_screen (policyQueue). */
+function policyScreen(fields, surface) {
+  return require("./lib/contentPolicy").screenFields(fields, { claims: blueskyClaimsRefusal, surface: surface || "public" });
+}
+function policyRefused(res, screened) {
+  return res.status(400).json(require("./lib/contentPolicy").refusalBody(screened));
+}
+async function policyQueue(screened, objectType, objectId, ownerId) {
+  if (!screened || !screened.review || !objectId) return null;
+  return require("./lib/safety").queueScreenFindings(supabase, { object_type: objectType, object_id: objectId, owner_id: ownerId }, screened.review.findings, nowIso());
+}
+/* The signed-in viewer of a PUBLIC route, when the request carries a valid session; null otherwise. Used only to keep a
+   blocked member's page from them (lib/safety.js), never to grant anything. It runs requireAuth itself against a response
+   that answers nothing, so the token is verified in one place and a revoked, banned or deleted session is no viewer. */
+function viewerIdFrom(req) {
+  const header = (req.headers && req.headers.authorization) || "";
+  if (!header.startsWith("Bearer ")) return Promise.resolve(null);
+  return new Promise(function (resolve) {
+    const probe = { headers: { authorization: header } };
+    const silent = { status: function () { return silent; }, json: function () { resolve(null); return silent; } };
+    Promise.resolve(requireAuth(probe, silent, function () { resolve(probe.user && probe.user.id ? probe.user.id : null); }))
+      .then(null, function () { resolve(null); });
+  });
+}
+
 /* After an action under a member's own session: a success notes last_ok_at; a
    session failure marks the connection needs_reconnect and raises ONE in-app
    notice (the update is conditional on status connected, so a second failure
@@ -35242,6 +35515,26 @@ async function videoRetentionTick() {
     return await require("./lib/memberVideos").retentionTick(youtubeDeps());
   } catch (err) {
     console.error("[VideoRetention] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
+/* P2-2 (Nov 20 2026): two steps of the 04:45 UTC chain, last. The safety retention (lib/safety.js retentionTick, job_runs
+   safety_retention): resolved reports and decided queue items older than a year, and copyright notices older than three
+   years, are deleted. Then the counter-notice restore (restoreTick, job_runs copyright_restore). Never reject. */
+async function safetyRetentionTick() {
+  try {
+    return await require("./lib/safety").retentionTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });
+  } catch (err) {
+    console.error("[SafetyRetention] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+async function copyrightRestoreTick() {
+  try {
+    return await require("./lib/safety").restoreTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });
+  } catch (err) {
+    console.error("[CopyrightRestore] Scheduled run error: " + ((err && err.code) || "error"));
     return null;
   }
 }
@@ -47335,7 +47628,10 @@ app.get("/api/notifications", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    return res.json({ notifications: (data || []).map(function (n) { return Object.assign({}, n, { link: IN.safeLink(n.link) }); }) });
+    // NAMED (Nov 20 2026, P2-2): notices from a member blocked either way are left out
+    const blockedSet = await require("./lib/safety").blockedIds(supabase, req.user.id);
+    return res.json({ notifications: (data || []).filter(function (n) { return !(n.actor_id && blockedSet.has(n.actor_id)); })
+      .map(function (n) { return Object.assign({}, n, { link: IN.safeLink(n.link) }); }) });
   } catch (error) {
     next(error);
   }
@@ -48469,6 +48765,10 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
       return res.status(400).json({ error: "amount must be a positive integer", reason: "invalid_amount" });
     }
 
+    // NAMED (Nov 20 2026, P2-2): not to or from a member blocked either way; the answer never says why
+    if (await require("./lib/safety").blockedEitherWay(supabase, req.user.id, recipientId)) {
+      return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable + " Nothing was sent.", reason: "not_available" });
+    }
     return await bfcSendWithinLimits(req, res, { recipientId: recipientId, byUsername: byUsername, amount: amount, support: null });
   } catch (error) { next(error); }
 });
@@ -48658,12 +48958,21 @@ app.post("/api/wallet/support", requireAuth, requireActiveSubscription, bfcSuppo
     if (member.user_id === req.user.id) {
       return res.status(400).json({ error: "You cannot support yourself. Nothing was sent.", reason: "self_support" });
     }
+    // NAMED (Nov 20 2026, P2-2): not a member blocked either way; the answer never says why
+    if (await require("./lib/safety").blockedEitherWay(supabase, req.user.id, member.user_id)) {
+      return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable + " Nothing was sent.", reason: "not_available" });
+    }
     const amount = req.body.amount;
     if (!Number.isInteger(amount) || amount <= 0) {
       return res.status(400).json({ error: "The amount must be a whole number of BFC, 1 or more. Nothing was sent.", reason: "invalid_amount" });
     }
     const note = supportLinks.noteForStorage(req.body.note);
     if (note.error) return res.status(400).json({ error: note.error + " Nothing was sent.", reason: note.reason });
+    // NAMED (Nov 20 2026, P2-2): the content policy screen on the note (the member it is for reads it)
+    {
+      const screened = policyScreen({ note: note.note });
+      if (!screened.ok) return res.status(400).json(Object.assign(require("./lib/contentPolicy").refusalBody(screened), { error: screened.error + " Nothing was sent." }));
+    }
     // The notification says who it is from by username, so the sender needs one.
     const me = await supabase.from("bf_profiles").select("username").eq("user_id", req.user.id).maybeSingle();
     if (me.error) throw me.error;
@@ -48755,6 +49064,10 @@ app.put("/api/support/me", requireAuth, async function (req, res, next) {
     if (body.headline !== undefined) {
       const h = supportLinks.headlineFrom(body.headline);
       if (h.error) return res.status(400).json({ error: h.error, reason: h.reason, field: "headline" });
+      // NAMED (Nov 20 2026, P2-2): the content policy screen on the support page's headline
+      const screened = policyScreen({ headline: h.headline });
+      if (!screened.ok) return policyRefused(res, screened);
+      await policyQueue(screened, "profile", req.user.id, req.user.id);
       row.headline = h.headline;
     }
     if (body.page_on !== undefined) {
@@ -49257,7 +49570,12 @@ app.get("/api/marketplace/listings", requireAuth, async function (req, res, next
     if (q) query = query.or("title.ilike.%" + q + "%,description.ilike.%" + q + "%");
     const { data, error } = await query;
     if (error) throw error;
-    return res.json({ listings: data || [] });
+    // NAMED (Nov 20 2026, P2-2): leaving out what moderation hid and the listings of members blocked either way or muted
+    const SF = require("./lib/safety");
+    const rows = data || [];
+    const [blockedSet, mutedSet, hiddenSet] = await Promise.all([SF.blockedIds(supabase, req.user.id), SF.mutedIds(supabase, req.user.id),
+      SF.hiddenAmong(supabase, "listing", rows.map(function (l) { return l.id; }))]);
+    return res.json({ listings: rows.filter(function (l) { return !hiddenSet.has(l.id) && !blockedSet.has(l.seller_id) && !mutedSet.has(l.seller_id); }) });
   } catch (error) { next(error); }
 });
 
@@ -49294,6 +49612,9 @@ app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, as
        The storefront's Shop and Services and the profile's tabs read it. BEFORE every listing was a product. */
     const listingKind = req.body.listing_kind === undefined || req.body.listing_kind === null || req.body.listing_kind === "" ? "product" : req.body.listing_kind;
     if (listingKind !== "product" && listingKind !== "service") return res.status(400).json({ error: "listing_kind is product or service.", field: "listing_kind" });
+    // NAMED (Nov 20 2026, P2-2): the content policy screen (marketplace, garage sale and services alike)
+    const screened = policyScreen({ title: title, description: description, tags: tags });
+    if (!screened.ok) return policyRefused(res, screened);
     const { data, error } = await insertListingWithSlug({
       seller_id: req.user.id, title, description: description || "", listing_kind: listingKind,
       price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(req.body.media, req.user.id), status: "active",
@@ -49301,6 +49622,7 @@ app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, as
       created_at: nowIso(), updated_at: nowIso()
     }, "*");
     if (error) throw error;
+    await policyQueue(screened, "listing", data && data.id, req.user.id);
     return res.status(201).json({ listing: data });
   } catch (error) { next(error); }
 });
@@ -49335,12 +49657,21 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
 
     const { data: priced, error: pricedError } = await supabase
       .from("marketplace_listings")
-      .select("price_bfc")
+      .select("price_bfc, seller_id")
       .eq("id", listingId)
       .maybeSingle();
     if (pricedError) throw pricedError;
     if (priced && !(Number(priced.price_bfc) > 0)) {
       return res.status(409).json({ error: LISTING_NOT_FOR_SALE_MESSAGE + ".", field: "price_bfc" });
+    }
+    /* NAMED (Nov 20 2026, P2-2): not a listing moderation hid, and not from a member blocked either way. The route checks
+       before migration 192 and after it; from 192 bfc_buy_listing refuses a blocked pair as well ("listing not
+       available"). The answer never says why. */
+    if (priced) {
+      const SF = require("./lib/safety");
+      if ((await SF.hiddenAmong(supabase, "listing", [listingId])).has(listingId) || await SF.blockedEitherWay(supabase, req.user.id, priced.seller_id)) {
+        return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable, reason: "not_available" });
+      }
     }
 
     const { data, error } = await supabase.rpc("bfc_buy_listing", {
@@ -49388,6 +49719,9 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
     if (req.body.status   !== undefined && ["active","paused","sold"].includes(req.body.status)) updates.status = req.body.status;
     if (Array.isArray(req.body.tags)) updates.tags = req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
     if (req.body.media !== undefined) updates.media = sanitizeMedia(req.body.media, req.user.id);
+    // NAMED (Nov 20 2026, P2-2): the content policy screen on the changed text
+    const screened = policyScreen({ title: updates.title, description: updates.description, tags: updates.tags });
+    if (!screened.ok) return policyRefused(res, screened);
 
     // A pause is always allowed; any other edit must leave an active listing with a BFC price.
     if (!pauseOnly) {
@@ -49413,6 +49747,7 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
       .eq("seller_id", req.user.id)
       .select("*").single();
     if (error) throw error;
+    await policyQueue(screened, "listing", data && data.id, req.user.id);
     return res.json({ listing: data });
   } catch (error) { next(error); }
 });
@@ -49492,7 +49827,20 @@ app.get("/api/purchases/:orderId/download", requireAuth, async function (req, re
       .maybeSingle();
     if (orderError) throw orderError;
     if (!order) return res.status(404).json({ error: "Order not found" });
-    if (order.is_digital !== true) return res.status(403).json({ error: "This purchase has no digital download" });
+    /* NAMED (Nov 20 2026, P2-2, fix d): BEFORE migration 192, bfc_buy_listing wrote every BizCash order with is_digital
+       false (the column default) and no file snapshot, so a buyer of a digital listing was refused here. Such an order
+       is served from its listing when the listing IS digital, has a file, and is the same seller's listing the order was
+       bought from; the order is already this buyer's (buyer_id above). From 192 the order carries is_digital and the
+       snapshot itself, and the code below prefers it. */
+    if (order.is_digital !== true) {
+      if (!order.listing_id) return res.status(403).json({ error: "This purchase has no digital download" });
+      const bought = await supabase.from("marketplace_listings").select("seller_id, is_digital, digital_file_path")
+        .eq("id", order.listing_id).maybeSingle();
+      if (bought.error) throw bought.error;
+      if (!bought.data || bought.data.is_digital !== true || !bought.data.digital_file_path || bought.data.seller_id !== order.seller_id) {
+        return res.status(403).json({ error: "This purchase has no digital download" });
+      }
+    }
 
     /* ── THE ORDER'S OWN SNAPSHOT FIRST, THE LISTING ONLY AS A FALLBACK ────
        An order written from migration 113 onward carries the object key it
@@ -49572,7 +49920,13 @@ app.get("/api/crowdfunding/campaigns", requireAuth, async function (req, res, ne
       .eq("status", "active")
       .order("created_at", { ascending: false });
     if (error) throw error;
-    return res.json({ campaigns: (data || []).map(function (c) { return campaignListItem(c, req.user.id); }) });
+    // NAMED (Nov 20 2026, P2-2): leaving out what moderation hid and the campaigns of members blocked either way or muted
+    const SF = require("./lib/safety");
+    const rows = data || [];
+    const [blockedSet, mutedSet, hiddenSet] = await Promise.all([SF.blockedIds(supabase, req.user.id), SF.mutedIds(supabase, req.user.id),
+      SF.hiddenAmong(supabase, "campaign", rows.map(function (c) { return c.id; }))]);
+    return res.json({ campaigns: rows.filter(function (c) { return !hiddenSet.has(c.id) && !blockedSet.has(c.owner_id) && !mutedSet.has(c.owner_id); })
+      .map(function (c) { return campaignListItem(c, req.user.id); }) });
   } catch (error) { next(error); }
 });
 
@@ -49593,6 +49947,11 @@ app.get("/api/crowdfunding/campaigns/by-share/:shareId", requireAuth, async func
     if (found.error) throw found.error;
     const shared = found.data;
     if (!shared || shared.share_on !== true || shared.status !== "active") return res.status(404).json(notAvailable);
+    // NAMED (Nov 20 2026, P2-2): nor one moderation hid, nor one whose owner is blocked either way
+    {
+      const SF = require("./lib/safety");
+      if ((await SF.hiddenAmong(supabase, "campaign", [shared.id])).has(shared.id) || await SF.blockedEitherWay(supabase, req.user.id, shared.owner_id)) return res.status(404).json(notAvailable);
+    }
     return res.json({ campaign: campaignListItem(shared, req.user.id) });
   } catch (error) { next(error); }
 });
@@ -49624,6 +49983,9 @@ app.post("/api/crowdfunding/campaigns", requireAuth, requireActiveSubscription, 
     if (!Number.isInteger(goalBfc) || goalBfc <= 0) {
       return res.status(400).json({ error: "goal_bfc must be a positive integer" });
     }
+    // NAMED (Nov 20 2026, P2-2): the content policy screen
+    const screened = policyScreen({ title: title, description: description, category: category });
+    if (!screened.ok) return policyRefused(res, screened);
 
     const { data, error } = await supabase
       .from("crowdfunding_campaigns")
@@ -49635,6 +49997,7 @@ app.post("/api/crowdfunding/campaigns", requireAuth, requireActiveSubscription, 
       })
       .select("*").single();
     if (error) throw error;
+    await policyQueue(screened, "campaign", data && data.id, req.user.id);
     return res.status(201).json({ campaign: data });
   } catch (error) { next(error); }
 });
@@ -49665,6 +50028,9 @@ app.put("/api/crowdfunding/campaigns/:id", requireAuth, requireActiveSubscriptio
     if (req.body.category    !== undefined) updates.category    = safeText(req.body.category, 40);
     if (req.body.media       !== undefined) updates.media       = sanitizeMedia(req.body.media, req.user.id);
     if (updates.title !== undefined && !updates.title) return res.status(400).json({ error: "Title is required. The campaign is unchanged." });
+    // NAMED (Nov 20 2026, P2-2): the content policy screen on the changed text
+    const screened = policyScreen({ title: updates.title, description: updates.description, category: updates.category });
+    if (!screened.ok) return policyRefused(res, screened);
 
     const current = await supabase
       .from("crowdfunding_campaigns")
@@ -49692,6 +50058,7 @@ app.put("/api/crowdfunding/campaigns/:id", requireAuth, requireActiveSubscriptio
     if (error) throw error;
     if (!data) return res.status(409).json({ error: "The campaign changed while you were editing it. Reload and try again." });
     campaignSitemapCache = { xml: null, at: 0 };
+    await policyQueue(screened, "campaign", data.id, req.user.id);
     return res.json({ campaign: data });
   } catch (error) { next(error); }
 });
@@ -49779,12 +50146,14 @@ app.get("/campaign/:shareId", campaignPageLimiter, async function (req, res) {
     if (!campaignShare.isShareId(shareId)) return res.status(404).send(campaignShare.renderCampaignPage("none"));
     const found = await supabase
       .from("crowdfunding_campaigns")
-      .select("owner_id, share_id, share_on, discoverable, status, title, description, category, media, goal_bfc, raised_bfc")
+      .select("id, owner_id, share_id, share_on, discoverable, status, title, description, category, media, goal_bfc, raised_bfc")
       .eq("share_id", shareId)
       .maybeSingle();
     if (found.error) throw found.error;
     const shared = found.data;
     if (!shared || !(await ownerPagePublic(shared.owner_id))) return res.status(404).send(campaignShare.renderCampaignPage("none"));
+    // NAMED (Nov 20 2026, P2-2): a campaign moderation hid or removed reads as no campaign
+    if ((await require("./lib/safety").hiddenAmong(supabase, "campaign", [shared.id])).has(shared.id)) return res.status(404).send(campaignShare.renderCampaignPage("none"));
     const state = campaignShare.stateFor(shared, true);
     res.set("Cache-Control", "public, max-age=60");
     if (state !== "on" && state !== "ended") return res.status(state === "none" ? 404 : 200).send(campaignShare.renderCampaignPage(state === "none" ? "none" : "off"));
@@ -49917,6 +50286,13 @@ app.post("/api/crowdfunding/campaigns/:id/donate", requireAuth, requireActiveSub
     }
     if (campaign.status !== "active") {
       return res.status(400).json({ error: "This campaign is not accepting donations. Nothing was sent.", reason: "campaign_not_active" });
+    }
+    // NAMED (Nov 20 2026, P2-2): not a campaign moderation hid, nor one whose owner is blocked either way
+    {
+      const SF = require("./lib/safety");
+      if ((await SF.hiddenAmong(supabase, "campaign", [campaign.id])).has(campaign.id) || await SF.blockedEitherWay(supabase, req.user.id, campaign.owner_id)) {
+        return res.status(404).json({ error: SF.MESSAGES.notAvailable + " Nothing was sent.", reason: "not_available" });
+      }
     }
 
     const sent = await bfcSentLast24h(req.user.id);
@@ -53000,7 +53376,13 @@ app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
   }
   const folder      = req.body.folder;
   const filename    = safeText(req.body.filename, 200) || "file";
-  const contentType = safeText(req.body.contentType, 100) || "application/octet-stream";
+  /* NAMED (Nov 20 2026, P2-2, fix c): the declared size (now required) and type must fit the folder, with the media
+     library's and the music library's own limits (lib/uploadCheck.js); after the upload the page calls
+     POST /api/bfp/upload-check, which sniffs the stored file and deletes it when it is not what it said. BEFORE any
+     type and size were accepted. */
+  const declared = require("./lib/uploadCheck").checkDeclared(folder, req.body.contentType, req.body.size);
+  if (declared.error) return res.status(declared.status).json({ error: declared.error, reason: declared.reason });
+  const contentType = declared.contentType;
   const safeName    = filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
   const storagePath = `${folder}/${req.user.id}/${Date.now()}_${safeName}`;
 
@@ -53031,6 +53413,27 @@ app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
     console.error("[upload-url] EXCEPTION:", err);
     return res.status(500).json({ error: "Upload URL generation failed: " + (err.message || String(err)) });
   }
+});
+
+/* P2-2 (Nov 20 2026, fix c): after a direct upload, the stored file is read back, measured and sniffed
+   (lib/uploadCheck.js checkStored). Not what it said, or too big: it is deleted and refused, and the page does not save
+   the link. Only the member's own upload path is checked. */
+app.post("/api/bfp/upload-check", requireAuth, async function (req, res, next) {
+  try {
+    const UC = require("./lib/uploadCheck");
+    const folder = UC.ownPath(req.body && req.body.path, req.user.id);
+    if (!folder) return res.status(403).json({ error: UC.MESSAGES.notYours, reason: "not_yours" });
+    const got = await supabase.storage.from("bf-public").download(req.body.path);
+    if (got.error || !got.data) return res.status(404).json({ error: UC.MESSAGES.missing, reason: "missing" });
+    const buf = Buffer.from(await got.data.arrayBuffer());
+    const verdict = UC.checkStored(folder, buf);
+    if (verdict.error) {
+      const gone = await supabase.storage.from("bf-public").remove([req.body.path]);
+      if (gone.error) console.error("[upload-check] a refused upload could not be deleted: " + req.body.path);
+      return res.status(verdict.status).json({ error: verdict.error, reason: verdict.reason });
+    }
+    return res.json({ ok: true, type: verdict.type });
+  } catch (error) { next(error); }
 });
 
 // ── BF Profile CRUD ───────────────────────────────────────────────────────────
@@ -53136,6 +53539,12 @@ app.get("/api/bfp/profile/:userId", async function (req, res, next) {
     const userId = safeText(req.params.userId, 60);
     // Served only while its owner is entitled; otherwise it reads as no profile.
     if (!(await ownerPagePublic(userId))) return res.json({ profile: null });
+    // NAMED (Nov 20 2026, P2-2): nor to a viewer blocked either way, nor while moderation hides it
+    {
+      const SF = require("./lib/safety");
+      const viewer = await viewerIdFrom(req);
+      if ((viewer && await SF.blockedEitherWay(supabase, viewer, userId)) || (await SF.hiddenAmong(supabase, "profile", [userId])).has(userId)) return res.json({ profile: null });
+    }
     const { data, error } = await supabase
       .from("bf_profiles").select(BF_PUBLIC_PROFILE_COLUMNS.join(", ")).eq("user_id", userId).maybeSingle();
     if (error) throw error;
@@ -53161,6 +53570,11 @@ app.put("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
     if (updates.font_style && !BFP_FONTS.includes(updates.font_style)) {
       updates.font_style = "modern";
     }
+    // NAMED (Nov 20 2026, P2-2): the content policy screen on the profile's public text
+    const screened = policyScreen({ display_name: updates.display_name, title: updates.title, tagline: updates.tagline, bio: updates.bio,
+      location: updates.location, website: updates.website, skills: updates.skills, industry: updates.industry });
+    if (!screened.ok) return policyRefused(res, screened);
+    await policyQueue(screened, "profile", req.user.id, req.user.id);
 
     /* NAMED (Nov 19 2026, P2-1): bf_profiles.username is THE handle (lib/handles.js). Empty clears it; otherwise 3 to 30
        characters of the format migration 189 holds (400), not a reserved handle (409), not another member's (409); the
@@ -53263,12 +53677,19 @@ app.get("/api/home/starter", requireAuth, async function (req, res, next) {
     const withPhoto = (listings.data || []).map(function (l) { return Object.assign({}, l, { photo: firstPhoto(l.media) }); }).filter(function (l) { return l.photo; });
     const visible = await publicOwnersAmong(withPhoto.map(function (l) { return l.seller_id; })
       .concat((campaigns.data || []).map(function (c) { return c.owner_id; }), (people.data || []).map(function (p) { return p.user_id; })));
+    // NAMED (Nov 20 2026, P2-2): leaving out what moderation hid, members blocked either way, and members muted
+    const SF = require("./lib/safety");
+    const [blockedSet, mutedSet, hiddenL, hiddenC, hiddenP] = await Promise.all([SF.blockedIds(supabase, req.user.id), SF.mutedIds(supabase, req.user.id),
+      SF.hiddenAmong(supabase, "listing", withPhoto.map(function (l) { return l.id; })),
+      SF.hiddenAmong(supabase, "campaign", (campaigns.data || []).map(function (c) { return c.id; })),
+      SF.hiddenAmong(supabase, "profile", (people.data || []).map(function (p) { return p.user_id; }))]);
+    const shownMember = function (id) { return !blockedSet.has(id) && !mutedSet.has(id); };
     return res.json({
-      listings: withPhoto.filter(function (l) { return visible.has(l.seller_id); }).slice(0, HOME_LISTINGS)
+      listings: withPhoto.filter(function (l) { return visible.has(l.seller_id) && !hiddenL.has(l.id) && shownMember(l.seller_id); }).slice(0, HOME_LISTINGS)
         .map(function (l) { return { id: l.id, title: l.title, price_bfc: l.price_bfc, kind: l.listing_kind || "product", category: l.category, photo: l.photo }; }),
-      campaigns: (campaigns.data || []).filter(function (c) { return visible.has(c.owner_id); }).slice(0, HOME_CAMPAIGNS)
+      campaigns: (campaigns.data || []).filter(function (c) { return visible.has(c.owner_id) && !hiddenC.has(c.id) && shownMember(c.owner_id); }).slice(0, HOME_CAMPAIGNS)
         .map(function (c) { return { title: c.title, goal_bfc: c.goal_bfc, raised_bfc: c.raised_bfc, photo: firstPhoto(c.media), link: "/campaign/" + c.share_id }; }),
-      people: (people.data || []).filter(function (p) { return visible.has(p.user_id) && p.user_id !== req.user.id; }).slice(0, HOME_PEOPLE)
+      people: (people.data || []).filter(function (p) { return visible.has(p.user_id) && p.user_id !== req.user.id && !hiddenP.has(p.user_id) && shownMember(p.user_id); }).slice(0, HOME_PEOPLE)
         .map(function (p) { return { username: p.username, name: p.display_name || "@" + p.username, tagline: p.tagline || null, avatar_url: p.avatar_url || null, link: "/@" + p.username }; })
     });
   } catch (error) { next(error); }
@@ -53550,6 +53971,14 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
     seller.profile_design = sellerDesign.design;
     // Served only while its owner is entitled; otherwise it reads as not found.
     if (!(await ownerPagePublic(seller.user_id))) return res.status(404).json({ error: "seller not found" });
+    // NAMED (Nov 20 2026, P2-2): nor to a viewer blocked either way, nor while moderation hides it
+    const SF = require("./lib/safety");
+    {
+      const viewer = await viewerIdFrom(req);
+      if ((viewer && await SF.blockedEitherWay(supabase, viewer, seller.user_id)) || (await SF.hiddenAmong(supabase, "profile", [seller.user_id])).has(seller.user_id)) {
+        return res.status(404).json({ error: "seller not found" });
+      }
+    }
 
     const userId = seller.user_id;
 
@@ -53567,7 +53996,9 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
     if (musicRes.error) throw musicRes.error;
     if (videosRes.error) throw videosRes.error;
 
-    const allListings = productsRes.data || [];
+    // NAMED (Nov 20 2026, P2-2): listings moderation hid are left out
+    const hiddenListings = await SF.hiddenAmong(supabase, "listing", (productsRes.data || []).map(function (l) { return l.id; }));
+    const allListings = (productsRes.data || []).filter(function (l) { return !hiddenListings.has(l.id); });
     const mapListing = function (l) {
       const media = Array.isArray(l.media) ? l.media : [];
       return {
@@ -53809,6 +54240,17 @@ app.get("/api/marketplace/listings/:id", async function (req, res, next) {
     const { data: listing, error: listingError } = await listingQuery.maybeSingle();
     if (listingError) throw listingError;
     if (!listing) return res.status(404).json({ error: "listing not found" });
+    /* NAMED (Nov 20 2026, P2-2, fix b): served only while its seller is entitled, like every other public route
+       (ownerPagePublic); BEFORE this one route had no such check. Nor while moderation hides it, nor to a viewer blocked
+       either way. Each reads as no listing. */
+    if (!(await ownerPagePublic(listing.seller_id))) return res.status(404).json({ error: "listing not found" });
+    {
+      const SF = require("./lib/safety");
+      const viewer = await viewerIdFrom(req);
+      if ((await SF.hiddenAmong(supabase, "listing", [listing.id])).has(listing.id) || (viewer && await SF.blockedEitherWay(supabase, viewer, listing.seller_id))) {
+        return res.status(404).json({ error: "listing not found" });
+      }
+    }
 
     // A seller without a bf_profiles row is fine — the listing still renders,
     // the handle is simply null.
@@ -53972,6 +54414,14 @@ app.delete("/api/bfp/videos/:id", requireAuth, async function (req, res, next) {
 
 app.put("/api/business-profile", requireAuth, async function (req, res, next) {
   try {
+    // NAMED (Nov 20 2026, P2-2): the content policy screen on the business profile's public fields
+    {
+      const pb = req.body || {};
+      const screened = policyScreen({ business_name: pb.business_name, industry: pb.industry, location: pb.location, website: pb.website,
+        offer: pb.offer, products_services: pb.products_services });
+      if (!screened.ok) return policyRefused(res, screened);
+      await policyQueue(screened, "profile", req.user.id, req.user.id);
+    }
     const updates = { updated_at: nowIso() };
     if (req.body.business_name     !== undefined) updates.business_name     = safeText(req.body.business_name, 120)      || null;
     if (req.body.business_type     !== undefined) updates.business_type     = safeText(req.body.business_type, 120)      || null;
@@ -61461,7 +61911,13 @@ shutdownControl.setServer(app.listen(PORT, function () {
      NAMED (Nov 14 2026, L1): then Google's user data rules for YouTube
      (youtubeDataCheckTick, job_runs youtube_data_check), and last the yearly
      renewal reminders and the terms-change emails (renewalEmailsTick, job_runs
-     renewal_yearly_reminder and terms_change_email). */
+     renewal_yearly_reminder and terms_change_email).
+     NAMED (Nov 20 2026, P2-2, migration 191): last, the safety retention
+     (safetyRetentionTick, job_runs safety_retention: resolved reports and
+     decided queue items after a year, copyright notices after three years) and
+     the counter-notice restore (copyrightRestoreTick, job_runs
+     copyright_restore: a countered notice's material restored after 10
+     business days unless a court filing was recorded). */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -61475,7 +61931,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
       }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick).then(youtubeDataCheckTick).then(renewalEmailsTick)
-        .then(shopifyDataRequestReminderTick);
+        .then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick);
     }, {
       timezone: "UTC"
     });

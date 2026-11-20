@@ -310,13 +310,19 @@ function liftRoutes(fake) {
   const routes = [];
   const ctx = {
     console: { log() {}, error() {}, warn() {} },
-    require: name => { if (name === "./lib/profileDesign") return L; throw new Error("unexpected require " + name); },
+    // NAMED (Nov 20 2026, P2-2): BEFORE only ./lib/profileDesign. AFTER the public profile route also asks ./lib/safety whether the
+    // viewer is blocked and whether the page is hidden (the real module, against this check's client).
+    require: name => { if (name === "./lib/profileDesign") return L; if (name === "./lib/safety") return require("../lib/safety"); throw new Error("unexpected require " + name); },
     supabase: fake.client, Promise: Promise, Object: Object, Array: Array, String: String, JSON: JSON,
     requireAuth: (req, res, next) => next(), themesWriteLimiter: (req, res, next) => next(),
     THEME_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     nowIso: () => "2026-10-31T00:00:00.000Z",
     safeText: (v, n) => v === undefined || v === null ? null : String(v).trim().slice(0, n || 5000),
     ownerPagePublic: async () => true, publicSupportLinks: async () => [],
+    // NAMED (Nov 20 2026, P2-2): the save screens its text (policyScreen, policyQueue: checkContentPolicy runs the real screen) and the
+    // public read asks who the viewer is (viewerIdFrom); here every text passes and no one is signed in.
+    policyScreen: () => ({ ok: true, review: null }), policyRefused: (res, s) => res.status(400).json({ error: s.error }), policyQueue: async () => null,
+    viewerIdFrom: async () => null,
     app: {}
   };
   ["get", "post", "put", "delete"].forEach(m => { ctx.app[m] = function (p) { const args = [].slice.call(arguments, 1); routes.push({ method: m, path: p, handler: args[args.length - 1] }); }; });

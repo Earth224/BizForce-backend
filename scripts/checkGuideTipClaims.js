@@ -1099,7 +1099,9 @@ const B = [
     () => /'<button type="button" class="btn-sm btn-edit"' \+ idAttr \+ '>Edit<\/button>'/.test(FILES[MARKET]) &&
       /'<button type="button" class="btn-sm btn-delete"' \+ idAttr \+ '>Delete<\/button>'/.test(FILES[MARKET]) &&
       /var statusHtml = isOwn \? '<span class="status-badge status-'/.test(FILES[MARKET]) &&
-      /var body = \{ title, description: desc, category, price_bfc: price, tags: tagsRaw, media: listingMedia \};/.test(FILES[MARKET]) &&
+      // NAMED (Nov 20 2026, P2-2 fix a): BEFORE "media: listingMedia"; AFTER "media: mediaForSave()" (an edit sends the
+      // photos only when they changed). Still no status in the body.
+      /var body = \{ title, description: desc, category, price_bfc: price, tags: tagsRaw, media: mediaForSave\(\) \};/.test(FILES[MARKET]) &&
       !/\bstatus\s*:\s*"(active|paused|sold)"|body\.status\b/.test(FILES[MARKET])],
   ["8 certifications 76", certTips, "Press \"Try Again\" on the result screen", /Retake Assessment/,
     () => /<button class="result-retry-btn" id="resultRetryBtn">Try Again<\/button>/.test(FILES[CERTS]) &&

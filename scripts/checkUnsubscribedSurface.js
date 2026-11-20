@@ -311,7 +311,12 @@ const EXPECTED_ADMIN = [
   "post /api/admin/price-change-notice",
   // NAMED (Nov 15 2026, W2; admin 8 -> 10): BEFORE no Shopify data-request routes. AFTER the owner's list of Shopify data
   // requests (read-only) and marking one answered (sets answered_at only), both requireAuth and requireAdmin (checkShopifyWebhooks K).
-  "get /api/admin/shopify-data-requests", "post /api/admin/shopify-data-requests/:id/answered"
+  "get /api/admin/shopify-data-requests", "post /api/admin/shopify-data-requests/:id/answered",
+  // NAMED (Nov 20 2026, P2-2, migration 191; admin 10 -> 15): BEFORE no moderation routes. AFTER the owner's moderation.html: the
+  // queue's tabs, the storage panel and one item (read-only), a decision (keep, hide or remove; logged, the author and reporters
+  // told) and a court filing on a countered notice, every one requireAuth and requireAdmin (checkModerationQueue, checkCopyrightNotices).
+  "get /api/admin/moderation", "get /api/admin/moderation/storage", "get /api/admin/moderation/item/:id",
+  "post /api/admin/moderation/item/:id/decide", "post /api/admin/moderation/notice/:id/court-filed"
 ];
 
 /* Login-only routes that write something a stranger is served. */
@@ -536,7 +541,11 @@ const EXPECTED_OWN = [
   // caller's own notices read, and Settings, Local saves the caller's own place (bf_profiles, their own row). Each writes
   // only the caller's rows (checkInbox I3 and N7, checkHandles L7). Deliberately ungated: reading your own notices and
   // saying where you are never need a subscription.
-  "post /api/inbox/read/:userId", "post /api/notifications/read-all", "put /api/me/place"
+  "post /api/inbox/read/:userId", "post /api/notifications/read-all", "put /api/me/place",
+  // NAMED (Nov 20 2026, P2-2, migration 191; effectful login-only 168 -> 172): BEFORE no blocks or mutes. AFTER a member blocks,
+  // unblocks, mutes and unmutes; each writes only the caller's own member_blocks or member_mutes rows (checkBlocks). Deliberately
+  // ungated: keeping someone away must never need a subscription.
+  "post /api/blocks", "delete /api/blocks/:userId", "post /api/mutes", "delete /api/mutes/:userId"
   // NAMED (Nov 11 2026, orbit stage 2; classified, not listed): GET /api/dashboard/pulse is login-only and READ-ONLY. It reads the
   // caller's own running agents and recent events (ai_tasks, agent_proposals, store_change_log, card_leads, social_post_drafts,
   // instagram_posts, facebook_posts, member_videos, content_library), writes nothing, starts no task and calls no model, and does
@@ -588,7 +597,13 @@ const EXPECTED_UNAUTH_WRITES = {
   // and the three privacy topics here, raw body, HMAC-SHA256 verified under the app's secret (401 otherwise, 503 unconfigured);
   // each delivery's id is recorded once in shopify_webhook_events (kept 30 days), and uninstall or shop/redact deletes that
   // shop's connection and everything read from it, as Disconnect does. Nothing else is written (checkShopifyConnect).
-  "post /api/webhooks/shopify":             "Shopify webhook, HMAC-verified: a receipt, and on uninstall or shop/redact the shop's connection deleted (migration 176)"
+  "post /api/webhooks/shopify":             "Shopify webhook, HMAC-verified: a receipt, and on uninstall or shop/redact the shop's connection deleted (migration 176)",
+  // NAMED (Nov 20 2026, P2-2; 23 -> 26): BEFORE these three public reads wrote nothing. AFTER each asks who the viewer is
+  // (viewerIdFrom), which runs requireAuth on the request's own token, so a signed-in viewer's session gets its last_used_at, as
+  // every signed-in request does; nothing else is written, and a visitor with no token writes nothing (checkBlocks).
+  "get /api/bfp/profile/:userId":           "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)",
+  "get /api/bfp/seller/:handle":            "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)",
+  "get /api/marketplace/listings/:id":      "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)"
 };
 
 /* Login-only routes that gate PART of what they do inside the handler. The

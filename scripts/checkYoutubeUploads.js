@@ -1832,7 +1832,9 @@ function pageAnswers(over) {
     // NAMED (Nov 14 2026, L1): YouTube's daily data check and the renewal and terms emails follow Facebook's cleanup.
     youtubeDataCheckTick: async function () { order.push("youtubedata"); }, renewalEmailsTick: async function () { order.push("renewal"); },
     // NAMED (Nov 15 2026, W2): the chain then ends with the Shopify data request reminder (checkShopifyWebhooks J, L2).
-    shopifyDataRequestReminderTick: async function () { order.push("shopifyreminder"); }
+    shopifyDataRequestReminderTick: async function () { order.push("shopifyreminder"); },
+    // NAMED (Nov 20 2026, P2-2): the safety retention and the counter-notice restore follow it.
+    safetyRetentionTick: async function () { order.push("safetyretention"); }, copyrightRestoreTick: async function () { order.push("copyrightrestore"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
@@ -1840,7 +1842,7 @@ function pageAnswers(over) {
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
   // NAMED (Nov 14 2026, L1): BEFORE the order ended "facebook". AFTER it ends "facebook", "youtubedata", "renewal".
   check("J5. the 04:45 UTC chain runs videoRetentionTick after the Shopify purge, then instagramRefreshTick, then facebookChoosingPurgeTick (NAMED, item 8 parts 3a and 3b), then L1's YouTube data check and renewal emails", cronOk && scheduled.length === 1 && scheduled[0].spec === "45 4 * * *" &&
-    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder"]), J(order));
+    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder", "safetyretention", "copyrightrestore"]), J(order));   // NAMED (Nov 20 2026, P2-2): BEFORE it ended "shopifyreminder"
   m = mountRoutes({ env: CONFIGURED });
   const vr = await attempt(m.ctx.videoRetentionTick());
   check("J6. videoRetentionTick runs lib/memberVideos.js retentionTick on youtubeDeps() (its job_runs row claimed)", vr.ok && vr.v && vr.v.claimed === true &&
@@ -2439,7 +2441,8 @@ function pageAnswers(over) {
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
   // the Etsy privacy sentence set (this change still set Nov 7).
   // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
-  check("G4. TERMS_VERSION is the latest change's, Nov 14 2026 (L1; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-14", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
+  check("G4. TERMS_VERSION is the latest change's, Nov 20 2026 (P2-2; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-20", LEGAL.TERMS_VERSION);
   const GR = realRequire("./lib/gateRules");
   check("G5. gateRules: both actions known, channel youtube", GR.ACTION_TYPES.indexOf("publish_youtube_video") !== -1 && GR.ACTION_TYPES.indexOf("delete_youtube_video") !== -1 &&
     GR.CHANNELS.indexOf("youtube") !== -1 && GR.channelFor("publish_youtube_video") === "youtube" && GR.channelFor("delete_youtube_video") === "youtube");
@@ -2494,9 +2497,10 @@ function pageAnswers(over) {
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 190 &&
+  // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 192 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),
@@ -2510,9 +2514,10 @@ function pageAnswers(over) {
     const verify187 = fs.existsSync(path.join(REPO, "supabase", "migrations", "verify", "187_verify.sql")) ? read("supabase/migrations/verify/187_verify.sql") : "";
     // NAMED (Nov 19 2026, HQ1, migration 188): BEFORE 187 was the highest (top === 187). AFTER 188_user_preferences_hq_view.sql is the one above it, by name; "the highest" is checkHqViews R1's.
     // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
+    // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
     check("G14. R1. 187_member_video_parts.sql is the only 187 and only 188_user_preferences_hq_view.sql, 189_handles_and_place.sql and 190_notifications_links.sql are above it; it allows 500 MiB, part_count 1..12 and member_video_parts with RLS on and nothing granted; VERIFY is verify/187_verify.sql",
-      top === 190 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
-      migNames.filter(function (x) { return Number(x.slice(0, 3)) > 187; }).join() === "188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql" &&
+      top === 192 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
+      migNames.filter(function (x) { return Number(x.slice(0, 3)) > 187; }).join() === "188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql" &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 524288000)") !== -1 && sql187.indexOf("CHECK (part_count >= 1 AND part_count <= 12)") !== -1 &&
       sql187.indexOf("ALTER TABLE public.member_video_parts ENABLE ROW LEVEL SECURITY;") !== -1 && sql187.indexOf("REVOKE ALL ON public.member_video_parts FROM anon, authenticated;") !== -1 &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 47185920)") !== -1 && sql187.indexOf("UNIQUE (upload_path, idx)") !== -1 &&

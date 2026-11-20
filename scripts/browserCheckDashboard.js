@@ -595,12 +595,18 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     // GETs only: each cross-origin read here also sends a CORS preflight (OPTIONS), listed but not counted.
     const gets = l => l.filter(c => /^GET /.test(c));
     const extra = gets(after); gets(before).forEach(c => { const i = extra.indexOf(c); if (i !== -1) extra.splice(i, 1); });
+    // NAMED (Nov 20 2026, P2-2): the dashboard's ownerCount script (bf-safety.js) reads GET /api/inbox/counts once, for the
+    // owner's waiting count; the pre-orbit page had no such script. It is checked on its own and set aside from the orbit's count.
+    const p22Reads = extra.filter(c => c === "GET /api/inbox/counts").length;
+    check("P2-2's owner count reads GET /api/inbox/counts exactly once on load", p22Reads === 1, extra.join(", "));
+    if (p22Reads) { extra.splice(extra.indexOf("GET /api/inbox/counts"), 1); }
+    const p22n = p22Reads ? 1 : 0;
     console.log("    requests on load: before (" + BEFORE_ORBIT + ") " + gets(before).length + " GET, " + before.length + " with preflights [" + gets(before).join(", ") + "]");
     console.log("    requests on load: now " + gets(after).length + " GET, " + after.length + " with preflights [" + gets(after).join(", ") + "]");
     fs.writeFileSync(path.join(TOP_OUT, "requests.json"), JSON.stringify({ before: before, now: after }, null, 2));
     // NAMED (Nov 11 2026, orbit stage 2): BEFORE exactly one read more than before the orbit (/top). AFTER two: /top and the first pulse.
     check("the top half adds exactly two reads on load, GET /api/dashboard/top and GET /api/dashboard/pulse (" + gets(before).length + " GETs before, " + gets(after).length + " now)",
-      gets(after).length === gets(before).length + 2 && extra.length === 2 && extra.slice().sort().join() === "GET /api/dashboard/pulse,GET /api/dashboard/top", extra.join(", "));
+      gets(after).length - p22n === gets(before).length + 2 && extra.length === 2 && extra.slice().sort().join() === "GET /api/dashboard/pulse,GET /api/dashboard/top", extra.join(", "));
     check("no script error from bf-orbit.js", !exceptions.some(e => /bf-orbit/.test(e)), exceptions.filter(e => /bf-orbit/.test(e)).join(" | "));
 
     const PORTAL_KEYS = ["grow", "sell", "connect", "agents", "oracle"];

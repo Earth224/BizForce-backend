@@ -1422,7 +1422,8 @@ function listAnswers(over) {
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026. AFTER the privacy sentence changed again (Etsy), so
   // the terms date is Nov 8 2026 by the rule in lib/legal.js.
   // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
-  check("G6. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 14 2026 (L1; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
+  check("G6. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 20 2026 (P2-2; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-20" && LEGAL.TERMS_UPDATED === "Last updated November 20, 2026", LEGAL.TERMS_VERSION);
   // NAMED (Nov 7 2026, YouTube uploads, migration 177): the sign-in states line now also names Connect YouTube;
   // Connect Shopify is still required in it.
   // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE "..., Connect Shopify and Connect YouTube". AFTER the line
@@ -1476,15 +1477,16 @@ function listAnswers(over) {
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
+  // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
   check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql is 176 or lower (checkOrbitStage2 R1)",
-    highest === 190 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
+    highest === 192 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
     migFiles.filter(function (f) { return /^178_/.test(f); }).join() === "178_tiktok_posting.sql" &&
     migFiles.filter(function (f) { return /^179_/.test(f); }).join() === "179_instagram_posting.sql" &&
     migFiles.filter(function (f) { return /^180_/.test(f); }).join() === "180_facebook_pages.sql" &&
     migFiles.filter(function (f) { return /^181_/.test(f); }).join() === "181_etsy_store.sql" &&
     migFiles.filter(function (f) { return /^182_/.test(f); }).join() === "182_amazon_store.sql" &&
     migFiles.filter(function (f) { return /^183_/.test(f); }).join() === "183_weekly_goal_and_order_status.sql" &&
-    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql" && f !== "183_weekly_goal_and_order_status.sql" && f !== "184_shopify_webhook_requests.sql" && f !== "185_shopify_uninstall_hook.sql" && f !== "186_member_videos_duration.sql" && f !== "187_member_video_parts.sql" && f !== "188_user_preferences_hq_view.sql" && f !== "189_handles_and_place.sql" && f !== "190_notifications_links.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
+    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql" && f !== "183_weekly_goal_and_order_status.sql" && f !== "184_shopify_webhook_requests.sql" && f !== "185_shopify_uninstall_hook.sql" && f !== "186_member_videos_duration.sql" && f !== "187_member_video_parts.sql" && f !== "188_user_preferences_hq_view.sql" && f !== "189_handles_and_place.sql" && f !== "190_notifications_links.sql" && f !== "191_safety.sql" && f !== "192_buy_listing_digital.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
     migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
     highest);
   const fresh = { "lib/shopifyAuth.js": FILES.auth, "lib/shopifyApi.js": FILES.api, "176_shopify_oauth.sql": FILES.migration176, "scripts/store-connect.js": FILES.ui,

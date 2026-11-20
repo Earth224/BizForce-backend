@@ -55,7 +55,8 @@ function setup(filename, mutations, names) {
 
   const libCache = {};
   function libRequire(name) {
-    const m = /^\.\/lib\/([a-zA-Z0-9_]+)(?:\.js)?$/.exec(name);
+    // NAMED (Nov 20 2026, P2-2): also "./<name>", a lib file's require of its neighbour (lib/moderation.js requires "./safety")
+    const m = /^\.\/(?:lib\/)?([a-zA-Z0-9_]+)(?:\.js)?$/.exec(name);
     const key = m ? "@lib/" + m[1] + ".js" : null;
     if (key && typeof FILES[key] === "string") {
       if (!libCache[key]) {
@@ -96,8 +97,13 @@ function route(src, method, routePath, stubs, libRequire) {
   const reg = function () { if (arguments[0] === routePath) handler = arguments[arguments.length - 1]; };
   ctx.app = { get: reg, put: reg, post: reg, delete: reg, patch: reg, use() {} };
   vm.createContext(ctx);
-  // the check's stubs are not pulled in from server.js (nor what only they need)
-  const added = Object.keys(stubs || {}).filter(k => !s.STUBS.has(k));
+  /* NAMED (Nov 20 2026, P2-2): a route that screens text (policyScreen, lib/contentPolicy.js) runs the server's health-claims
+     screen, which reads COMPLIANCE_PROFILES and COMPLIANCE_DISCLAIMER; _shared.js lists both as stubs, so the closure never
+     carries them. Their real definitions from server.js are loaded here, unless the check stubs them. */
+  const compliance = (stubs && (stubs.COMPLIANCE_PROFILES || stubs.COMPLIANCE_DISCLAIMER)) ? { names: [], code: "" } : s.complianceCode(src);
+  if (compliance.code) vm.runInContext(compliance.code, ctx);
+  // the check's stubs are not pulled in from server.js (nor what only they need); nor what the compliance code above defined
+  const added = Object.keys(stubs || {}).concat(compliance.names).filter(k => !s.STUBS.has(k));
   added.forEach(k => s.STUBS.add(k));
   let code;
   try { code = s.closureFor(src, stmt); } catch (e) { code = stmt; } finally { added.forEach(k => s.STUBS.delete(k)); }
@@ -141,4 +147,19 @@ const filterVal = (q, m, col) => {
   const f = q.filters.find(x => x[0] === m && x[1] === col); return f ? f[2] : undefined;
 };
 
-module.exports = { setup, route, routeStatement, fakeDb, filterVal, REPO, FRONTEND };
+/* NAMED (Nov 20 2026, P2-2): every `app.<method>("<path>", ...)` statement of server.js whose text holds needle, as
+   "METHOD /path" in file order (the P2-2 checks compare where a guard is called with the list they own). */
+function routesWith(src, needle) {
+  const re = /\napp\.(get|post|put|delete|patch)\("([^"]+)",/g, out = [];
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    // the handler: `function (...) {` or an arrow `=> {`, whichever comes first
+    const fn = src.indexOf("function", m.index + 1), arrow = src.indexOf("=> {", m.index + 1);
+    const open = src.indexOf("{", arrow !== -1 && (fn === -1 || arrow < fn) ? arrow : fn);
+    const end = s.braceMatch(src, open);
+    if (end > open && src.slice(m.index, end).indexOf(needle) !== -1) out.push(m[1].toUpperCase() + " " + m[2]);
+  }
+  return out;
+}
+
+module.exports = { setup, route, routeStatement, routesWith, fakeDb, filterVal, REPO, FRONTEND };

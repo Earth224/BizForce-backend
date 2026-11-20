@@ -298,7 +298,8 @@ async function profilePrivacy() {
   const route = routeSource("get", "/api/profile/by-id/:userId");
   const db = fakeDb({ profiles: [row] });
   const handlers = {};
-  const ctx = { supabase: db.client, console: { log() {}, warn() {}, error() {} }, requireAuth: 0, app: { get(p) { handlers[p] = arguments[arguments.length - 1]; } } };
+  // NAMED (Nov 20 2026, P2-2): the route asks lib/safety.js whether either member blocked the other, so it needs require.
+  const ctx = { supabase: db.client, require: rq, console: { log() {}, warn() {}, error() {} }, requireAuth: 0, app: { get(p) { handlers[p] = arguments[arguments.length - 1]; } } };
   vm.createContext(ctx);
   vm.runInContext(route, ctx);
   const res = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = clone(b); return this; } };

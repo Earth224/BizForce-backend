@@ -574,7 +574,7 @@ const upload = (buffer, name, mimetype) => ({ field: "track", buffer, originalna
   const mt = legalPages.musicTerms();
   check("C1. the Terms have \"Your music\" in section 7: only music you have the right to use; private to you; reported infringing files may be removed",
     /<h3 id="music">Your music<\/h3>/.test(terms) && mt.every(x => terms.indexOf(esc(x)) !== -1) &&
-    /only music you have the right to use/.test(mt[0]) && /private to you/.test(mt[1]) && /may remove it/.test(mt[3]) && terms.indexOf('id="content"') < terms.indexOf('id="music"') && terms.indexOf('id="music"') < terms.indexOf('id="bizcash"'));
+    /only music you have the right to use/.test(mt[0]) && /private to you/.test(mt[1]) && /notice and counter-notice process in section 7/.test(mt[3]) /* NAMED (Nov 20 2026, P2-2): BEFORE "may remove it" */ && terms.indexOf('id="content"') < terms.indexOf('id="music"') && terms.indexOf('id="music"') < terms.indexOf('id="bizcash"'));
   check("C1. ... with the limits from lib/music.js (25 MB a file, 250 MB in all, links that expire after 10 minutes)",
     /at most 25 MB, and your library at most 250 MB/.test(mt[2]) && /expires after 10 minutes/.test(mt[1]));
   const built = legalPages.buildLegalPages(legalPages.codeFacts());

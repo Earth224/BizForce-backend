@@ -244,6 +244,9 @@ if (MUTATE) {
   for (const [file, from, to] of MUTATIONS[MUTATE]) FILES[file] = s.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
   console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
 }
+// NAMED (Nov 20 2026, P2-2): the owner's moderation count (four lines, _shared.js P22_DASH_LINES) is taken out before the
+// byte-for-byte comparisons below; each line must be there exactly once.
+FILES[DASH] = s.withoutP22Dash(FILES[DASH]);
 const UI_CSS = lf(fs.readFileSync(path.join(FRONTEND, "css/bizforce-ui.css"), "utf8"));
 const BASE = lf(execFileSync("git", ["show", BASELINE + ":" + DASH], { cwd: FRONTEND, maxBuffer: 1 << 27 }).toString("utf8"));
 

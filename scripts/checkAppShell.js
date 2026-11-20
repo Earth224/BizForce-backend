@@ -15,7 +15,7 @@
         nothing created. The creators read ?create, and a listing's kind
         reaches POST /api/marketplace/listings.
      J  bf-session.js loads the bar on signed-in pages
-     W  sw.js: SHELL_REV "p21", the new scripts and pages in the offline shell
+     W  sw.js: SHELL_REV "p21" (P2-2 made it "p22"), the new scripts and pages in the offline shell
      U  what P2-1 must not change: the Oracle pages, the music player, the
         Layered Stack logo, HQ1's dashboard views, the phone stylesheet, every
         font (as at the frontend's 1803344)
@@ -31,6 +31,13 @@ const { execFileSync } = require("child_process");
 const H = require("./_p21Harness");
 
 const P20_COMMIT = "1803344";   // the frontend before P2-1
+// NAMED (Nov 20 2026, P2-2): the only lines P2-2 added to dashboard.html (see U1).
+const P22_DASH_LINES = [
+  "<!-- P2-2: the owner alone sees the moderation queue's waiting count here, only when above 0 (scripts/bf-safety.js ownerCount) -->",
+  "<p class=\"owner-moderation\" id=\"ownerModeration\" hidden style=\"text-align:center;margin:0 0 12px\"></p>",
+  "<script src=\"/scripts/bf-safety.js\"></script>",
+  "<script>if (window.BFSafety) window.BFSafety.ownerCount(document.getElementById(\"ownerModeration\"));</script>"
+];
 const BAR = "scripts/bf-tabbar.js", SESSION = "scripts/bf-session.js", SW = "sw.js", SERVER = "@server.js";
 const MARKET = "marketplace.html", GARAGE = "garage-sale.html", CAMPAIGNS = "campaigns.html";
 const UNCHANGED = ["oracle.html", "mychart.html", "calendar.html", "synastry.html", "the-third.html", "scripts/bf-music.js", "scripts/bf-marks.js",
@@ -62,7 +69,8 @@ const MUTATIONS = {
   "server-kind-unchecked": [[SERVER, "    if (listingKind !== \"product\" && listingKind !== \"service\") return res.status(400)", "    if (false) return res.status(400)"]],
   "garage-no-create": [[GARAGE, "if (new URLSearchParams(window.location.search).get(\"create\") === \"item\") {", "if (false) {"]],
   "campaign-no-create": [[CAMPAIGNS, "if (new URLSearchParams(window.location.search).get(\"create\") === \"campaign\") {", "if (false) {"]],
-  "sw-old-rev": [[SW, "var SHELL_REV = \"p21\";", "var SHELL_REV = \"hq1\";"]],
+  // NAMED (Nov 20 2026, P2-2): BEFORE "p21". AFTER "p22": the report, block and mute menu (bf-safety.js), moderation.html and copyright.html in the shell.
+  "sw-old-rev": [[SW, "var SHELL_REV = \"p22\";", "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   "sw-no-pages": [[SW, "  \"home.html\", \"inbox.html\"   //", "  //"]],
   "oracle-touched": [["oracle.html", "</body>", "<div id=\"x\"></div></body>"]],
@@ -209,16 +217,22 @@ async function page(pathname, opts) {
   /* ══ W ══ */
   console.log("\n══ W. the offline shell ══");
   const sw = FILES[SW] || "";
-  check("W1. SHELL_REV \"p21\" in the cache's name", has(sw, "var SHELL_REV = \"p21\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+  // NAMED (Nov 20 2026, P2-2): BEFORE "p21". AFTER "p22": the report, block and mute menu (bf-safety.js), moderation.html and copyright.html in the shell.
+  check("W1. SHELL_REV \"p22\" in the cache's name", has(sw, "var SHELL_REV = \"p22\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
-  check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\"   // NAMED (Nov 19 2026, P2-1)"));
+  // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
+  check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
 
   /* ══ U ══ */
   console.log("\n══ U. unchanged since " + P20_COMMIT + " ══");
   const changed = UNCHANGED.filter(f => {
     let old;
     try { old = execFileSync("git", ["-C", FE, "show", P20_COMMIT + ":" + f], { encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "ignore"] }).replace(/\r\n/g, "\n"); } catch (e) { return true; }
-    return old !== FILES[f];
+    // NAMED (Nov 20 2026, P2-2): dashboard.html gained the owner's moderation count, four lines and nothing else
+    // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
+    let now = FILES[f];
+    if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    return old !== now;
   });
   check("U1. the Oracle pages, the music player (its button icon), the Layered Stack logo (bf-marks.js), HQ1's dashboard views, the phone and UI stylesheets and the Guide are byte for byte as at " + P20_COMMIT,
     changed.length === 0, changed.join(","));
