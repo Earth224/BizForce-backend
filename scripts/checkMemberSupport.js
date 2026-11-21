@@ -163,7 +163,8 @@ const MUTATIONS = {
   // NAMED (Nov 14 2026, L1): BEFORE the anchor was "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube text set;
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
   // the mutation still winds it back before this check's change.
-  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-20\";", "const TERMS_VERSION = \"2026-10-26\";"]],
+  // NAMED (Nov 20 2026, P3-1): BEFORE the anchor named "2026-11-20". AFTER "2026-11-21", P3-1's version.
+  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-21\";", "const TERMS_VERSION = \"2026-10-26\";"]],
   // support's ledger legs are described differently, so the shared total in SQL misses them
   "support-debit-not-transfer": [["mig", "v_balance := bfc_transfer(p_from, p_to, p_amount, 'Transfer');", "v_balance := bfc_transfer(p_from, p_to, p_amount, case when p_kind = 'support' then 'Support' else 'Transfer' end);"]]
 };
@@ -346,7 +347,11 @@ const NOTE = "Thanks for the kiln tips <3";
 const RITA_PHOTO = "https://cdn.example.com/rita.jpg";
 function daysAgo(n) { return new Date(Date.now() - n * DAY_MS).toISOString(); }
 function seed() {
-  const users = [[SAM, 30], [RITA, 30], [NINA, 2], [LOU, 30], [ANON, 30], [OTTO, 30], [NED, 30], [PAT, 30]].map(([id, d]) => ({ id, role: "user", created_at: daysAgo(d), email: id === RITA ? PRIVATE.email : id.slice(0, 4) + "+bftest@example.com" }));
+  // NAMED (Nov 20 2026, P3-1): every one has confirmed their email, so each can receive BizCash (checkEmailVerified runs the unconfirmed one)
+  const users = [[SAM, 30], [RITA, 30], [NINA, 2], [LOU, 30], [ANON, 30], [OTTO, 30], [NED, 30], [PAT, 30]].map(([id, d]) => ({ id, role: "user", created_at: daysAgo(d), email_verified_at: daysAgo(d), email: id === RITA ? PRIVATE.email : id.slice(0, 4) + "+bftest@example.com" }));
+  // NAMED (Nov 20 2026, P3-1): a page is public while its owner is in good standing (ownerPagePublic), so Pat, the opted-in
+  // member whose page is not public, is BANNED; before, Pat's plan had lapsed (a free account's page is public now).
+  users.find(u => u.id === PAT).banned_at = daysAgo(1);
   const t = {
     users,
     user_wallets: users.map(u => ({ user_id: u.id, balance: 5000 })),
@@ -726,7 +731,7 @@ function pageDom(html, url, opts) {
   check("E7. pageIsOn: off with no row, with links and no choice on, explicit off wins over links, explicit on with no links on",
     L.pageIsOn(null) === false && L.pageIsOn({ links: [{ provider: "paypal", handle: "x" }], page_on: null }) === true &&
     L.pageIsOn({ links: [{ provider: "paypal", handle: "x" }], page_on: false }) === false && L.pageIsOn({ links: [], page_on: true }) === true && L.pageIsOn({ links: [], page_on: null }) === false);
-  for (const [label, uname] of [["an unknown username", "nobody"], ["a member whose subscription lapsed (their pages are not public)", "pat"]]) {
+  for (const [label, uname] of [["an unknown username", "nobody"], ["a banned member (their pages are not public; P3-1, before: whose subscription lapsed)", "pat"]]) {
     const x = await hit("get /support/:username", null, {}, { username: uname });
     check("E8. " + label + ": 404 \"No member found\", noindex", x.status === 404 && /<h1>No member found<\/h1>/.test(x.text || "") && /<meta name="robots" content="noindex"\/>/.test(x.text || ""), x.status + " " + (x.text || "").slice(0, 200));
   }
@@ -744,7 +749,7 @@ function pageDom(html, url, opts) {
   await hit("put /api/support/me", RITA, { discoverable: true });
   const ritaIdx = await hit("get /support/:username", null, {}, { username: "rita" });
   const smap1 = await hit("get /api/sitemap/support.xml", null, {}, {});
-  check("E10. opted in: the page is indexable and listed; the off page (otto, opted in) and a lapsed member (pat, opted in) are not",
+  check("E10. opted in: the page is indexable and listed; the off page (otto, opted in) and a banned member (pat, opted in; P3-1, before: lapsed) are not",
     /<meta name="robots" content="index, follow"\/>/.test(ritaIdx.text || "") && (smap1.text || "").indexOf("<loc>https://bizforceai.net/support/rita</loc>") !== -1 &&
     (smap1.text.match(/<loc>/g) || []).length === 1, smap1.text);
 
@@ -855,7 +860,9 @@ function pageDom(html, url, opts) {
     } catch (e) { rt = String(e); }
     check("F8. after sign-in, app.html returns to the support page (or storefront), once, and to nothing off this site's public pages",
       Array.isArray(rt) && rt[0].r === "/support/rita" && rt[0].left === undefined && rt[1].r === "/seller.html?u=rita" && rt.slice(2).every(x => x.r === null) &&
-      /window\.location\.href = signInReturnTo\(\) \|\| "\/dashboard\.html";/.test(app), JSON.stringify(rt));
+      // NAMED (Nov 21 2026, P3-1): BEFORE 'signInReturnTo() || "/dashboard.html"'. AFTER the page that sent them still wins, first;
+      // with none, landByTier picks Home or the dashboard (checkFreeAccount G).
+      /var back = signInReturnTo\(\);\n    if \(back\) \{ window\.location\.href = back; return; \}\n    landByTier\(data\.token\);/.test(app), JSON.stringify(rt));
   }
 
   // the pages are wired

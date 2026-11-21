@@ -654,6 +654,8 @@ function liftRoutes(fake) {
     memberMedia: require(path.join(REPO, "lib/memberMedia.js")),
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (lib/storageGuard.js) is checked by checkStorageGuard; here it always has room.
     storageGuard: async () => null,
+    // NAMED (Nov 20 2026, P3-1): storage per account (lib/storageAccount.js) is checked by checkStorageAccount; here every file is counted.
+    storageAccountReserve: async () => null, storageAccountRelease: async () => true, storageAccountReleaseMany: async () => true,
     app: {}
   };
   ["get", "post", "put", "delete"].forEach(m => { ctx.app[m] = function (p) { const args = [].slice.call(arguments, 1); routes.push({ method: m, path: p, mw: args.slice(0, -1), handler: args[args.length - 1] }); }; });

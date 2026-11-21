@@ -861,7 +861,9 @@ const fmt = n => Number(n).toLocaleString("en-US");
       every(sec => sec.indexOf("<p>Questions about how BizForce AI uses Google user data: <a href=\"mailto:" + LEGAL.CONTACT_EMAIL + "\">" + LEGAL.CONTACT_EMAIL + "</a>.</p>") !== -1));
     // NAMED (Nov 20 2026, P2-2): BEFORE TERMS_VERSION stayed 2026-11-14 (W3's privacy-only clarification). AFTER P2-2 moved it to
     // 2026-11-20 for the community rules; W3's clarification itself needed no new version, and none was made for it.
-    check("P12. W3's privacy-only clarification made no new version; P2-2's community rules moved TERMS_VERSION to " + LEGAL.TERMS_VERSION, LEGAL.TERMS_VERSION === "2026-11-20");
+    // NAMED (Nov 20 2026, P3-1): BEFORE "P2-2's community rules moved TERMS_VERSION to" and "2026-11-20". AFTER P3-1 moved it to 2026-11-21
+    // for free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule.
+    check("P12. W3's privacy-only clarification made no new version; P3-1 moved TERMS_VERSION to " + LEGAL.TERMS_VERSION, LEGAL.TERMS_VERSION === "2026-11-21");
   }
 
   check("no network was touched", NETWORK.length === 0, NETWORK.join(", "));

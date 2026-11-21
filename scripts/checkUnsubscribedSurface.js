@@ -68,24 +68,30 @@
    No login-only route may spend a model call; that list is empty and must stay
    empty.
 
+   P3-1 (Nov 20 2026): THE FOUR GROUPS. Free accounts and one membership. lib/routeAccess.js assigns every
+   route a group: P public (no sign-in), F free (sign-in only), M members only (requireActiveSubscription,
+   inserted by applyRouteAccess where the route line lacked it) and A the owner or an admin (requireAdmin, or
+   the owner check in the handler, ADMIN_IN_HANDLER). This check holds the table to the live router.
+
    WHAT THIS PROVES
-     1. Every route classifies, and the counts are printed.
-     2. The subscription-gated set is exactly EXPECTED_GATED, and the admin set
-        exactly EXPECTED_ADMIN — a route that loses its gate fails here.
-     3. No login-only route reaches a model call.
-     4. Every login-only route that writes, publishes, stores or reaches
-        another person is in exactly one EXPECTED list; a new one fails until
-        it is reviewed and added. A listed route that no longer exists, is no
-        longer login-only, or no longer has any effect also fails, so the
-        lists stay exact.
-     5. Every unauthenticated route that writes is in EXPECTED_UNAUTH_WRITES,
-        on the same terms.
-     6. Each public page route is unauthenticated and its handler carries the
-        owner check, and the check itself answers correctly for real accounts:
-        the unentitled check account's page is not served, the entitled seed
-        account's is, and the owner's is (admin exemption).
-     7. Each in-handler gate is present, and a 402 keeps error and
-        upgrade_required and adds message and billing_url.
+     1. Every route classifies, the counts are printed, and every live route is in exactly one group
+        (a new route fails until it is assigned; a grouped route that is gone fails too).
+     2. Each group is what the router does: P has no sign-in, F is sign-in only, M has
+        requireActiveSubscription, A is requireAdmin or an owner check in the handler. The admin set is
+        exactly EXPECTED_ADMIN; every route EXPECTED_GATED reviewed before P3-1 is still M except the
+        three P3-1 freed (posting, post photos, a new listing); every disconnect is F.
+        (NAMED, P3-1: BEFORE section 2 held the gated set to EXPECTED_GATED.)
+     3. No free (login-only) route reaches a model call.
+     4. Every free route that writes, publishes, stores or reaches another person is in exactly one
+        EXPECTED list; a new one fails until it is reviewed and added. A listed route that no longer
+        exists, is no longer free, or no longer has any effect also fails, so the lists stay exact.
+     5. Every unauthenticated route that writes is in EXPECTED_UNAUTH_WRITES, on the same terms.
+     6. Each public page route is unauthenticated and its handler carries the owner check, and the
+        check answers for real accounts: a page is served while its owner is in good standing (NAMED,
+        P3-1: BEFORE while entitled). The free check account's page is served, the seed's and the
+        owner's too; an id with no account is not.
+     7. Each in-handler gate is present, and a 402 keeps error and upgrade_required, adds message and
+        billing_url, and carries the members panel (lib/membership.js) at the price in code.
 
    MUTATE=add-public   mounts POST /api/check-mutation/publish after boot,
                        behind requireAuth only, with a handler that inserts a
@@ -328,6 +334,9 @@ const EXPECTED_PUBLIC = {
   "post /api/proposals/:id/approve":        "publish_blog_post → public blog post; publish_listing / update_listing → public listing — those three need a subscription, checked in the handler; a calendar event does not",
   "put /api/marketplace/listings/:id":      "edits a public listing — needs a subscription, checked in the handler, except a pause",
   "delete /api/marketplace/listings/:id":   "removes a public listing",
+  // NAMED (Nov 20 2026, P3-1; PUBLIC 20 -> 21): BEFORE a new listing needed a subscription (EXPECTED_GATED). AFTER selling is free:
+  // a new listing is public once made, and needs a confirmed email (requireVerifiedEmail; checkEmailVerified).
+  "post /api/marketplace/listings":        "makes a public listing — free, with a confirmed email (requireVerifiedEmail, P3-1)",
   // BEFORE (e364883): "put /api/profile/me", profiles, served to anyone by GET /api/profile/:username.
   // AFTER: that route is deleted (launch hardening #1), so the edit is in EXPECTED_OWN.
   "post /api/digital-cards":                "a card, served by GET /api/cards/share/:token",
@@ -617,7 +626,9 @@ const EXPECTED_UNAUTH_WRITES = {
    middleware cannot see these, so each handler must carry its gate's text. */
 const EXPECTED_HANDLER_GATES = {
   "post /api/proposals/:id/approve":   'refuseUnlessSubscribed(req, res, "approve " + pending.action_type)',
-  "put /api/marketplace/listings/:id": 'refuseUnlessSubscribed(req, res, "put /api/marketplace/listings/:id")',
+  // NAMED (Nov 20 2026, P3-1): BEFORE refuseUnlessSubscribed (G3) for any edit but a pause. AFTER selling is free; an edit but a pause
+  // needs a confirmed email instead (lib/emailVerification.js, checkEmailVerified).
+  "put /api/marketplace/listings/:id": 'unverifiedBody("list_market")',
   "post /api/certifications/award":    'creditWithheld = "subscription_required"',
   // NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE three. AFTER turning automatic posting ON needs a
   // subscription, checked in the handler; turning it off never does.
@@ -779,20 +790,61 @@ function sameSet(label, actual, expected) {
     (extra.length ? "new: " + extra.join(", ") : "") + (extra.length && missing.length ? " | " : "") + (missing.length ? "gone: " + missing.join(", ") : ""));
 }
 
-console.log("\n══ 1. every route, classified from the live router ══");
+/* ── P3-1 (Nov 20 2026): THE FOUR GROUPS, lib/routeAccess.js ───────────────
+   Every route is P (public), F (free accounts and members, sign-in only), M (members only:
+   requireActiveSubscription in front) or A (the owner or an admin). The table is the review;
+   the live router must agree with it route by route. */
+const RA = require(path.join(REPO, "lib", "routeAccess.js"));
+const BY_KEY = {};
+ROUTES.forEach(function (r) { BY_KEY[r.key] = r; });
+const byKeyOf = function (k) { return BY_KEY[k]; };
+const GROUP_NAME = { P: "public", F: "free", M: "members only", A: "owner or admin" };
+/* The three routes P3-1 took out of EXPECTED_GATED on purpose (posting, post photos, a new listing): free now. */
+const FREED_BY_P31 = ["post /api/posts", "post /api/posts/photos", "post /api/marketplace/listings"];
+
+console.log("\n══ 1. every route, classified from the live router, and assigned a group ══");
 ["unauthenticated", "login-only", "gated", "admin"].forEach(function (c) { console.log("    " + c.padEnd(16) + of(c).length); });
 console.log("    " + "total".padEnd(16) + ROUTES.length);
+["P", "F", "M", "A"].forEach(function (g) { console.log("    group " + g + " " + ("(" + GROUP_NAME[g] + ")").padEnd(17) + RA.GROUPS[g].length); });
 check("1. every route has exactly one class", ROUTES.every(function (r) { return !!r.cls; }), ROUTES.length);
+const listedKeys = [].concat(RA.PUBLIC, RA.FREE, RA.MEMBER, RA.ADMIN);
+const twice = listedKeys.filter(function (k, i) { return listedKeys.indexOf(k) !== i; });
+check("1. no route is in two groups", twice.length === 0, twice.join(", "));
+sameSet("1. every live route is in exactly one group, and every grouped route is live (" + ROUTES.length + ")", keys(ROUTES), listedKeys);
 
-console.log("\n══ 2. the gated and admin sets ══");
-sameSet("2. the subscription-gated routes are exactly the " + EXPECTED_GATED.length + " reviewed", keys(of("gated")), EXPECTED_GATED);
-sameSet("2. the admin routes are exactly the " + EXPECTED_ADMIN.length + " reviewed", keys(of("admin")), EXPECTED_ADMIN);
+console.log("\n══ 2. each group is what the router does ══");
+const groupOf = function (k) { return RA.groupOf(k); };
+const wrongP = ROUTES.filter(function (r) { return (groupOf(r.key) === "P") !== (r.cls === "unauthenticated"); });
+check("2. P is exactly the routes with no sign-in (" + RA.PUBLIC.length + ")", wrongP.length === 0, wrongP.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
+const wrongM = ROUTES.filter(function (r) { return (groupOf(r.key) === "M") !== (r.cls === "gated"); });
+check("2. M is exactly the routes with requireActiveSubscription in front (" + RA.MEMBER.length + ")", wrongM.length === 0, wrongM.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
+const wrongA = ROUTES.filter(function (r) {
+  const a = groupOf(r.key) === "A";
+  const inHandler = RA.ADMIN_IN_HANDLER.indexOf(r.key) !== -1;
+  return a !== (r.cls === "admin" || inHandler) || (inHandler && r.cls !== "login-only");
+});
+check("2. A is exactly requireAdmin's routes and the owner-in-handler routes (" + RA.ADMIN.length + ")", wrongA.length === 0, wrongA.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
+const OWNER_TEXT = /isOwnerAccount\(req\.user\.id\)|!== OUTREACH_CREDENTIAL_OWNER_ID/;
+const inHandlerNoCheck = RA.ADMIN_IN_HANDLER.filter(function (k) { const r = byKeyOf(k); return !r || !OWNER_TEXT.test(r.text); });
+check("2. each owner-in-handler route's handler carries the owner check (" + RA.ADMIN_IN_HANDLER.length + ")", inHandlerNoCheck.length === 0, inHandlerNoCheck.join(", "));
+const wrongF = ROUTES.filter(function (r) { return groupOf(r.key) === "F" && r.cls !== "login-only"; });
+check("2. F is sign-in only (" + RA.FREE.length + ")", wrongF.length === 0, wrongF.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
+sameSet("2. the requireAdmin routes are exactly the " + EXPECTED_ADMIN.length + " reviewed", keys(of("admin")), EXPECTED_ADMIN);
+/* NAMED (Nov 20 2026, P3-1): BEFORE section 2 held the gated set to EXPECTED_GATED. AFTER M (lib/routeAccess.js) is the set; every
+   route EXPECTED_GATED reviewed must still be M, except the three P3-1 freed (posting, post photos, a new listing). */
+const lostGate = EXPECTED_GATED.filter(function (k) { return FREED_BY_P31.indexOf(k) === -1 && groupOf(k) !== "M"; });
+check("2. every route reviewed as gated before P3-1 is still members only, but the three P3-1 freed", lostGate.length === 0, lostGate.join(", "));
+const freedOk = FREED_BY_P31.every(function (k) { return groupOf(k) === "F" && byKeyOf(k) && byKeyOf(k).cls === "login-only"; });
+check("2. posting, post photos and a new listing are free (F, sign-in only)", freedOk, FREED_BY_P31.map(function (k) { return k + " " + groupOf(k); }).join(", "));
+const disconnects = ROUTES.filter(function (r) { return /\/disconnect$/.test(r.key); });
+check("2. every disconnect stays free (" + disconnects.length + ")", disconnects.length > 5 && disconnects.every(function (r) { return groupOf(r.key) === "F" && r.cls === "login-only"; }),
+  disconnects.filter(function (r) { return groupOf(r.key) !== "F"; }).map(function (r) { return r.key; }).join(", "));
 
-console.log("\n══ 3. no login-only route spends a model call ══");
+console.log("\n══ 3. no free route spends a model call ══");
 const spenders = of("login-only").filter(function (r) { return r.fx.indexOf("MODEL") !== -1; });
 check("3. no login-only route reaches callAnthropicText or a model client", spenders.length === 0, keys(spenders).join(", "));
 
-console.log("\n══ 4. every login-only route with an effect, reviewed ══");
+console.log("\n══ 4. every free route with an effect, reviewed ══");
 const LISTS = {
   PUBLIC: Object.keys(EXPECTED_PUBLIC), OTHERS: Object.keys(EXPECTED_OTHERS), THIRD_PARTY: Object.keys(EXPECTED_THIRD_PARTY),
   STORAGE: Object.keys(EXPECTED_STORAGE), OWN: EXPECTED_OWN
@@ -807,20 +859,19 @@ const effectful = of("login-only").filter(function (r) { return r.fx.length; });
 const unreviewed = effectful.filter(function (r) { return !listed[r.key]; });
 check("4. every login-only route that writes, publishes, stores or sends is reviewed (" + effectful.length + ")",
   unreviewed.length === 0, unreviewed.map(function (r) { return r.key + " {" + r.fx.join(",") + "}"; }).join(", "));
-const byKey = {};
-ROUTES.forEach(function (r) { byKey[r.key] = r; });
-const stale = Object.keys(listed).filter(function (k) { const r = byKey[k]; return !r || r.cls !== "login-only" || !r.fx.length; });
+/* NAMED (Nov 20 2026, P3-1): BEFORE every reviewed route had to be login-only. AFTER P3-1 moved many of them behind
+   requireActiveSubscription (M, lib/routeAccess.js); each such one is accounted for here, never stale, while it is M and gated. */
+const nowMember = Object.keys(listed).filter(function (k) { const r = byKeyOf(k); return r && r.cls === "gated" && groupOf(k) === "M"; });
+console.log("    reviewed before P3-1 and now members only: " + nowMember.length);
+const stale = Object.keys(listed).filter(function (k) { const r = byKeyOf(k); return nowMember.indexOf(k) === -1 && (!r || r.cls !== "login-only" || !r.fx.length); });
 check("4. every reviewed route still exists, is still login-only, and still has an effect", stale.length === 0,
-  stale.map(function (k) { const r = byKey[k]; return k + (r ? " (" + r.cls + (r.fx.length ? "" : ", no effect") + ")" : " (not mounted)"); }).join(", "));
+  stale.map(function (k) { const r = byKeyOf(k); return k + (r ? " (" + r.cls + (r.fx.length ? "" : ", no effect") + ")" : " (not mounted)"); }).join(", "));
 Object.keys(LISTS).forEach(function (name) { console.log("    " + name.padEnd(12) + LISTS[name].length); });
-console.log("    reaches the public: " + Object.keys(EXPECTED_PUBLIC).length + " routes; reaches another account: " +
-  Object.keys(EXPECTED_OTHERS).length + "; third parties: " + Object.keys(EXPECTED_THIRD_PARTY).length);
 
 console.log("\n══ 5. every unauthenticated route that writes, reviewed ══");
 const unauthWriters = of("unauthenticated").filter(function (r) { return r.fx.length; });
 sameSet("5. the unauthenticated routes that write are exactly the " + Object.keys(EXPECTED_UNAUTH_WRITES).length + " reviewed",
   keys(unauthWriters), Object.keys(EXPECTED_UNAUTH_WRITES));
-// The confirm page's GET only renders; the POST is the one that writes.
 check("5. get /api/confirm is mounted, unauthenticated, and NOT a writer",
   of("unauthenticated").some(function (r) { return r.key === "get /api/confirm"; }) &&
   keys(unauthWriters).indexOf("get /api/confirm") === -1, keys(unauthWriters).join(", "));
@@ -828,14 +879,16 @@ const unauthSpend = unauthWriters.concat(of("unauthenticated")).filter(function 
 check("5. no unauthenticated route reaches a model call", unauthSpend.length === 0, keys(unauthSpend).join(", "));
 
 (async function finish() {
-  console.log("\n══ 6. public pages are served only while their owner is entitled ══");
+  /* NAMED (Nov 20 2026, P3-1): BEFORE "public pages are served only while their owner is entitled". AFTER while their owner is in
+     good standing (ownerPagePublic: the account exists, is not banned or deleted, and moderation has not hidden its profile).
+     A free account's pages are public; the check account, which has no plan, is served now. */
+  console.log("\n══ 6. public pages are served only while their owner is in good standing ══");
   Object.keys(EXPECTED_SERVE_GATED).forEach(function (k) {
-    const r = byKey[k];
+    const r = byKeyOf(k);
     check("6. " + k + " is unauthenticated and its handler carries the owner check",
       !!r && r.cls === "unauthenticated" && r.text.indexOf(EXPECTED_SERVE_GATED[k]) !== -1,
       r ? r.cls + (r.text.indexOf(EXPECTED_SERVE_GATED[k]) === -1 ? ", no owner check" : "") : "not mounted");
   });
-  /* The helper itself, against real accounts: whose page a stranger may see. */
   const subject = resolveSubjectAccount();
   const { createClient } = require("@supabase/supabase-js");
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -845,22 +898,29 @@ check("5. no unauthenticated route reaches a model call", unauthSpend.length ===
   const subjectPublic = await server.__ownerPagePublic(subject);
   const seedPublic = await server.__ownerPagePublic(seed.id);
   const ownerPublic = await server.__ownerPagePublic(OWNER_ACCOUNT_ID);
+  const nobodyPublic = await server.__ownerPagePublic("00000000-0000-4000-8000-00000000dead");
   console.log = quietLog;
-  check("6. an unentitled account's page is not served (" + subject + ")", subjectPublic === false, String(subjectPublic));
+  check("6. a free account in good standing: its page is served (" + subject + ")", subjectPublic === true, String(subjectPublic));
   check("6. an entitled account's page is served (" + seed.email + ")", seedPublic === true, String(seedPublic));
-  check("6. the owner's page is served (admin exemption)", ownerPublic === true, String(ownerPublic));
+  check("6. the owner's page is served", ownerPublic === true, String(ownerPublic));
+  check("6. an id with no account: not served", nobodyPublic === false, String(nobodyPublic));
+  const opp = (function () { const m = /async function ownerPagePublic\(userId\) \{/.exec(SRC); return m ? SRC.slice(m.index, braceMatch(SRC, SRC.indexOf("{", m.index))) : ""; })();
+  check("6. ownerPagePublic reads standing (banned, deleted, moderation), never the plan, and fails closed",
+    /banned_at/.test(opp) && /role === "deleted"/.test(opp) && /hiddenAmong\(supabase, "profile"/.test(opp) && opp.indexOf("getUserPlan") === -1 && opp.indexOf(" page hidden.\");" + "\n    return false;") !== -1, opp.slice(0, 200));
 
   console.log("\n══ 7. the gates inside handlers, and what a refusal says ══");
   Object.keys(EXPECTED_HANDLER_GATES).forEach(function (k) {
-    const r = byKey[k];
-    check("7. " + k + " is login-only and gates in its handler",
-      !!r && r.cls === "login-only" && r.text.indexOf(EXPECTED_HANDLER_GATES[k]) !== -1,
+    const r = byKeyOf(k);
+    check("7. " + k + " carries its gate in its handler (" + GROUP_NAME[groupOf(k)] + ")",
+      !!r && (r.cls === "login-only" || r.cls === "gated") && r.text.indexOf(EXPECTED_HANDLER_GATES[k]) !== -1,
       r ? r.cls + (r.text.indexOf(EXPECTED_HANDLER_GATES[k]) === -1 ? ", gate text missing" : "") : "not mounted");
   });
-  const refusal = server.__subscriptionRequiredBody({ inactive_reason: "no_subscription" }, "post /api/marketplace/listings");
-  check("7. a 402 keeps error and upgrade_required, and adds message and billing_url",
-    refusal.error === "Active subscription required" && refusal.upgrade_required === true &&
-    /Nothing was published/.test(refusal.message || "") && refusal.billing_url === "/billing.html", JSON.stringify(refusal));
+  const refusal = server.__subscriptionRequiredBody({ inactive_reason: "no_subscription" }, "post /api/crowdfunding/campaigns");
+  const panel = require(path.join(REPO, "lib", "membership.js")).membersPanelFromCode();
+  check("7. a 402 keeps error and upgrade_required, adds message and billing_url, and carries the members panel",
+    refusal.error === "Active subscription required" && refusal.upgrade_required === true && refusal.billing_url === "/billing.html" &&
+    typeof refusal.message === "string" && refusal.members_only === true && refusal.tier_required === "member" &&
+    JSON.stringify(refusal.members_panel) === JSON.stringify(panel) && panel.price_text === "$199 a month" && panel.join_url === "/billing.html", JSON.stringify(refusal).slice(0, 400));
   const fallback = server.__subscriptionRequiredBody({ inactive_reason: "no_subscription" }, "post /api/ai/tasks");
   check("7. a route with no message of its own says nothing ran and nothing was charged",
     /Nothing was run and nothing was charged/.test(fallback.message || ""), fallback.message);

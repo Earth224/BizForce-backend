@@ -104,7 +104,18 @@
                        sorts after p23-new, so it replaces that one page). Home and
                        the Profile are unchanged at 1440. The proof is
                        Downloads\phone1\fx1-desktop-proof.json.
-     PHONE_P21=1          only P2-1's own pages (p21Run): the rewritten addresses,
+                       NAMED (Nov 20 2026, P3-1): three pages changed on purpose and
+                       are re-recorded: privacy.html (Your data names the folded
+                       email and the storage counts: 4 list items new, none gone),
+                       terms.html (section 3, Free accounts and membership, and the
+                       adult-content and BizCash sentences: 10 new, none gone) and
+                       wallet.html (who may send, one sentence: 1 new, none gone),
+                       in desktop-baseline-p31-privacy, p31-terms and p31-wallet.json;
+                       every other element is the same or moved down below the new
+                       text. The other 79 pages are unchanged at 1440 (the members
+                       panel and the banner show only for a free or unconfirmed
+                       account). The proof is Downloads\phone1\p31-desktop-proof.json.
+     PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
                            at 360, 390 and 430; screenshots to Downloads\p21.
@@ -120,6 +131,13 @@
                            and in, few follows; answered by lib/posts.js over an
                            in-memory database; at 360, 390 and 430; screenshots
                            to Downloads\p23.
+
+     PHONE_P31=1           only P3-1's own screens (p31Run): a free account with the email
+                           not confirmed (the banner, Resend email, a public post refused),
+                           then confirmed (Home, the composer posting, the Profile, Market
+                           create, the Inbox, the HQ tab's members panel, the dashboard and
+                           an agent page behind it); at 360, 390 and 430; screenshots to
+                           Downloadsp31.
 
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
@@ -168,7 +186,7 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -362,8 +380,11 @@ const TONE = (() => { const n = 160000, b = Buffer.alloc(44 + n * 2); b.write("R
   b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(16000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write("data", 36); b.writeUInt32LE(n * 2, 40); return b; })();
 function api(method, u, request) {
   const p = u.pathname;
+  // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
+  if (P31) { const a = p31Api(method, p); if (a !== undefined) return a; }
   const since = "2026-11-07T10:00:00Z";
-  if (p === "/api/auth/me") return { user: ROSE, access: { active: true, reason: "subscription" }, subscription: { status: "active", plan: "all_access", current_period_end: ago(-24 * 20), cancel_at_period_end: false } };
+  // NAMED (Nov 20 2026, P3-1): access.tier "member" and email_verified true (Rose is a member with a confirmed email): no panel, no banner
+  if (p === "/api/auth/me") return { user: ROSE, access: { active: true, reason: "subscription", tier: "member", email_verified: true }, subscription: { status: "active", plan: "all_access", current_period_end: ago(-24 * 20), cancel_at_period_end: false } };
   if (p === "/api/auth/refresh") return { token: "phone-check-token", refresh_token: "phone-check-refresh", user: ROSE };
   if (p === "/api/dashboard/top") return topBody();
   if (p === "/api/dashboard/pulse") return { generated_at: new Date(NOW).toISOString(), since: new Date(NOW).toISOString(), running: [], events: [], links: ["grow|sell", "grow|connect", "grow|agents", "sell|connect", "sell|agents", "connect|agents"], _unreadable: [], cached: false };
@@ -402,9 +423,9 @@ function api(method, u, request) {
   if (P22) { const a = p22Api(method, p); if (a !== undefined) return a; }
   // NAMED (Nov 20 2026, P2-3): with PHONE_P23=1, posts, the feed, comments and follows are lib/posts.js over P23S.db
   // (p23Api, a promise; the request handler awaits every answer), then P2-1's fixtures (the profile, the counts).
-  if (P23 && P23_IS(p)) return p23Api(method, u, request);
+  if ((P23 || P31) && P23_IS(p)) return p23Api(method, u, request);
   if (P23) { const a = fx1Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 20 2026, FX1)
-  if (P21 || P22 || P23) { const a = p21Api(method, p); if (a !== undefined) return a; }
+  if (P21 || P22 || P23 || P31) { const a = p21Api(method, p); if (a !== undefined) return a; }
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -695,6 +716,7 @@ const ORBIT = String.raw`(function(){
     else if (P21) { await p21Run(cdp, origin); PAGES = []; }
     else if (P22) { await p22Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-2)
     else if (P23) { await p23Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-3)
+    else if (P31) { await p31Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P3-1)
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -1342,7 +1364,8 @@ async function p23World(empty) {
     post(P23_POST.other, uid(4), Object.assign({ body: "Stone-ground flour, milled this week." }, at(2)))
   ];
   const db = memDb({
-    users: names.map(n => ({ id: n[0], created_at: OLD })), posts, post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
+    // NAMED (Nov 20 2026, P3-1): every member has confirmed their email (a public post needs it, lib/emailVerification.js)
+    users: names.map(n => ({ id: n[0], created_at: OLD, email_verified_at: OLD })), posts, post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
     follows: empty ? [] : [{ follower_id: ROSE.id, following_id: P21_PEER, created_at: OLD }, { follower_id: ROSE.id, following_id: P21_PEER2, created_at: OLD }, { follower_id: P21_PEER, following_id: ROSE.id, created_at: OLD }],
     member_blocks: [], member_mutes: [], profiles: [],
     member_media: [media(1, P21_PEER2, "mug-1.png", "A blue glazed mug"), media(2, P21_PEER2, "mug-1-thumb.png", ""), media(3, P21_PEER2, "mug-2.png", "A green glazed mug"), media(4, ROSE.id, "bread.png", "A sourdough loaf")],
@@ -1392,7 +1415,8 @@ async function p23Api(method, u, request) {
   return { __status: 404, __body: { error: "Not found" } };
 }
 // NAMED (Nov 20 2026, FX1): Lee Ceramics' public profile and counts, for the visitor's view; only with PHONE_P23=1
-const FX1_LEE = { profile: { user_id: P21_PEER2, username: "lee-ceramics", display_name: "Lee Ceramics", title: "Potter", tagline: "Lee Ceramics", bio: "Hand-thrown mugs and bowls, glazed in small batches.", avatar_url: null } };
+const FX1_LEE = { profile: { user_id: P21_PEER2, username: "lee-ceramics", display_name: "Lee Ceramics", title: "Potter", tagline: "Lee Ceramics", bio: "Hand-thrown mugs and bowls, glazed in small batches.", avatar_url: null },
+  member: true };   // NAMED (Nov 20 2026, P3-1): the server's own member flag (ownerIsMember); Lee is a member
 function fx1Api(method, p) {
   if (p === "/api/bfp/profile/" + P21_PEER2) return FX1_LEE;
   if (p === "/api/bfp/profile/" + P21_PEER2 + "/stats") return { stats: { sales: 3 } };
@@ -1754,4 +1778,154 @@ async function p23Run(cdp, origin) {
     check(at + "Follow there is stored", P23S.db.t.follows.length === 1 && P23S.db.t.follows[0].follower_id === ROSE.id, J(P23S.db.t.follows));
   }
   console.log("    screenshots: " + P23_OUT);
+}
+
+/* ══ P3-1 (Nov 20 2026): PHONE_P31=1 ═════════════════════════════════════════════════════════════════════════════
+   A FREE account (no membership) at PHONE_P31_WIDTHS (default 360, 390, 430), screenshots at 390 x 844 to PHONE_P31_OUT
+   (default Downloads\p31). GET /api/auth/me answers access.tier "free" and the members panel from code
+   (lib/membership.js membersPanelFromCode, PLAN_CONFIG's price). First with the email NOT confirmed: Home shows the
+   banner with "Resend email", which posts and says what happened, and a public post is refused with the server's own
+   sentence. Then confirmed: Home without the banner, the composer posting (lib/posts.js over P2-3's in-memory database),
+   the Profile (no "BizForce member", no BizCash), Market create (the listing form opens, no paywall), the Inbox, the
+   bottom bar's HQ tab opening the members panel, the dashboard and an agent page behind the panel. */
+const P31 = process.env.PHONE_P31 === "1";
+const P31_WIDTHS = String(process.env.PHONE_P31_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const P31_OUT = process.env.PHONE_P31_OUT || path.join(os.homedir(), "Downloads", "p31");
+const P31S = { verified: false, resends: 0 };
+function p31Api(method, p) {
+  if (p === "/api/auth/me") return { user: Object.assign({}, ROSE, { role: "user", email_verified_at: P31S.verified ? ago(24) : null }),
+    access: { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: P31S.verified,
+      members_panel: require("../lib/membership").membersPanelFromCode() }, subscription: null, profile: { username: "rose" } };
+  if (p === "/api/auth/resend-verification" && method === "POST") { P31S.resends++; return { message: "We sent a new link to rose@example.test. It works for one hour." }; }
+  return undefined;
+}
+async function p31Run(cdp, origin) {
+  fs.mkdirSync(P31_OUT, { recursive: true });
+  console.log("browserCheckPhone P3-1 (a free account: the banner, Home, the composer, the Profile, Market create, the Inbox, the members panel on HQ and an agent page) at " + P31_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const PANEL = require("../lib/membership").membersPanelFromCode();
+  const viewShot = async file => { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P31_OUT, file), Buffer.from(r.data, "base64")); };
+  const VEIL = /^div#bf-members-panel /;
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    check(at + "no text cut off", m.clipped.length === 0, J(m.clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const deco = m.deco.filter(x => !(opts && opts.panel && VEIL.test(x)));
+    check(at + "decoration is under the text" + (opts && opts.panel ? " (the panel's veil aside)" : ""), deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.panel && VEIL.test(x)));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.panel ? " (the members panel is meant to cover the page)" : ""), over.length === 0, J(over));
+  };
+  const panelBox = () => ev(P23_BOX + "('#bf-members-panel .bfa-panel', 'a,button')");
+  const panelText = () => ev("(function(){var p=document.querySelector('#bf-members-panel .bfa-panel');if(!p)return null;var j=p.querySelector('.bfa-join'),h=p.querySelector('.bfa-home');" +
+    "return {title:(p.querySelector('h2')||{}).textContent,price:(p.querySelector('.bfa-price')||{}).textContent,adds:[].map.call(p.querySelectorAll('li'),function(l){return l.textContent;})," +
+    "join:j&&j.getAttribute('href'),joinText:j&&j.textContent,home:h&&h.textContent};})()");
+  const panelOk = async (at, w, h, homeText) => {
+    const b = await panelBox(), t = await panelText();
+    check(at + "the members panel: \"Members get this\", " + PANEL.price_text + " (from code), the nine lines, Join to billing.html, " + homeText,
+      !!t && t.title === "Members get this" && t.price === PANEL.price_text && J(t.adds) === J(PANEL.adds) && t.join === "/billing.html" && t.joinText === "Join" && t.home === homeText, J(t));
+    check(at + "...inside the screen, its controls 44 px or more, no sideways scroll", !!b && b.l >= -1 && b.r <= w + 1 && b.t >= -1 && b.b <= h + 1 && b.small.length === 0 && !b.hscroll, J(b));
+  };
+  for (const w of P31_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) await viewShot(name + "-390x844.png"); };
+    Object.assign(P23S, await p23World(false));
+    const roseRow = P23S.db.t.users.find(u => u.id === ROSE.id);
+
+    // 1. Home, the email not confirmed: the banner and Resend email
+    P31S.verified = false; P31S.resends = 0; roseRow.email_verified_at = null;
+    await open(cdp, origin, "home.html", w, h, true);
+    let at = "P31 Home (email not confirmed) at " + w + ": ";
+    const ban = await ev("(function(){var b=document.getElementById('bf-verify-banner');if(!b)return null;var r=b.getBoundingClientRect(),btn=b.querySelector('button'),q=btn&&btn.getBoundingClientRect();" +
+      "return {text:(b.querySelector('p')||{}).textContent,btn:btn&&btn.textContent,bw:q&&Math.round(q.width),bh:q&&Math.round(q.height),l:Math.round(r.left),r:Math.round(r.right),t:Math.round(r.top)};})()");
+    check(at + "the banner says what a confirmed email is needed for, with \"Resend email\" (44 px), across the top of the screen",
+      !!ban && /post publicly, list in the Market, message people who do not follow you, and receive BizCash/.test(ban.text) && ban.btn === "Resend email" && ban.bh >= 44 && ban.bw >= 44 &&
+      ban.l >= -1 && ban.r <= w + 1 && ban.t <= 1, J(ban));
+    const fb = await ev("(function(){var b=document.getElementById('bf-verify-banner'),t=document.querySelector('.feed-top');if(!b||!t)return null;var r=b.getBoundingClientRect(),q=t.getBoundingClientRect();return {bannerBottom:Math.round(r.bottom),rowTop:Math.round(q.top)};})()");
+    check(at + "on the full-screen feed the top row (Live, the tabs, Search) sits below the banner, never under it", !!fb && fb.rowTop >= fb.bannerBottom - 1, J(fb));
+    await pageChecks(at);
+    await shot("home-banner");
+    await ev("(function(){var b=document.querySelector('#bf-verify-banner button');if(b)b.click();return !!b;})()"); await sleep(700);
+    const said = await ev("(function(){var s=document.querySelector('#bf-verify-banner .bfa-status');return s&&!s.hidden?s.textContent:null;})()");
+    check(at + "Resend email posts once and says what happened", P31S.resends === 1 && /We sent a new link/.test(said || ""), J([P31S.resends, said]));
+    await shot("home-banner-resent");
+    // a public post from the composer: refused with the server's sentence, nothing saved
+    await open(cdp, origin, "compose.html", w, h, true);
+    at = "P31 composer (email not confirmed) at " + w + ": ";
+    const before = P23S.db.t.posts.length;
+    await ev("(function(){var t=document.querySelector('.bfc-text');if(!t)return false;t.value='Open on Saturday, all welcome.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()");
+    await sleep(900);
+    const refused = await ev("document.body.innerText.indexOf('Confirm your email first') !== -1");
+    check(at + "a public post is refused with the server's sentence, and nothing is saved", refused && P23S.db.t.posts.length === before, J([refused, P23S.db.t.posts.length, before]));
+    await pageChecks(at);
+    await shot("compose-unconfirmed");
+
+    // 2. the email confirmed from here on
+    P31S.verified = true; roseRow.email_verified_at = ago(24);
+    await open(cdp, origin, "home.html", w, h, true);
+    at = "P31 Home (a free account) at " + w + ": ";
+    check(at + "no banner once the email is confirmed, and no members panel (Home is free)", (await ev("!document.getElementById('bf-verify-banner') && !document.getElementById('bf-members-panel')")) === true);
+    await pageChecks(at);
+    await shot("home-free");
+
+    // 3. the composer posts
+    await open(cdp, origin, "compose.html", w, h, true);
+    at = "P31 composer at " + w + ": ";
+    const n0 = P23S.db.t.posts.length;
+    await ev("(function(){var t=document.querySelector('.bfc-text');if(!t)return false;t.value='Open on Saturday, all welcome.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    await pageChecks(at);
+    await shot("compose-free");
+    await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()");
+    await sleep(3000);
+    const mine = P23S.db.t.posts.filter(x => x.author_id === ROSE.id && x.body === "Open on Saturday, all welcome.");
+    check(at + "a free account posts: published at once (no hold), no members panel", P23S.db.t.posts.length === n0 + 1 && mine.length === 1 && mine[0].status === "published" &&
+      (await ev("!document.getElementById('bf-members-panel')")) === true, J(mine.map(x => x.status)));
+
+    // 4. the Profile: no "BizForce member", no BizCash, no gold wallet
+    await open(cdp, origin, "profile.html", w, h, true);
+    at = "P31 Profile at " + w + ": ";
+    const prof = await ev("(function(){var h=document.querySelector('.pfs-handle');return {handle:h&&h.textContent,bfc:!!document.querySelector('.pfs-k-bizcash'),wallet:!!document.querySelector('.pfs-btn.is-wallet'),panel:!!document.getElementById('bf-members-panel')};})()");
+    check(at + "a free owner: the handle without \"BizForce member\", no BizCash count, no gold wallet, no members panel",
+      !!prof && /@rose/.test(prof.handle || "") && !/BizForce member/.test(prof.handle || "") && !prof.bfc && !prof.wallet && !prof.panel, J(prof));
+    await pageChecks(at);
+    await shot("profile-free");
+
+    // 5. Market create: the listing form opens, no paywall notice, no members panel
+    await open(cdp, origin, "marketplace.html?create=product", w, h, true);
+    at = "P31 Market create at " + w + ": ";
+    const mk = await ev("(function(){var m=[].find.call(document.querySelectorAll('#listingModal'),function(x){var r=x.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(x).display!=='none'&&getComputedStyle(x).visibility!=='hidden';});" +
+      "return {open:!!m,id:m&&(m.id||m.className),title:!!document.getElementById('fTitle')&&document.getElementById('fTitle').getBoundingClientRect().width>0,paywall:!!document.querySelector('.bf-paywall'),panel:!!document.getElementById('bf-members-panel')};})()");
+    check(at + "the listing form opens for a free account, no paywall notice, no members panel", !!mk && mk.open && mk.title && !mk.paywall && !mk.panel, J(mk));
+    await shot("market-create-free");
+
+    // 6. the Inbox
+    await open(cdp, origin, "inbox.html", w, h, true);
+    at = "P31 Inbox at " + w + ": ";
+    check(at + "the Inbox opens for a free account, no members panel", (await ev("!document.getElementById('bf-members-panel') && !!document.getElementById('bf-tabbar')")) === true);
+    await pageChecks(at);
+    await shot("inbox-free");
+
+    // 7. the bottom bar's HQ tab opens the members panel (not the dashboard)
+    await open(cdp, origin, "home.html", w, h, true);
+    at = "P31 HQ tab at " + w + ": ";
+    await ev("(function(){var a=document.querySelector('#bf-tabbar a[data-tab=hq]');if(a)a.click();return !!a;})()"); await sleep(600);
+    const still = await ev("location.pathname");
+    check(at + "tapping HQ opens the members panel and stays on Home", still === "/home.html" && (await ev("!!document.getElementById('bf-members-panel')")) === true, still);
+    await panelOk(at, w, h, "Not now");
+    await shot("hq-tab-panel");
+    await ev("(function(){var b=document.querySelector('#bf-members-panel .bfa-home');if(b)b.click();return !!b;})()"); await sleep(300);
+    check(at + "Not now closes it", (await ev("!document.getElementById('bf-members-panel')")) === true);
+
+    // 8. the dashboard and an agent page, opened directly
+    for (const [pg, label] of [["dashboard.html", "the dashboard (HQ)"], ["agents/sales.html", "an agent page (Sales)"]]) {
+      await open(cdp, origin, pg, w, h, true);
+      at = "P31 " + label + " at " + w + ": ";
+      await panelOk(at, w, h, "Go to Home");
+      await pageChecks(at, { panel: true });
+      await shot(pg.replace(/\//g, "-").replace(/\.html$/, "") + "-panel");
+    }
+  }
 }

@@ -62,7 +62,8 @@ const MUTATIONS = {
   "page-when-off": [[CS, "  if (row.share_on !== true) return \"off\";\n", ""]],
   // a paused or cancelled campaign is served
   "page-when-paused": [[CS, "  if (row.status === \"completed\") return \"ended\";\n  return \"off\";", "  if (row.status === \"completed\") return \"ended\";\n  return \"on\";"]],
-  // the page is served after the owner's plan lapses
+  // NAMED (Nov 20 2026, P3-1): BEFORE "the page is served after the owner's plan lapses". AFTER ownerPagePublic means good
+  // standing (a free account's pages are public), so the mutation serves a BANNED owner's page; P8 and P9 catch it.
   "page-when-plan-lapsed": [[SV, "    if (!shared || !(await ownerPagePublic(shared.owner_id))) return res.status(404).send(campaignShare.renderCampaignPage(\"none\"));",
     "    if (!shared) return res.status(404).send(campaignShare.renderCampaignPage(\"none\"));"]],
   // "Make a new link" keeps the old id
@@ -109,7 +110,9 @@ const MUTATIONS = {
   // the share route forgets to clear the sitemap's cache
   "share-cache-not-cleared": [[SV, "    campaignSitemapCache = { xml: null, at: 0 };\n    return res.json({\n      share_on:", "    return res.json({\n      share_on:"]],
   // the status route forgets to clear the sitemap's cache
-  "status-cache-not-cleared": [[SV, "    campaignSitemapCache = { xml: null, at: 0 };\n    return res.json({ campaign: data });", "    return res.json({ campaign: data });"]],
+  // NAMED (Nov 20 2026, P3-1): BEFORE the anchor was the cache line then the reply; P2-2 put policyQueue between them, so the anchor
+  // no longer matched (MUTATE=all said ERROR). AFTER the anchor carries the policyQueue line; the mutation still drops the cache clear.
+  "status-cache-not-cleared": [[SV, "    campaignSitemapCache = { xml: null, at: 0 };\n    await policyQueue(screened, \"campaign\", data.id, req.user.id);\n    return res.json({ campaign: data });", "    await policyQueue(screened, \"campaign\", data.id, req.user.id);\n    return res.json({ campaign: data });"]],
   // the page is not rate-limited
   "page-not-rate-limited": [[SV, "app.get(\"/campaign/:shareId\", campaignPageLimiter, async function", "app.get(\"/campaign/:shareId\", async function"]],
   // the QR code encodes the address bar, not the page's link
@@ -286,6 +289,13 @@ function seed() {
       { user_id: DANA, username: "dana", display_name: "Dana Donor", avatar_url: null },
       { user_id: LOU, username: "lou", display_name: "Lou Lapsed", avatar_url: null }
     ],
+    // NAMED (Nov 20 2026, P3-1): ownerPagePublic reads each owner's standing from users; the receiver of a donation must have
+    // confirmed their email (lib/emailVerification.js). Lou is the free account whose plan is not active; every one is verified.
+    users: [
+      { id: OWEN, role: "user", banned_at: null, email_verified_at: "2026-10-01T10:00:00.000Z" },
+      { id: DANA, role: "user", banned_at: null, email_verified_at: "2026-10-01T10:00:00.000Z" },
+      { id: LOU, role: "user", banned_at: null, email_verified_at: "2026-10-01T10:00:00.000Z" }
+    ],
     member_support: [{ user_id: OWEN, links: [{ provider: "paypal", handle: "OwenOak" }], headline: null, page_on: true, discoverable: false }],
     gate_decisions: []
   };
@@ -451,7 +461,8 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
     // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
     // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
     // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): 193_posts.sql (posts, post_media) and 194_social_graph.sql (follows, likes, saves, comments, share days, the count triggers) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
-    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || /* NAMED (Nov 7 2026, TikTok posting, migration 178): 178 is allowed too; "the highest" is checkTiktokPosting R1's. */ f === "178_tiktok_posting.sql" || /* NAMED (Nov 7 2026, Instagram posting, migration 179): 179 is allowed too; "the highest" is checkInstagramPosting R1's. */ f === "179_instagram_posting.sql" || /* NAMED (Nov 7 2026, Facebook Pages posting, migration 180): 180 is allowed too; "the highest" is checkFacebookPages R1's. */ f === "180_facebook_pages.sql" || /* NAMED (Nov 8 2026, Etsy store connection, migration 181): 181 is allowed too; "the highest" is checkEtsyConnect R1's. */ f === "181_etsy_store.sql" || /* NAMED (Nov 8 2026, Amazon store connection, migration 182): 182 is allowed too; "the highest" is checkAmazonConnect R1's. */ f === "182_amazon_store.sql" || /* NAMED (Nov 11 2026, orbit stage 2, migration 183): it adds 183_weekly_goal_and_order_status.sql too; "the highest" is checkOrbitStage2 R1's. */ f === "183_weekly_goal_and_order_status.sql" || /* NAMED (Nov 15 2026, Shopify webhooks, migration 184): 184 is allowed too; "the highest" is checkShopifyWebhooks R1's. */ f === "184_shopify_webhook_requests.sql" || /* NAMED (Nov 15 2026, W-T4, migration 185): 185 is allowed too; "the highest" is checkShopifyUninstallHook R1's. */ f === "185_shopify_uninstall_hook.sql" || f === "186_member_videos_duration.sql" || f === "187_member_video_parts.sql" || f === "188_user_preferences_hq_view.sql" || f === "189_handles_and_place.sql" || f === "190_notifications_links.sql" || f === "191_safety.sql" || f === "192_buy_listing_digital.sql" || f === "193_posts.sql" || f === "194_social_graph.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
+    // NAMED (Nov 20 2026, P3-1, migrations 195 to 198): 195_users_email_canonical.sql (users.email_canonical, one account per inbox), 196_storage_account_tables.sql, 197_storage_account_functions.sql and 198_storage_account_backfill.sql (per-account storage totals; written in P3-1A as 196a/196b/196c and renamed) are allowed above the earlier highest too, by name; "the highest" (198) is checkBuyListingDigital R1's.
+    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || /* NAMED (Nov 7 2026, TikTok posting, migration 178): 178 is allowed too; "the highest" is checkTiktokPosting R1's. */ f === "178_tiktok_posting.sql" || /* NAMED (Nov 7 2026, Instagram posting, migration 179): 179 is allowed too; "the highest" is checkInstagramPosting R1's. */ f === "179_instagram_posting.sql" || /* NAMED (Nov 7 2026, Facebook Pages posting, migration 180): 180 is allowed too; "the highest" is checkFacebookPages R1's. */ f === "180_facebook_pages.sql" || /* NAMED (Nov 8 2026, Etsy store connection, migration 181): 181 is allowed too; "the highest" is checkEtsyConnect R1's. */ f === "181_etsy_store.sql" || /* NAMED (Nov 8 2026, Amazon store connection, migration 182): 182 is allowed too; "the highest" is checkAmazonConnect R1's. */ f === "182_amazon_store.sql" || /* NAMED (Nov 11 2026, orbit stage 2, migration 183): it adds 183_weekly_goal_and_order_status.sql too; "the highest" is checkOrbitStage2 R1's. */ f === "183_weekly_goal_and_order_status.sql" || /* NAMED (Nov 15 2026, Shopify webhooks, migration 184): 184 is allowed too; "the highest" is checkShopifyWebhooks R1's. */ f === "184_shopify_webhook_requests.sql" || /* NAMED (Nov 15 2026, W-T4, migration 185): 185 is allowed too; "the highest" is checkShopifyUninstallHook R1's. */ f === "185_shopify_uninstall_hook.sql" || f === "186_member_videos_duration.sql" || f === "187_member_video_parts.sql" || f === "188_user_preferences_hq_view.sql" || f === "189_handles_and_place.sql" || f === "190_notifications_links.sql" || f === "191_safety.sql" || f === "192_buy_listing_digital.sql" || f === "193_posts.sql" || f === "194_social_graph.sql" || f === "195_users_email_canonical.sql" || f === "196_storage_account_tables.sql" || f === "197_storage_account_functions.sql" || f === "198_storage_account_backfill.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
   check("M3. sharing and discovery default to off, and a signed-in member reads only their own rows directly",
     /share_on boolean NOT NULL DEFAULT false/.test(ALL[MIG]) && /discoverable boolean NOT NULL DEFAULT false/.test(ALL[MIG]) &&
     /ALTER POLICY campaigns_select ON public\.crowdfunding_campaigns\n  TO authenticated\n  USING \(owner_id = auth\.uid\(\)\);/.test(ALL[MIG]));
@@ -485,12 +496,15 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
       r.status === 200 && stateOf(r.text) === "off" && r.text.indexOf("This campaign isn&#39;t being shared right now") !== -1 && r.text.indexOf("Campaign " + k) === -1 &&
       r.text.indexOf("About " + k) === -1 && r.text.indexOf("Owen") === -1, r.status + " " + stateOf(r.text));
   }
+  /* NAMED (Nov 20 2026, P3-1): BEFORE P8 "an owner whose plan is not active: 404" and P9 "a plan lapse takes a shared, active
+     campaign down at once: 404". AFTER ownerPagePublic means good standing: a free account (no active plan) keeps its page,
+     and a banned owner's page comes down at once. */
   const lapsed = await page(SID.lapsed);
-  check("P8. an owner whose plan is not active: 404, \"No campaign found\"", lapsed.status === 404 && stateOf(lapsed.text) === "none" && lapsed.text.indexOf("Campaign lapsed") === -1);
-  INACTIVE.add(OWEN);
+  check("P8. an owner whose plan is not active (a free account): 200, the campaign is shown", lapsed.status === 200 && stateOf(lapsed.text) === "on" && lapsed.text.indexOf("Campaign lapsed") !== -1, lapsed.status + " " + stateOf(lapsed.text));
+  CUR.t.users.find(u => u.id === OWEN).banned_at = "2026-11-20T00:00:00.000Z";
   const lapsedOn = await page(SID.on);
-  INACTIVE.delete(OWEN);
-  check("P9. a plan lapse takes a shared, active campaign down at once: 404", lapsedOn.status === 404 && stateOf(lapsedOn.text) === "none" && lapsedOn.text.indexOf("Kiln") === -1);
+  CUR.t.users.find(u => u.id === OWEN).banned_at = null;
+  check("P9. a ban takes a shared, active campaign down at once: 404", lapsedOn.status === 404 && stateOf(lapsedOn.text) === "none" && lapsedOn.text.indexOf("Kiln") === -1);
   const unknown = await page(SID.unknown);
   const readsBefore = CUR.reads.length;
   const malformed = await Promise.all(["AAAAAAAAAAAAAAAA", "aaaa", "aaaaaaaaaaaaaaa1", "../../etc"].map(page));
@@ -552,8 +566,10 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   CTX.campaignSitemapCache = { xml: null, at: 0 };
   const sm1 = await hit("get /api/sitemap/campaigns.xml", null, {}, {});
   const locs = x => (String(x || "").match(/<loc>([^<]+)<\/loc>/g) || []).map(l => l.slice(5, -6));
-  check("N2. the sitemap lists only the shared, discoverable, active campaign whose owner's plan is active",
-    sm1.status === 200 && J(locs(sm1.text)) === J(["https://bizforceai.net/campaign/" + SID.listed]) && /application\/xml/.test(sm1.headers["content-type"] || ""), sm1.text);
+  /* NAMED (Nov 20 2026, P3-1): BEFORE "whose owner's plan is active" and only SID.listed. AFTER ownerPagePublic means good
+     standing, so Lou's (a free account's) shared, discoverable campaign is listed too; a banned owner's is not (P9). */
+  check("N2. the sitemap lists only the shared, discoverable, active campaigns whose owners are in good standing",
+    sm1.status === 200 && J(locs(sm1.text).sort()) === J(["https://bizforceai.net/campaign/" + SID.listed, "https://bizforceai.net/campaign/" + SID.lapsed].sort()) && /application\/xml/.test(sm1.headers["content-type"] || ""), sm1.text);
   const r0 = CUR.reads.length;
   await hit("get /api/sitemap/campaigns.xml", null, {}, {});
   check("N3. a second request inside ten minutes is served from the cache, with no read", CUR.reads.length === r0, CUR.reads.slice(r0).join(","));
@@ -814,7 +830,8 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "2026-11-07". AFTER "2026-11-08", the version the Etsy privacy sentence set.
   // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
-  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 20 2026 (P2-2; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-20" && LEGAL.TERMS_UPDATED === "Last updated November 20, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20" and "Last updated November 20, 2026" (P2-2). AFTER "2026-11-21", the version P3-1's free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule set.
+  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 21 2026 (P3-1; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-21" && LEGAL.TERMS_UPDATED === "Last updated November 21, 2026", LEGAL.TERMS_VERSION);
   const guide = fe("scripts/termaximus-guide.js") || "";
   const block = (/"campaigns\.html": \[\n([\s\S]*?)\n    \]/.exec(guide) || ["", ""])[1];
   const tips = (block.match(/"(?:[^"\\]|\\.)*"/g) || []).map(t => JSON.parse(t));

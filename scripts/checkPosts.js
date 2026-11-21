@@ -13,9 +13,10 @@
      B. MAKING ONE: published at once ("Your post is up."), with the place only
         while "Show my posts in Local" is on; the content policy refuses with
         its one sentence and saves nothing; an unclear match is held (pending)
-        with a queue item; an account younger than the BizCash hold, or of
-        unknown age, is held (source new_member); a queue that cannot be
-        written leaves no post (503); ten a day.
+        with a queue item; a new account posts at once (P3-1, instant use: the
+        new_member hold is gone), a public post needs a confirmed email (403
+        email_unverified, nothing saved; a followers post does not); a queue
+        that cannot be written leaves no post (503); ten a day.
      C. WHO SEES IT: the author (unless removed); anyone else only when it is
         published, not hidden by moderation, no block either way, the author's
         pages public, and public or followed.
@@ -49,8 +50,9 @@ const MUTATIONS = {
   "private-author-shown": [[POSTS, "    if (!(await authorPublic(deps, ctx, p.author_id))) continue;\n", ""]],
   "blocked-shown": [[POSTS, "    if (ctx.blocked.has(p.author_id)) continue;\n", ""]],
   "feed-keeps-muted": [[POSTS, "    if (opts.feed && ctx.muted.has(p.author_id)) continue;\n", ""]],
-  "new-member-published": [[POSTS, "  return Date.parse(now(deps)) - created < days * DAY;", "  return false;"]],
-  "unknown-age-waved": [[POSTS, "  if (!created) return true;", "  if (!created) return false;"]],
+  // NAMED (Nov 20 2026, P3-1): BEFORE new-member-published and unknown-age-waved, on the new_member hold, which is gone (instant use).
+  // AFTER the public post's confirmed email: without the check an unconfirmed author posts publicly (B7 catches it).
+  "unverified-posts-public": [[POSTS, "  if (v.audience === \"public\" && !(await authorVerified(deps, userId))) return", "  if (false) return"]],
   "place-without-opt-in": [[POSTS, "  if (!r || r.local_opt_in !== true) return", "  if (!r) return"]],
   "queue-failure-keeps-post": [[POSTS, "    if (!q) { await undo(); return fail(503,", "    if (false) { await undo(); return fail(503,"]],
   "posts-unlimited": [[POSTS, ">= POSTS_PER_DAY)", ">= 1e9)"]],
@@ -67,7 +69,8 @@ const MUTATIONS = {
   "likes-not-grouped": [[POSTS, "  var row = (open.data || [])[0];\n  if (!row) {", "  var row = (open.data || [])[0];\n  if (true) {"]],
   "self-like-notice": [[POSTS, "  if (post.author_id === likerId) return;\n", ""]],
   "kept-revives-deleted": [[POSTS, '    if (!p || (p.status === "removed" && state !== "removed")) return { changed: false };', "    if (!p) return { changed: false };"]],
-  "post-without-plan": [[SERVER, 'app.post("/api/posts", requireAuth, requireActiveSubscription, postRoute(', 'app.post("/api/posts", requireAuth, postRoute(']]
+  // NAMED (Nov 20 2026, P3-1): BEFORE post-without-plan took requireActiveSubscription off. AFTER posting is free, so the mutation puts it back (I1 catches it).
+  "post-needs-plan": [[SERVER, 'app.post("/api/posts", requireAuth, postRoute(', 'app.post("/api/posts", requireAuth, requireActiveSubscription, postRoute(']]
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, POSTS, "@lib/postMedia.js"]);
 const { FILES, check, J, has } = T;
@@ -82,7 +85,8 @@ const PUBLIC = new Set([ME, THEM, OTHER, NEWBIE, MUTED, NOBODY, FAN, BLOCKER]);
 const quiet = async fn => { const w = console.warn, e = console.error; console.warn = () => {}; console.error = () => {}; try { return await fn(); } finally { console.warn = w; console.error = e; } };
 
 function world(extra) {
-  const users = [ME, THEM, OTHER, PRIV, MUTED, FAN, BLOCKER].map(id => ({ id, created_at: OLD })).concat([{ id: NEWBIE, created_at: "2026-11-19T12:00:00.000Z" }]);
+  // NAMED (Nov 20 2026, P3-1): every author has confirmed their email (public posts need it; checkEmailVerified runs the unconfirmed one)
+  const users = [ME, THEM, OTHER, PRIV, MUTED, FAN, BLOCKER].map(id => ({ id, created_at: OLD, email_verified_at: OLD })).concat([{ id: NEWBIE, created_at: "2026-11-19T12:00:00.000Z", email_verified_at: OLD }]);
   const names = { [ME]: "rose", [THEM]: "tom", [OTHER]: "olga", [NEWBIE]: "nell", [PRIV]: "pat", [MUTED]: "mo", [NOBODY]: "nobody", [FAN]: "fay", [BLOCKER]: "bea" };
   const seed = Object.assign({
     users, posts: [], post_media: [], post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
@@ -135,16 +139,22 @@ const pid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
   const held = w.db.t.posts.find(p => p.body === "Our new wine list");
   check("B5. an unclear match is held for review: pending, no published_at, a queue item, the waiting sentence", r.status === 201 && held && held.status === "pending" && held.published_at === null &&
     r.body.message === P.MESSAGES.pending && w.db.t.moderation_queue.some(q => q.object_type === "post" && q.object_id === held.id), J(r.body));
+  /* NAMED (Nov 20 2026, P3-1): BEFORE B6 "an account younger than the BizCash hold posts as pending, queued as new_member" and
+     B7 "an account whose age is unknown is held, never waved through" (H5). AFTER instant use: a new account posts at once, and a
+     public post needs a confirmed email instead. B8 now holds an unclear match from the new account. */
   r = await P.createPost(w.deps, NEWBIE, { body: "Hi all" });
   const nb = w.db.t.posts.find(p => p.author_id === NEWBIE);
-  check("B6. an account younger than the BizCash hold posts as pending, queued as new_member", r.status === 201 && nb && nb.status === "pending" && r.body.held === true &&
-    w.db.t.moderation_queue.some(q => q.object_id === nb.id && q.source === "new_member"), J(w.db.t.moderation_queue.map(q => q.source)));
+  check("B6. a one-day-old account posts at once: 201, published, held false, no new_member queue item", r.status === 201 && nb && nb.status === "published" && r.body.held === false &&
+    !w.db.t.moderation_queue.some(q => q.source === "new_member"), J([r.body.held, w.db.t.moderation_queue.map(q => q.source)]));
+  const nBefore = w.db.t.posts.length;
   r = await P.createPost(w.deps, NOBODY, { body: "Who am I" });
-  const nob = w.db.t.posts.find(p => p.author_id === NOBODY);
-  check("B7. an account whose age is unknown is held, never waved through", r.status === 201 && nob && nob.status === "pending");
+  check("B7. an author whose email is not confirmed: a public post is 403 email_unverified with the resend link, and nothing is saved",
+    r.status === 403 && r.body.reason === "email_unverified" && r.body.blocked === "post_public" && typeof r.body.resend_url === "string" && w.db.t.posts.length === nBefore, J(r.body));
+  r = await P.createPost(w.deps, NOBODY, { body: "Just for my followers", audience: "followers" });
+  check("B7. ...a followers-only post from the same author goes up", r.status === 201 && w.db.t.posts.some(p => p.author_id === NOBODY && p.audience === "followers"), J(r.body));
   w.db.failOn("moderation_queue", "insert");
   const n0 = w.db.t.posts.length;
-  r = await quiet(() => P.createPost(w.deps, NEWBIE, { body: "Second try" }));
+  r = await quiet(() => P.createPost(w.deps, NEWBIE, { body: "Our new wine list, again" }));
   check("B8. a queue that cannot be written leaves no post: 503 queue_unavailable", r.status === 503 && r.body.reason === "queue_unavailable" && w.db.t.posts.length === n0, J(r.body));
   w = world();
   for (let i = 0; i < 10; i++) w.db.t.posts.push(post(pid(100 + i), ME, { created_at: "2026-11-20T0" + (i % 10) + ":00:00.000Z" }));
@@ -292,12 +302,13 @@ const pid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
   /* ── I ── */
   console.log("\n══ I. the routes ══");
   const S = FILES[SERVER];
-  const ROUTES = [["post", "/api/posts", "requireAuth, requireActiveSubscription, postRoute("], ["post", "/api/posts/photos", "requireAuth, requireActiveSubscription, postPhotoLimiter,"],
+  // NAMED (Nov 20 2026, P3-1): BEFORE making a post and a post photo needed an active plan (requireActiveSubscription). AFTER both are free.
+  const ROUTES = [["post", "/api/posts", "requireAuth, postRoute("], ["post", "/api/posts/photos", "requireAuth, postPhotoLimiter,"],
     ["get", "/api/posts/saved", "requireAuth, postRoute("], ["get", "/api/posts/:id", "requireAuth, postRoute("], ["patch", "/api/posts/:id", "requireAuth, postRoute("],
     ["delete", "/api/posts/:id", "requireAuth, postRoute("], ["get", "/api/posts/:id/comments", "requireAuth, postRoute("], ["post", "/api/posts/:id/comments", "requireAuth, postRoute("],
     ["delete", "/api/comments/:id", "requireAuth, postRoute("], ["post", "/api/comments/:id/hide", "requireAuth, postRoute("], ["get", "/api/feed/following", "requireAuth, postRoute("]];
   const missing = ROUTES.filter(([m, p, mw]) => !has(S, "app." + m + "(\"" + p + "\", " + mw));
-  check("I1. each route is there with its sign-in; making a post and a post photo need an active plan", missing.length === 0, J(missing));
+  check("I1. each route is there with its sign-in; making a post and a post photo are free (sign-in only)", missing.length === 0 && !has(S, 'app.post("/api/posts", requireAuth, requireActiveSubscription') && !has(S, 'app.post("/api/posts/photos", requireAuth, requireActiveSubscription'), J(missing));
   check("I2. the routes pass the server's own pieces: the claims screen, ownerPagePublic, Web Push",
     has(S, "  return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env };"));
   check("I3. a member's posts answer a visitor not signed in, with a signed-in viewer's blocks applied (viewerIdFrom)",

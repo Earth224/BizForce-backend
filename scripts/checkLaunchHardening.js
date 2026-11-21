@@ -354,8 +354,9 @@ const UNLIMITED = {
 };
 function world(extraTx) {
   return {
-    users: [{ id: DONOR, created_at: isoAgo(30 * DAY), role: "member" }, { id: OWNER2, created_at: isoAgo(90 * DAY), role: "member" },
-      { id: NEWBIE, created_at: isoAgo(3 * DAY), role: "member" }, { id: UNSUB, created_at: isoAgo(60 * DAY), role: "member" }],
+    // NAMED (Nov 20 2026, P3-1): every one has confirmed their email, so each can receive BizCash (checkEmailVerified runs the unconfirmed one)
+    users: [{ id: DONOR, created_at: isoAgo(30 * DAY), role: "member", email_verified_at: isoAgo(30 * DAY) }, { id: OWNER2, created_at: isoAgo(90 * DAY), role: "member", email_verified_at: isoAgo(90 * DAY) },
+      { id: NEWBIE, created_at: isoAgo(3 * DAY), role: "member", email_verified_at: isoAgo(3 * DAY) }, { id: UNSUB, created_at: isoAgo(60 * DAY), role: "member", email_verified_at: isoAgo(60 * DAY) }],
     user_wallets: [{ user_id: DONOR, balance: 10000 }, { user_id: OWNER2, balance: 500 }, { user_id: NEWBIE, balance: 1000 }, { user_id: UNSUB, balance: 1000 }],
     wallet_transactions: (extraTx || []).map((x, i) => Object.assign({ id: "seed" + i, user_id: DONOR, type: "debit" }, x)),
     crowdfunding_campaigns: [{ id: CAMPAIGN, owner_id: OWNER2, status: "active", title: "New kiln", raised_bfc: 0 },

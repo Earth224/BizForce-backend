@@ -84,13 +84,17 @@ const MUTATIONS = {
   "whole-file-buffered": ["videos",
     "  var got = await storage.from(BUCKET).download(path).asStream();\n",
     "  var got = await storage.from(BUCKET).download(path);\n"],
+  // NAMED (Nov 21 2026, P3-1): BEFORE the anchor matched twice once BV1 added the parts path (MUTATE=all said ERROR); it is the one-file path's, after its catch. AFTER the anchor names one place; the mutation is unchanged.
   "sniff-trusts-declared": ["videos",
-    "    else if (sniffed !== extOf(path)) refusal = { status: 422, code: \"mismatch\", error: MESSAGES.mismatch };\n", ""],
+    "  } catch (err) {\n    return { status: 503, body: { error: MESSAGES.unreadable, code: \"unreadable\" } };\n  }\n  var refusal = null;\n  if (m.tooBig) refusal = { status: 422, code: \"too_big\", error: MESSAGES.tooBig };\n  else {\n    var sniffed = sniffVideo(m.head);\n    if (!sniffed) refusal = { status: 422, code: \"unsupported\", error: MESSAGES.unsupported + \" It was deleted.\" };\n    else if (sniffed !== extOf(path)) refusal = { status: 422, code: \"mismatch\", error: MESSAGES.mismatch };\n",
+    "  } catch (err) {\n    return { status: 503, body: { error: MESSAGES.unreadable, code: \"unreadable\" } };\n  }\n  var refusal = null;\n  if (m.tooBig) refusal = { status: 422, code: \"too_big\", error: MESSAGES.tooBig };\n  else {\n    var sniffed = sniffVideo(m.head);\n    if (!sniffed) refusal = { status: 422, code: \"unsupported\", error: MESSAGES.unsupported + \" It was deleted.\" };\n"],
   "heic-accepted": ["videos",
     "    if (REFUSED_BRANDS.indexOf(brand) !== -1) return null;\n",
     "    if (REFUSED_BRANDS.indexOf(brand) !== -1) return \"mp4\";\n"],
+  // NAMED (Nov 21 2026, P3-1): BEFORE the anchor matched twice once BV1 added the parts path (MUTATE=all said ERROR); it is the one-file path's, after its catch. AFTER the anchor names one place; the mutation is unchanged.
   "size-mismatch-accepted": ["videos",
-    "    else if (m.bytes !== declared) refusal = { status: 422, code: \"size_mismatch\", error: MESSAGES.sizeMismatch };\n", ""],
+    "  } catch (err) {\n    return { status: 503, body: { error: MESSAGES.unreadable, code: \"unreadable\" } };\n  }\n  var refusal = null;\n  if (m.tooBig) refusal = { status: 422, code: \"too_big\", error: MESSAGES.tooBig };\n  else {\n    var sniffed = sniffVideo(m.head);\n    if (!sniffed) refusal = { status: 422, code: \"unsupported\", error: MESSAGES.unsupported + \" It was deleted.\" };\n    else if (sniffed !== extOf(path)) refusal = { status: 422, code: \"mismatch\", error: MESSAGES.mismatch };\n    else if (m.bytes !== declared) refusal = { status: 422, code: \"size_mismatch\", error: MESSAGES.sizeMismatch };\n",
+    "  } catch (err) {\n    return { status: 503, body: { error: MESSAGES.unreadable, code: \"unreadable\" } };\n  }\n  var refusal = null;\n  if (m.tooBig) refusal = { status: 422, code: \"too_big\", error: MESSAGES.tooBig };\n  else {\n    var sniffed = sniffVideo(m.head);\n    if (!sniffed) refusal = { status: 422, code: \"unsupported\", error: MESSAGES.unsupported + \" It was deleted.\" };\n    else if (sniffed !== extOf(path)) refusal = { status: 422, code: \"mismatch\", error: MESSAGES.mismatch };\n"],
   // NAMED (Nov 18 2026, BV2): BEFORE it dropped verifyFile, the read before the send. AFTER verifyFile is gone (the send is
   // the one read), so it drops the check the send makes: the one-object guard becomes a plain pass-through.
   "sha-unchecked-at-send": ["api",
@@ -130,8 +134,9 @@ const MUTATIONS = {
     "  var r = await supabase.from(\"member_videos\").select(ROW_COLUMNS).eq(\"id\", id).eq(\"user_id\", userId).maybeSingle();\n  if (r.error) throw r.error;\n  return r.data && r.data.user_id === userId ? r.data : null;\n",
     "  var r = await supabase.from(\"member_videos\").select(ROW_COLUMNS).eq(\"id\", id).maybeSingle();\n  if (r.error) throw r.error;\n  return r.data || null;\n"],
   // NAMED (Nov 7 2026, TikTok posting): the host check is now the named profile's (youtube: www.googleapis.com).
+  // NAMED (Nov 21 2026, P3-1): BEFORE "target.hostname !== profile.host || ", gone since TK3's host patterns (MUTATE=all said ERROR); the exact-host test (youtube) is the end of hostOk. AFTER the anchor names one place; the mutation is unchanged.
   "stream-host-unrestricted": ["fetch",
-    "target.hostname !== profile.host || ", ""],
+    " && profile.hostPattern.test(target.hostname) : target.hostname === profile.host;", " && profile.hostPattern.test(target.hostname) : true;"],
   "other-3xx-followed": ["fetch",
     "        if (status >= 300 && status < 400) {\n          res.destroy();\n          return fail(new GuardedFetchError(\"redirected\", \"answered \" + status + \"; the stream mode never follows a redirect\"));\n        }\n", ""],
   "session-uri-logged": ["api",
@@ -240,9 +245,10 @@ const MUTATIONS = {
   "bv-budget-skipped": ["videos",
     "  var full = await budgetRefusal(deps, b.bytes);\n  if (full) return full;\n",
     ""],
+  // NAMED (Nov 21 2026, P3-1): BEFORE the parts' forEach, gone since storedBytes reads in pages (pagedBytes; MUTATE=all said ERROR); the parts' paged read is now summed as 0. AFTER the anchor names one place; the mutation is unchanged.
   "bv-budget-ignores-parts": ["videos",
-    "  (parts.data || []).forEach(function (r) { total += Number(r.bytes) || 0; });\n",
-    ""],
+    "  total += await pagedBytes(function (from, to) {\n    return supabase.from(\"member_video_parts\")",
+    "  total += 0 * await pagedBytes(function (from, to) {\n    return supabase.from(\"member_video_parts\")"],
   "bv-budget-env-ignored": ["videos",
     "  return Number.isInteger(v) && v > 0 ? v : BUDGET_BYTES_DEFAULT;",
     "  return BUDGET_BYTES_DEFAULT;"],
@@ -941,6 +947,8 @@ function mountRoutes(env) {
     blueskyClaimsRefusal: claimsStub,
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (lib/storageGuard.js) is checked by checkStorageGuard; here it always has room.
     storageGuard: async function () { return null; },
+    // NAMED (Nov 20 2026, P3-1): storage per account (lib/storageAccount.js) is checked by checkStorageAccount; here every file is counted.
+    storageAccountReserve: async function () { return null; }, storageAccountRelease: async function () { return true; },
     callAnthropicText: async function (prompt) {
       prompts.push(prompt);
       return { text: env.draft !== undefined ? env.draft : "TITLE: Spring cakes at Maple Street\nDESCRIPTION: How we make our spring cakes.\nTAGS: cakes, bakery, spring" };
@@ -2446,7 +2454,8 @@ function pageAnswers(over) {
   // the Etsy privacy sentence set (this change still set Nov 7).
   // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
-  check("G4. TERMS_VERSION is the latest change's, Nov 20 2026 (P2-2; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-20", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20" and "Last updated November 20, 2026" (P2-2). AFTER "2026-11-21", the version P3-1's free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule set.
+  check("G4. TERMS_VERSION is the latest change's, Nov 21 2026 (P3-1; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-21", LEGAL.TERMS_VERSION);
   const GR = realRequire("./lib/gateRules");
   check("G5. gateRules: both actions known, channel youtube", GR.ACTION_TYPES.indexOf("publish_youtube_video") !== -1 && GR.ACTION_TYPES.indexOf("delete_youtube_video") !== -1 &&
     GR.CHANNELS.indexOf("youtube") !== -1 && GR.channelFor("publish_youtube_video") === "youtube" && GR.channelFor("delete_youtube_video") === "youtube");
@@ -2503,9 +2512,10 @@ function pageAnswers(over) {
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
   // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
   // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): 193_posts.sql (posts, post_media) and 194_social_graph.sql (follows, likes, saves, comments, share days, the count triggers) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 194 &&
+  // NAMED (Nov 20 2026, P3-1, migrations 195 to 198): 195_users_email_canonical.sql (users.email_canonical, one account per inbox), 196_storage_account_tables.sql, 197_storage_account_functions.sql and 198_storage_account_backfill.sql (per-account storage totals; written in P3-1A as 196a/196b/196c and renamed) are allowed above the earlier highest too, by name; "the highest" (198) is checkBuyListingDigital R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 198 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),
@@ -2521,8 +2531,8 @@ function pageAnswers(over) {
     // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
     // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
     check("G14. R1. 187_member_video_parts.sql is the only 187 and only 188_user_preferences_hq_view.sql, 189_handles_and_place.sql and 190_notifications_links.sql are above it; it allows 500 MiB, part_count 1..12 and member_video_parts with RLS on and nothing granted; VERIFY is verify/187_verify.sql",
-      top === 194 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
-      migNames.filter(function (x) { return Number(x.slice(0, 3)) > 187; }).join() === "188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql" &&
+      top === 198 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
+      migNames.filter(function (x) { return Number(x.slice(0, 3)) > 187; }).join() === "188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql" &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 524288000)") !== -1 && sql187.indexOf("CHECK (part_count >= 1 AND part_count <= 12)") !== -1 &&
       sql187.indexOf("ALTER TABLE public.member_video_parts ENABLE ROW LEVEL SECURITY;") !== -1 && sql187.indexOf("REVOKE ALL ON public.member_video_parts FROM anon, authenticated;") !== -1 &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 47185920)") !== -1 && sql187.indexOf("UNIQUE (upload_path, idx)") !== -1 &&

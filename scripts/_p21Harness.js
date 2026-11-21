@@ -114,7 +114,8 @@ function route(src, method, routePath, stubs, libRequire) {
   return async function (req) {
     const res = { statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
     let err = null;
-    await handler(Object.assign({ user: { id: "11111111-1111-4111-8111-111111111111" }, body: {}, params: {}, query: {}, headers: {} }, req), res, (e) => { err = e || new Error("next"); });
+    // NAMED (Nov 20 2026, P3-1): the signed-in member has confirmed their email (lib/emailVerification.js); checkEmailVerified runs the unconfirmed one.
+    await handler(Object.assign({ user: { id: "11111111-1111-4111-8111-111111111111", email_verified_at: "2026-10-01T10:00:00.000Z" }, body: {}, params: {}, query: {}, headers: {} }, req), res, (e) => { err = e || new Error("next"); });
     return { status: res.statusCode, body: res.body, err };
   };
 }

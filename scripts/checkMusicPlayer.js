@@ -360,7 +360,9 @@ function liftRoutes(fake) {
     }), { memoryStorage: () => ({}) }),
     supabase: fake.client, accountFiles, requireAuth, Buffer, app: {},
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (lib/storageGuard.js) is checked by checkStorageGuard; here it always has room.
-    storageGuard: async () => null
+    storageGuard: async () => null,
+    // NAMED (Nov 20 2026, P3-1): storage per account (lib/storageAccount.js) is checked by checkStorageAccount; here every file is counted.
+    storageAccountReserve: async () => null, storageAccountRelease: async () => true, storageAccountReleaseMany: async () => true
   };
   ["get", "post", "put", "delete"].forEach(m => { ctx.app[m] = function (p) { const args = [].slice.call(arguments, 1); routes.push({ method: m, path: p, mw: args.slice(0, -1), handler: args[args.length - 1] }); }; });
   vm.createContext(ctx);
@@ -1320,7 +1322,9 @@ async function boomboxChecks(c) {
   const appIn = sessionWith(TOKEN, ["data-clear-only"]);
   check("G1. settings.html's bf-session.js (data-clear-only data-music) loads the player when a member is signed in, never when signed out, and runs no guard; app.html's (no data-music) never",
     // NAMED (Nov 19 2026, P2-1): BEFORE only the player was added; AFTER the bottom bar first (scripts/bf-tabbar.js, checkAppShell J1), then the player.
-    setIn.added.join() === "/scripts/bf-tabbar.js,/scripts/bf-music.js" && setOut.added.length === 0 && setIn.replaced.length === 0 && setOut.replaced.length === 0 && appIn.added.length === 0,
+    // NAMED (Nov 21 2026, P3-1): BEFORE the bottom bar then the player. AFTER the bottom bar, then bf-access.js (the members panel and the
+    // email banner, checkFreeAccount G), then the player.
+    setIn.added.join() === "/scripts/bf-tabbar.js,/scripts/bf-access.js,/scripts/bf-music.js" && setOut.added.length === 0 && setIn.replaced.length === 0 && setOut.replaced.length === 0 && appIn.added.length === 0,
     JSON.stringify([setIn, setOut, appIn]));
 
   /* G2. the dashboard: beside the logo, and every capability of the old panel in the expanded view */

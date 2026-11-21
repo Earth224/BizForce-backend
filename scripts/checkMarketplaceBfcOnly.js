@@ -130,6 +130,7 @@ const writes = function (db) { return db.calls.filter(function (c) { return c.op
 
 /* ── lifting ─────────────────────────────────────────────────────────────── */
 ["insertListingWithSlug", "refuseUnlessSubscribed", "ownerPagePublic", "recordGateDecision"].forEach(function (n) { MUT.STUBS.add(n); });
+MUT.STUBS.add("ownerIsMember");   // NAMED (Nov 20 2026, P3-1): the storefront's member label; checkFreeAccount runs the real one
 function routeSource(method, routePath) {
   const sig = "app." + method + "(\"" + routePath + "\",";
   const start = SRC.indexOf(sig);
@@ -151,6 +152,7 @@ function context(db, extra) {
     // gate_decisions row; checkGates J2 proves no answer changes). Stubbed, so "nothing written" still means the listing.
     recordGateDecision: function () { return Promise.resolve(true); },
     ownerPagePublic: async function () { return true; },
+    ownerIsMember: async function () { return false; },
     // NAMED (Oct 28 2026, member support): BEFORE the storefront route's closure needed no require. AFTER it answers
     // support_links through publicSupportLinks, which lifts `const supportLinks = require("./lib/supportLinks")`.
     require: function (p) { return require(p.indexOf("./") === 0 ? path.join(__dirname, "..", p) : p); },
@@ -174,7 +176,8 @@ function liftRoute(method, routePath, db, extra) {
 async function call(route, req) {
   const res = { statusCode: 200, body: undefined, status: function (c) { this.statusCode = c; return this; }, json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
   let nextErr = null;
-  await route.handler(Object.assign({ user: { id: "seller-1" }, params: {}, query: {}, body: {} }, req), res, function (e) { nextErr = e || new Error("next"); });
+  // NAMED (Nov 20 2026, P3-1): the signed-in seller has confirmed their email (listing needs it; checkEmailVerified runs the unconfirmed one)
+  await route.handler(Object.assign({ user: { id: "seller-1", email_verified_at: "2026-10-01T10:00:00.000Z" }, params: {}, query: {}, body: {} }, req), res, function (e) { nextErr = e || new Error("next"); });
   return { status: res.statusCode, body: res.body, nextErr: nextErr && String(nextErr.message || nextErr) };
 }
 function executor(name, db) {
@@ -246,7 +249,8 @@ const NFS = "Not for sale until the seller sets a BizCash price";
 
   /* ── 3. buying ──────────────────────────────────────────────────────── */
   console.log("\n══ 3. buying (BEFORE: a 0-BFC listing reached bfc_buy_listing · AFTER: not for sale) ══");
-  db = fakeDb({ marketplace_listings: LISTINGS });
+  // NAMED (Nov 20 2026, P3-1): the seller has confirmed their email, so they can receive BizCash
+  db = fakeDb({ marketplace_listings: LISTINGS, users: [{ id: "seller-1", email_verified_at: "2026-10-01T10:00:00.000Z" }, { id: "buyer-1", email_verified_at: "2026-10-01T10:00:00.000Z" }] });
   route = liftRoute("post", "/api/marketplace/listings/:id/buy", db);
   r = await call(route, { user: { id: "buyer-1" }, params: { id: "usd-only" } });
   check("a listing with no BFC price: 409 \"" + NFS + ".\"", r.status === 409 && r.body.error === NFS + "." && r.body.field === "price_bfc", r.status + " " + JSON.stringify(r.body));

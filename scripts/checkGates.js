@@ -397,7 +397,20 @@ function makeRes() {
     header(k, v) { this.headers[String(k).toLowerCase()] = v; return this; }
   };
 }
-const resShape = r => ({ status: r.statusCode, body: r.body, headers: r.headers, sent: r.sent });
+/* NAMED (Nov 20 2026, P3-1): every member-only refusal (subscriptionRequiredBody) now also carries members_only, tier_required
+   "member" and the "Members get this" panel (lib/membership.js). Each one seen is held to the panel at the price in code
+   (PANEL_SEEN, checked once at the end) and the three keys are set aside, so the rest of every answer is still compared. */
+const PANEL = require("../lib/membership").membersPanelFromCode();
+const PANEL_SEEN = { count: 0, bad: [] };
+function withoutPanel(body) {
+  if (!body || typeof body !== "object" || !("members_panel" in body)) return body;
+  PANEL_SEEN.count++;
+  if (!(body.members_only === true && body.tier_required === "member" && JSON.stringify(body.members_panel) === JSON.stringify(PANEL))) PANEL_SEEN.bad.push(JSON.stringify(body).slice(0, 300));
+  const copy = JSON.parse(JSON.stringify(body));
+  delete copy.members_only; delete copy.tier_required; delete copy.members_panel;
+  return copy;
+}
+const resShape = r => ({ status: r.statusCode, body: withoutPanel(r.body), headers: r.headers, sent: r.sent });
 const J = x => JSON.stringify(x);
 const notGates = logs => logs.filter(l => l.indexOf("[gates]") === -1);
 
@@ -1011,30 +1024,29 @@ function compare(section, label, oldRun, newRun, expect) {
     }
   }
 
-  /* J2. G3: editing a public listing (a pause is never gated). */
+  /* J2. NAMED (Nov 20 2026, P3-1): BEFORE G3 gated editing a public listing (402 without a subscription, a pause never gated),
+     compared to " + B1_HEAD + ". AFTER selling and listing in the Market are free: G3 is gone from the edit, and a confirmed email is
+     what an edit needs (a pause never does). Run on today's route only; checkEmailVerified holds the email rule. */
   {
     const SIG = "app.put(\"/api/marketplace/listings/:id\", requireAuth, async function (req, res, next) {";
-    const T = "route:put /api/marketplace/listings/:id";
-    const run = (w, s) => runRoute(w, "listing", SIG, ["getUserPlan"], {
+    check("J2. the listing edit no longer asks G3 or the plan", !!DEFS.new && (function () { const i = NEW.indexOf(SIG); const body = i < 0 ? "" : NEW.slice(i, NEW.indexOf("\n});", i)).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, ""); return i !== -1 && body.indexOf("G3") === -1 && body.indexOf("refuseUnlessSubscribed") === -1 && body.indexOf("getUserPlan") === -1 && body.indexOf("unverifiedBody(\"list_market\")") !== -1; })());
+    const run = (s) => runRoute("new", "listing", SIG, ["getUserPlan"], {
       respond: function (q) {
-        if (q.table === "marketplace_listings" && q.op === "select") return { data: s.missing ? null : { price_bfc: 10, status: "active" }, error: null };
+        if (q.table === "marketplace_listings" && q.op === "select") return { data: { price_bfc: 10, status: "active" }, error: null };
         if (q.table === "marketplace_listings" && q.op === "update") return { data: Object.assign({ id: "l-1" }, q.payload), error: null };
         return null;
       },
-      globals: { getUserPlan: planOf(s.plan || SUBSCRIBED) }
-    }, { user: { id: MEMBER, role: "user" }, params: { id: "l-1" }, body: s.body });
+      globals: { getUserPlan: planOf(LAPSED) }
+    }, { user: { id: MEMBER, role: "user", email_verified_at: s.verified ? "2026-10-01T00:00:00.000Z" : null }, params: { id: "l-1" }, body: s.body });
     const CASES = [
-      { label: "a pause, not subscribed (200)", s: { body: { status: "paused" }, plan: LAPSED }, rec: [] },
-      { label: "a title edit, not subscribed (402)", s: { body: { title: "New" }, plan: LAPSED }, rec: [{ action: "route_access", target: T, outcome: "blocked", results: [["G3", "fail", "subscription_required"]] }] },
-      { label: "a title edit, the plan unreadable (402)", s: { body: { title: "New" }, plan: "throws" }, rec: [{ action: "route_access", target: T, outcome: "blocked", results: [["G3", "fail", "subscription_required"]] }] },
-      { label: "a title edit, subscribed (200)", s: { body: { title: "New" } }, rec: [{ action: "route_access", target: T, outcome: "ran", results: [["G3", "pass"]] }] },
-      { label: "a title edit, subscribed, no such listing (404)", s: { body: { title: "New" }, missing: true }, rec: [{ action: "route_access", target: T, outcome: "ran", results: [["G3", "pass"]] }] }
+      { label: "a pause, not subscribed, email not confirmed (200)", s: { body: { status: "paused" } } },
+      { label: "a title edit, not subscribed, email confirmed (200)", s: { body: { title: "New" }, verified: true } },
+      { label: "a title edit, email not confirmed (403)", s: { body: { title: "New" } } }
     ];
     for (const t of CASES) {
-      const o = await run("b1", t.s), n = await run("new", t.s);
+      const n = await run(t.s);
       const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]);
-      check("J2 " + t.label + ": answered " + want, o.out.res.status === want && o.out.res.sent === 1, J(o.out));
-      compareB2("J2", t.label, o, n, t.rec);
+      check("J2 " + t.label + ": answered " + want + ", and no gate record", n.out.res.status === want && n.out.res.sent === 1 && n.gateRows.length === 0, J([n.out, n.gateRows]));
     }
   }
 
@@ -1149,8 +1161,13 @@ function compare(section, label, oldRun, newRun, expect) {
   /* J6. G24: BizCash transfers and support. The body that decides is the old one, renamed. */
   {
     const oldBody = DEFS.b1.get("bfcSendWithinLimits"), newBody = DEFS.new.get("bfcSendWithinLimitsSteps") || "";
-    check("J6. bfcSendWithinLimitsSteps is " + B1_HEAD + "'s bfcSendWithinLimits, byte for byte, under a new name",
-      !!oldBody && newBody.replace("async function bfcSendWithinLimitsSteps(", "async function bfcSendWithinLimits(") === oldBody);
+    // NAMED (Nov 20 2026, P3-1): byte for byte apart from P3-1's one addition, the recipient's confirmed email (set aside here, by its text).
+    const P31_RECIPIENT = "    /* P3-1: receiving BizCash needs a confirmed email (lib/emailVerification.js). Refused before anything moves. */\n" +
+      "    if (!(await require(\"./lib/emailVerification\").verifiedById(supabase, recipient.id))) {\n" +
+      "      return res.status(409).json(require(\"./lib/emailVerification\").recipientUnverifiedBody(\"receive_bizcash\"));\n" +
+      "    }\n";
+    check("J6. bfcSendWithinLimitsSteps is " + B1_HEAD + "'s bfcSendWithinLimits, byte for byte, under a new name (P3-1's recipient check aside, present once)",
+      !!oldBody && newBody.split(P31_RECIPIENT).length === 2 && newBody.split(P31_RECIPIENT).join("").replace("async function bfcSendWithinLimitsSteps(", "async function bfcSendWithinLimits(") === oldBody);
     const calls = s => (s.match(/bfcSendWithinLimits\(/g) || []).length;
     check("J6. every caller still calls bfcSendWithinLimits, as many as before", calls(B1_SRC) === calls(NEW), calls(B1_SRC) + " vs " + calls(NEW));
     const STEPS = [
@@ -1871,6 +1888,8 @@ function compare(section, label, oldRun, newRun, expect) {
       Object.keys(named).filter(k => EMOJI.test(named[k])).join(", "));
   }
 
+  // NAMED (Nov 20 2026, P3-1): every 402 seen above carried the members panel at the price in code
+  check("P. every member-only refusal seen carried members_only, tier_required member and the members panel at the price in code (" + PANEL_SEEN.count + ")", PANEL_SEEN.count > 10 && PANEL_SEEN.bad.length === 0, JSON.stringify(PANEL_SEEN.bad.slice(0, 2)));
   console.log("\n" + (failures === 0 ? "ALL CHECKS PASSED (" + passes + ")" : "CHECKS FAILED: " + failures + " failing, " + passes + " passing"));
   process.exit(failures === 0 ? 0 : 1);
 })().catch(function (e) {

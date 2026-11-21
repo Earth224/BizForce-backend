@@ -382,8 +382,10 @@ async function main() {
     textOf(between(P, "<h2 id=\"changes\">", "<h2 id=\"contact\">")).indexOf(LP.TERMS_CHANGE_EMAIL_SENTENCE) !== -1);
   // NAMED (Nov 20 2026, P2-2): BEFORE 2026-11-14, "Last updated November 14, 2026" and L1's summary ("We added how BizForce handles your
   // YouTube and Google data, ..."). AFTER P2-2's version and summary.
-  check("A17. TERMS_VERSION 2026-11-20, \"Last updated November 20, 2026\", and the CHANGE_SUMMARY word for word", LEGAL.TERMS_VERSION === "2026-11-20" &&
-    LEGAL.TERMS_UPDATED === "Last updated November 20, 2026" && LEGAL.CHANGE_SUMMARY === "We added community rules: what may not be offered or posted, how reporting, blocking and muting work, how we review and remove content, and how to send a copyright notice or counter-notice.");
+  // NAMED (Nov 20 2026, P3-1): BEFORE 2026-11-20, "Last updated November 20, 2026" and P2-2's summary ("We added community rules: ...").
+  // AFTER P3-1's version and summary.
+  check("A17. TERMS_VERSION 2026-11-21, \"Last updated November 21, 2026\", and the CHANGE_SUMMARY word for word", LEGAL.TERMS_VERSION === "2026-11-21" &&
+    LEGAL.TERMS_UPDATED === "Last updated November 21, 2026" && LEGAL.CHANGE_SUMMARY === "We added free accounts and what membership adds, the email confirmation needed to post publicly, list, message and receive BizCash, storage limits per account, that sending BizCash is for members and BizCash never pays for membership, and that no sexual or explicit adult content is allowed anywhere on BizForce.");
   const pagesEqual = ["terms.html", "privacy.html", "refund.html", "contact.html"].filter((f) => lf(readFe(f)) !== lf(built[f]));
   check("A18. the four frontend pages equal what these sources build", pagesEqual.length === 0, pagesEqual.join(", "));
 
@@ -524,7 +526,7 @@ async function main() {
   check("D2. the yearly reminder states the same facts", yearlyMail.text.indexOf("This is your yearly reminder") !== -1 &&
     ["Your plan: All Access, $199 every month.", "Manage / Cancel Subscription", "Terms of Service: https://bizforceai.net/terms"].every((x) => yearlyMail.text.indexOf(x) !== -1));
   const tc = RE.termsChangeEmail(F);
-  check("D3. the terms-change email: the version, what changed (CHANGE_SUMMARY), the Terms and Privacy links", tc.text.indexOf("November 20, 2026 (version 2026-11-20)") !== -1 &&   // NAMED (Nov 20 2026, P2-2): BEFORE November 14, 2026 (version 2026-11-14)
+  check("D3. the terms-change email: the version, what changed (CHANGE_SUMMARY), the Terms and Privacy links", tc.text.indexOf("November 21, 2026 (version 2026-11-21)") !== -1 &&   // NAMED (Nov 20 2026, P3-1): BEFORE November 20, 2026 (version 2026-11-20); P2-2 BEFORE November 14, 2026 (version 2026-11-14)
     tc.text.indexOf("What changed: " + LEGAL.CHANGE_SUMMARY) !== -1 && tc.text.indexOf("Terms of Service: https://bizforceai.net/terms") !== -1 &&
     tc.text.indexOf("Privacy Policy: https://bizforceai.net/privacy") !== -1);
 
@@ -552,7 +554,7 @@ async function main() {
     /const \{ error: subscriptionError \} = await supabase\.from\("subscriptions"\)\.upsert\([\s\S]*?status: "active"[\s\S]*?try \{\n        await require\("\.\/lib\/renewalEmails"\)\.sendConfirmation\(renewalEmailDeps\(\), userId, session\.subscription \|\| null\);\n      \} catch \(confirmErr\) \{/.test(hook));
 
   // The yearly reminder.
-  db.t.users.push({ id: OTHER, email: "member.two@example.invalid", role: "user", terms_version: "2026-11-20" },
+  db.t.users.push({ id: OTHER, email: "member.two@example.invalid", role: "user", terms_version: "2026-11-21" },   // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20"; the current version
     { id: "u-young", email: "young@example.invalid", role: "user" }, { id: "u-cancel", email: "cancel@example.invalid", role: "user" },
     { id: "u-two", email: "two@example.invalid", role: "user" },
     { id: "u-test", email: "harness-l1@bizforceai.invalid", role: "user" }, { id: OWNER_ID, email: "owner@example.invalid", role: "admin" });
@@ -605,7 +607,7 @@ async function main() {
   const tdb = makeDb({ users: [
     { id: "t-old", email: "old@example.invalid", role: "user", terms_version: "2026-11-08" },
     { id: "t-null", email: "null@example.invalid", role: "user", terms_version: null },
-    { id: "t-now", email: "now@example.invalid", role: "user", terms_version: "2026-11-20" },
+    { id: "t-now", email: "now@example.invalid", role: "user", terms_version: "2026-11-21" },   // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20"; the current version
     { id: "t-gone", email: "deleted-t-gone@deleted.invalid", role: "deleted", terms_version: null },
     { id: "t-test", email: "someone+bftest9@example.invalid", role: "user", terms_version: null }], email_sends: [], job_runs: [] });
   for (let i = 0; i < RE.TERMS_PER_RUN + 5; i++) tdb.t.users.push({ id: "t-many-" + String(i).padStart(3, "0"), email: "many" + i + "@example.invalid", role: "user", terms_version: "2026-10-01" });
@@ -615,7 +617,8 @@ async function main() {
   const r2t = await RE.termsChangeTick(tdeps, NOW + DAY);
   const r3 = await RE.termsChangeTick(tdeps, NOW + 2 * DAY);
   // NAMED (Nov 20 2026, P2-2): the current version (BEFORE 2026-11-14), here and in t-now and OTHER's terms_version.
-  const sentTo = ledger(tdb, "account:terms_change:2026-11-20:").map((r) => r.template.split(":").pop());
+  // NAMED (Nov 20 2026, P3-1): BEFORE the ledger key named 2026-11-20 (P2-2). AFTER 2026-11-21, the current version.
+  const sentTo = ledger(tdb, "account:terms_change:2026-11-21:").map((r) => r.template.split(":").pop());
   check("D16. the terms-change email: at most " + RE.TERMS_PER_RUN + " a run, then the rest the next day, claimed once a day", r1.sent === RE.TERMS_PER_RUN && r1b.claimed === false &&
     r2t.sent === 7 && r3.sent === 0, J([r1.sent, r1b, r2t.sent, r3.sent]));
   check("D17. ...one per member per version: never twice, never to a member who already accepted it, never to a deleted account or a test account",

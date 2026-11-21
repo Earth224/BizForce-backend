@@ -377,12 +377,14 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // NAMED (Nov 20 2026, P2-2): BEFORE "p21". AFTER "p22": the report, block and mute menu (bf-safety.js), moderation.html and copyright.html in the shell.
     // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
     // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
-    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-fx1", names.length === 1 && names[0] === "bf-shell-abc1234-fx1", names.join(","));
+    // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-p31", names.length === 1 && names[0] === "bf-shell-abc1234-p31", names.join(","));
     // NAMED (Nov 20 2026, P2-2): BEFORE at most 600 characters between BUILD and SHELL_REV; AFTER 800, for P2-2's one-line note.
     // NAMED (Nov 20 2026, P2-3): BEFORE 800; AFTER 1000, for P2-3 one-line note (861 today).
+    // NAMED (Nov 20 2026, P3-1): BEFORE at most 1000 characters between BUILD and SHELL_REV; AFTER 1400, for P3-1's one-line note.
     check("I8. netlify.toml's build writes the deploying commit into sw.js, and sw.js carries the placeholder it replaces",
       /command = 'sed -i "s\/__BF_BUILD__\/\$\{COMMIT_REF:-local\}\/" sw\.js'/.test(FILES[TOML]) && (FILES[SW].match(/__BF_BUILD__/g) || []).length === 1 &&
-      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,1000}?var SHELL_REV = "fx1";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,1400}?var SHELL_REV = "p31";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -391,7 +393,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // activate: an older shell cache goes, another app's cache stays
     sw.caches.set("bf-shell-old0000", new Map()); sw.caches.set("someone-else", new Map());
     await sw.dispatch("activate");
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-fx1") && sw.caches.has("someone-else"),
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-p31") && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle

@@ -4047,10 +4047,22 @@ const SUBSCRIPTION_REFUSAL_DEFAULT =
 const SUBSCRIPTION_PAST_DUE_MESSAGE =
   "Your last card payment failed and the grace period has ended, so this is paused. Nothing was run, nothing was charged and nothing you saved is lost. To update your card, open Billing and choose Manage / Cancel Subscription; access returns as soon as the payment goes through.";
 
+/* P3-1 (Nov 20 2026): every member-only refusal also carries the "Members get
+   this" panel (lib/membership.js membersPanel), so the app shows what membership adds and a Join button instead of a
+   bare error. members_only and tier_required say why in words a page can test. The price and interval are the ones
+   in PLAN_CONFIG.all_access, read through lib/legalPages.js codeFacts (the same reading the Terms use), once; read that
+   way, not by naming PLAN_CONFIG here, so the routes lifted by the checks do not pull in the whole agent engine. */
+function membersPanelBody() {
+  return require("./lib/membership").membersPanelFromCode();
+}
+
 function subscriptionRequiredBody(planState, key) {
   return {
     error: "Active subscription required",
     upgrade_required: true,
+    members_only: true,
+    tier_required: "member",
+    members_panel: membersPanelBody(),
     // Which refusal it was, so a UI can tell "never subscribed" from "your row
     // went stale" instead of showing one message for both.
     reason: planState ? planState.inactive_reason : null,
@@ -4094,16 +4106,59 @@ async function refuseUnlessSubscribed(req, res, key) {
    subscriptions read. The browse routes look up each distinct owner on the
    page once. An admin owner logs the exemption on every view, as getUserPlan
    always has. A lookup that throws hides the page (fail closed). */
+/* NAMED (Nov 20 2026, P3-1): BEFORE a page was public only while its owner was
+   ENTITLED (getUserPlan().active), so a free account's profile, posts and
+   listings never showed. AFTER it is public while the owner is IN GOOD
+   STANDING: the account exists, is not banned, is not deleted, and moderation
+   has not hidden or removed its profile (lib/safety.js hiddenAmong "profile").
+   No plan is asked. A lookup that throws still hides the page (fail closed). */
 async function ownerPagePublic(userId) {
   if (!userId) return false;
   try {
-    const planState = await getUserPlan(userId);
-    return !!planState && planState.active === true;
-  } catch (planErr) {
-    console.error("[public-page] owner plan lookup failed for " + userId + ": " +
-      ((planErr && planErr.message) || planErr) + " — page hidden.");
+    const standing = await supabase.from("users").select("id, banned_at, role").eq("id", userId).maybeSingle();
+    if (standing.error) throw standing.error;
+    const owner = standing.data;
+    if (!owner || owner.banned_at || owner.role === "deleted") return false;
+    const hiddenProfiles = await require("./lib/safety").hiddenAmong(supabase, "profile", [userId]);
+    return !hiddenProfiles.has(userId);
+  } catch (standingErr) {
+    console.error("[public-page] owner standing lookup failed for " + userId + ": " +
+      ((standingErr && standingErr.message) || standingErr) + " — page hidden.");
     return false;
   }
+}
+
+/* P3-1: "member" while getUserPlan says active (a paying member, the owner or
+   an admin), otherwise "free". The one place the two words are decided. */
+function accessTier(planState) {
+  return planState && planState.active === true ? "member" : "free";
+}
+
+/* P3-1: whether a page's owner shows as "BizForce member" on the public
+   profile and storefront. A lookup that throws reads as not a member: the
+   label is never shown on a guess. */
+async function ownerIsMember(userId) {
+  if (!userId) return false;
+  try {
+    return accessTier(await getUserPlan(userId)) === "member";
+  } catch (memberErr) {
+    console.error("[public-page] member lookup failed for " + userId + ": " +
+      ((memberErr && memberErr.message) || memberErr) + " — shown as not a member.");
+    return false;
+  }
+}
+
+/* ── EMAIL VERIFICATION (P3-1) ──────────────────────────────────────────────
+   users.email_verified_at is the source (migration 122; requireAuth's session
+   embed selects it). Required before an account can post publicly, list in
+   the Market, message someone who does not follow it, or receive BizCash.
+   Browsing, following and setting up the profile need none. The refusal is
+   403 email_unverified with the resend route, and says nothing was saved.
+   The sentences live in lib/emailVerification.js. */
+function requireVerifiedEmail(req, res, next) {
+  const EV = require("./lib/emailVerification");
+  if (EV.isVerified(req.user)) return next();
+  return res.status(403).json(EV.unverifiedBody(String(req.method || "").toLowerCase() + " " + ((req.route && req.route.path) || "")));
 }
 
 async function publicOwnersAmong(userIds) {
@@ -5243,6 +5298,24 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       return res.status(409).json({ error: "Email already registered" });
     }
 
+    /* ONE ACCOUNT PER INBOX (P3-1, migration 195). Gmail dots and +tags reach
+       one inbox, so the folded address is what must be unique. Asked here,
+       before anything is written, with the same rule as the database's
+       email_canonical(); the unique index users_email_canonical_key is the
+       backstop, and its 23505 below gets the same answer. */
+    const signupCanonical = require("./lib/emailCanonical").canonicalEmail(email);
+    const { data: canonicalHolder, error: canonicalHolderError } = await supabase
+      .from("users")
+      .select("id")
+      .eq("email_canonical", signupCanonical)
+      .maybeSingle();
+    if (canonicalHolderError) {
+      throw canonicalHolderError;
+    }
+    if (canonicalHolder) {
+      return res.status(409).json({ error: require("./lib/emailCanonical").ALREADY_USED, reason: "email_in_use" });
+    }
+
     if (website) {
       const { data: existingWebsite, error: existingWebsiteError } = await supabase
         .from("profiles")
@@ -5317,6 +5390,12 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       if (userError.code === "42703" || userError.code === "PGRST204") {
         console.error("[register] REFUSED: users.terms_accepted_at / terms_version are missing (apply migration 146). " + userError.message);
         return res.status(503).json({ error: "Sign-up is paused for a few minutes while we update. No account was created; please try again shortly.", reason: "terms_columns_missing" });
+      }
+      /* Two sign-ups for one inbox at the same moment: the unique index on
+         email_canonical (or on email) refuses the second, and it gets the
+         same answer as the check above. Nothing was written. */
+      if (userError.code === "23505") {
+        return res.status(409).json({ error: require("./lib/emailCanonical").ALREADY_USED, reason: "email_in_use" });
       }
       throw userError;
     }
@@ -5989,7 +6068,14 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
           active: planState.active,
           exempt: planState.exempt,
           access_reason: planState.access_reason,
-          inactive_reason: planState.inactive_reason
+          inactive_reason: planState.inactive_reason,
+          /* P3-1: "member" or "free", from the same answer (accessTier). The
+             app lands a free account on Home and shows the members panel on
+             member-only pages; email_verified drives the verification banner. */
+          tier: accessTier(planState),
+          email_verified: !!req.user.email_verified_at,
+          /* P3-1: what membership adds and its price, from PLAN_CONFIG (lib/membership.js), for the app's members panel. */
+          members_panel: require("./lib/membership").membersPanelFromCode()
         };
       } else {
         console.error("[auth/me] getUserPlan returned no result for user " + req.user.id +
@@ -7871,6 +7957,7 @@ async function removeUnusedThemePhotos(userId, candidates) {
   if (!unused.length) return;
   const { error } = await supabase.storage.from("bf-public").remove(unused);
   if (error) console.error("[themes] unused photo removal failed for user " + userId + ": " + (error.message || error));
+  else await storageAccountReleaseMany("bf-public", unused);   // P3-1
 }
 
 app.get("/api/themes", requireAuth, themesLimiter, async function (req, res, next) {
@@ -7990,9 +8077,12 @@ app.post("/api/themes/photo", requireAuth, themePhotoLimiter, function (req, res
       // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
       const themeFull = await storageGuard(req.file.buffer.length);
       if (themeFull) return res.status(themeFull.status).json(themeFull.body);
+      // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+      const themeAccount = await storageAccountReserve(req.user.id, "bf-public", storagePath, req.file.buffer.length);
+      if (themeAccount) return res.status(themeAccount.status).json(themeAccount.body);
       const { error } = await supabase.storage.from("bf-public")
         .upload(storagePath, req.file.buffer, { contentType: checked.contentType, upsert: false });
-      if (error) return res.status(502).json({ error: "The photo could not be stored. Try again." });
+      if (error) { await storageAccountRelease("bf-public", storagePath); return res.status(502).json({ error: "The photo could not be stored. Try again." }); }
       return res.status(201).json({ path: storagePath, url: supabase.storage.from("bf-public").getPublicUrl(storagePath).data.publicUrl });
     } catch (error) { next(error); }
   });
@@ -8087,12 +8177,16 @@ app.post("/api/music/tracks", requireAuth, musicUploadLimiter, function (req, re
       // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
       const musicFull = await storageGuard(req.file.buffer.length);
       if (musicFull) return res.status(musicFull.status).json(musicFull.body);
+      // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+      const musicAccount = await storageAccountReserve(req.user.id, memberMusic.BUCKET, row.storage_path, req.file.buffer.length);
+      if (musicAccount) return res.status(musicAccount.status).json(musicAccount.body);
       const { error: upError } = await supabase.storage.from(memberMusic.BUCKET)
         .upload(row.storage_path, req.file.buffer, { contentType: checked.mime, upsert: false });
-      if (upError) return res.status(502).json({ error: "The file could not be stored. Try again." });
+      if (upError) { await storageAccountRelease(memberMusic.BUCKET, row.storage_path); return res.status(502).json({ error: "The file could not be stored. Try again." }); }
       const { data, error } = await supabase.from("member_tracks").insert(row).select("id, title, artist, duration_secs, mime, size_bytes, created_at").single();
       if (error) {
         await supabase.storage.from(memberMusic.BUCKET).remove([row.storage_path]);
+        await storageAccountRelease(memberMusic.BUCKET, row.storage_path);
         throw error;
       }
       return res.status(201).json({ track: memberMusic.publicTrack(data), used_bytes: memberMusic.usedBytes(state.tracks) + checked.size });
@@ -8311,8 +8405,11 @@ app.post("/api/media", requireAuth, requireActiveSubscription, mediaUploadLimite
       if (mediaFull) return res.status(mediaFull.status).json(mediaFull.body);
 
       const path = memberMedia.mediaPath(userId, checked.ext);
+      // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+      const mediaAccount = await storageAccountReserve(userId, memberMedia.BUCKET, path, checked.size);
+      if (mediaAccount) return res.status(mediaAccount.status).json(mediaAccount.body);
       const stored = await supabase.storage.from(memberMedia.BUCKET).upload(path, checked.bytes, { contentType: checked.mime, upsert: false });
-      if (stored.error) return res.status(502).json({ error: memberMedia.MESSAGES.stored });
+      if (stored.error) { await storageAccountRelease(memberMedia.BUCKET, path); return res.status(502).json({ error: memberMedia.MESSAGES.stored }); }
 
       const ins = await supabase.from("member_media").insert(Object.assign({
         user_id: userId, path: path, kind: checked.kind, mime: checked.mime, bytes: checked.size, sha256: checked.sha256,
@@ -8320,6 +8417,7 @@ app.post("/api/media", requireAuth, requireActiveSubscription, mediaUploadLimite
       }, text.updates)).select(MEDIA_COLUMNS).single();
       if (ins.error) {
         await supabase.storage.from(memberMedia.BUCKET).remove([path]);
+        await storageAccountRelease(memberMedia.BUCKET, path);
         if (ins.error.code === "23505") {
           const raced = await supabase.from("member_media").select(MEDIA_COLUMNS).eq("user_id", userId).eq("sha256", checked.sha256).maybeSingle();
           if (!raced.error && raced.data) return res.status(200).json({ item: memberMedia.publicItem(raced.data), duplicate: true });
@@ -8329,6 +8427,7 @@ app.post("/api/media", requireAuth, requireActiveSubscription, mediaUploadLimite
 
       if (await memberMedia.overCap(supabase, userId, ins.data.id)) {
         await supabase.storage.from(memberMedia.BUCKET).remove([path]);
+        await storageAccountRelease(memberMedia.BUCKET, path);
         await supabase.from("member_media").delete().eq("id", ins.data.id).eq("user_id", userId);
         return res.status(413).json({ error: memberMedia.MESSAGES.full, reason: "full" });
       }
@@ -8540,6 +8639,16 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
     // NAMED (Nov 20 2026, P2-2): a member blocked either way cannot be messaged; the answer never says why
     if (await require("./lib/safety").blockedEitherWay(supabase, req.user.id, receiverId)) {
       return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable, reason: "not_available" });
+    }
+    /* P3-1: messaging someone who does not follow you needs a confirmed email (lib/emailVerification.js). A reply to a
+       follower never does. The follow is read fresh; a read error refuses (500), nothing is sent. */
+    if (!require("./lib/emailVerification").isVerified(req.user)) {
+      const followsSender = await supabase.from("follows").select("follower_id")
+        .eq("follower_id", receiverId).eq("following_id", req.user.id).maybeSingle();
+      if (followsSender.error) throw followsSender.error;
+      if (!followsSender.data) {
+        return res.status(403).json(require("./lib/emailVerification").unverifiedBody("message_non_follower"));
+      }
     }
 
     const { data, error } = await supabase
@@ -8895,7 +9004,7 @@ const postPhotoLimiter = rateLimit({
 const postPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: require("./lib/postMedia").PHOTO_MAX_BYTES, files: 1 } });
 
 /* One photo or thumbnail, field "file", at most 600 KB, through the media library's rules and the shared storage guard. */
-app.post("/api/posts/photos", requireAuth, requireActiveSubscription, postPhotoLimiter, function (req, res, next) {
+app.post("/api/posts/photos", requireAuth, postPhotoLimiter, function (req, res, next) {
   postPhotoUpload.single("file")(req, res, async function (photoError) {
     try {
       const PM = require("./lib/postMedia");
@@ -8904,12 +9013,14 @@ app.post("/api/posts/photos", requireAuth, requireActiveSubscription, postPhotoL
         return res.status(big ? 413 : 400).json({ error: big ? PM.MESSAGES.tooBig : memberMedia.MESSAGES.field, reason: big ? "too_big" : "field" });
       }
       const r = await PM.storePhoto({ sb: supabase, storage: supabase.storage, base: process.env.SUPABASE_URL,
-        guard: function (bytes) { return storageGuard(bytes); } }, req.user.id, req.file);
+        guard: function (bytes) { return storageGuard(bytes); },
+        account: function (bucket, key, bytes) { return storageAccountReserve(req.user.id, bucket, key, bytes); },
+        release: function (bucket, key) { return storageAccountRelease(bucket, key); } }, req.user.id, req.file);
       return res.status(r.status).json(r.body);
     } catch (error) { next(error); }
   });
 });
-app.post("/api/posts", requireAuth, requireActiveSubscription, postRoute(function (req) { return require("./lib/posts").createPost(postDeps(), req.user.id, req.body); }));
+app.post("/api/posts", requireAuth, postRoute(function (req) { return require("./lib/posts").createPost(postDeps(), req.user.id, req.body); }));
 app.get("/api/posts/saved", requireAuth, postRoute(function (req) { return require("./lib/posts").savedPosts(postDeps(), req.user.id, req.query.cursor); }));
 app.get("/api/posts/by/:userId", postRoute(async function (req) {
   return require("./lib/posts").postsByAuthor(postDeps(), await viewerIdFrom(req), req.params.userId, req.query.cursor);
@@ -8940,6 +9051,26 @@ app.get("/api/follows/:userId/:which", requireAuth, postRoute(function (req) {
    upload on the site. null when `bytes` more fit; else the refusal { status, body }, and nothing may be uploaded. */
 function storageGuard(bytes) {
   return require("./lib/storageGuard").refusal(supabase, bytes);
+}
+
+/* P3-1 (Nov 20 2026): STORAGE PER ACCOUNT (lib/storageAccount.js, migrations 196 to 198), asked right after the shared
+   guard before every upload: free 50 MB, member 500 MB, the owner exempt. null when the file is counted; else the
+   refusal { status, body } and nothing may be stored. A failed upload and every delete call storageAccountRelease. */
+async function storageAccountReserve(userId, bucket, path, bytes) {
+  let who;
+  try {
+    who = { owner: isOwnerAccount(userId), tier: accessTier(await getUserPlan(userId)) };
+  } catch (tierErr) {
+    console.error("[storage-account] plan lookup failed for " + userId + ": " + ((tierErr && tierErr.message) || tierErr) + " — counted as free.");
+    who = { owner: isOwnerAccount(userId), tier: "free" };
+  }
+  return require("./lib/storageAccount").reserve(supabase, userId, who, bucket, path, bytes);
+}
+function storageAccountRelease(bucket, path) {
+  return require("./lib/storageAccount").release(supabase, bucket, path);
+}
+function storageAccountReleaseMany(bucket, paths) {
+  return require("./lib/storageAccount").releaseMany(supabase, bucket, paths);
 }
 
 /* GATED. This was one of only two authenticated model-call routes in this file
@@ -35603,7 +35734,10 @@ function youtubeDeps() {
     claims: blueskyClaimsRefusal,
     env: process.env,
     // NAMED (Nov 20 2026, P2-3): the shared storage guard, which a video must pass besides its own budget
-    storageGuard: storageGuard
+    storageGuard: storageGuard,
+    // P3-1: storage per account, reserved for the whole file and released when it goes
+    storageAccount: storageAccountReserve,
+    storageRelease: storageAccountRelease
   };
 }
 
@@ -48971,6 +49105,10 @@ async function bfcSendWithinLimitsSteps(req, res, send) {
         reason: "unknown_recipient"
       });
     }
+    /* P3-1: receiving BizCash needs a confirmed email (lib/emailVerification.js). Refused before anything moves. */
+    if (!(await require("./lib/emailVerification").verifiedById(supabase, recipient.id))) {
+      return res.status(409).json(require("./lib/emailVerification").recipientUnverifiedBody("receive_bizcash"));
+    }
 
     const sent = await bfcSentLast24h(req.user.id);
     if (sent.error) {
@@ -49704,7 +49842,9 @@ app.get("/api/marketplace/my-listings", requireAuth, async function (req, res, n
   } catch (error) { next(error); }
 });
 
-app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, async function (req, res, next) {
+/* NAMED (Nov 20 2026, P3-1): BEFORE publishing a listing needed a subscription (requireActiveSubscription). AFTER selling and
+   listing are free (group F, lib/routeAccess.js), and need a confirmed email (requireVerifiedEmail, lib/emailVerification.js). */
+app.post("/api/marketplace/listings", requireAuth, requireVerifiedEmail, async function (req, res, next) {
   try {
     const title       = safeText(req.body.title, 150);
     const description = safeText(req.body.description, 2000);
@@ -49750,11 +49890,15 @@ app.post("/api/marketplace/upload-digital", requireAuth, oracleUpload.single("fi
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
     const digitalFull = await storageGuard(file.buffer.length);
     if (digitalFull) return res.status(digitalFull.status).json(digitalFull.body);
+    // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+    const digitalAccount = await storageAccountReserve(req.user.id, "bf-digital-goods", storagePath, file.buffer.length);
+    if (digitalAccount) return res.status(digitalAccount.status).json(digitalAccount.body);
 
     const uploadResult = await supabase.storage
       .from("bf-digital-goods")
       .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
     if (uploadResult.error) {
+      await storageAccountRelease("bf-digital-goods", storagePath);
       console.error("[marketplace] Digital file upload failed:", uploadResult.error.message || uploadResult.error);
       return res.status(500).json({ error: "Failed to store digital file: " + uploadResult.error.message });
     }
@@ -49788,6 +49932,11 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
       if ((await SF.hiddenAmong(supabase, "listing", [listingId])).has(listingId) || await SF.blockedEitherWay(supabase, req.user.id, priced.seller_id)) {
         return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable, reason: "not_available" });
       }
+      /* P3-1: buying is members only (lib/routeAccess.js M), and the SELLER receives BizCash, which needs a confirmed email.
+         Refused before bfc_buy_listing runs, so nothing moves. */
+      if (!(await require("./lib/emailVerification").verifiedById(supabase, priced.seller_id))) {
+        return res.status(409).json(require("./lib/emailVerification").recipientUnverifiedBody("receive_bizcash"));
+      }
     }
 
     const { data, error } = await supabase.rpc("bfc_buy_listing", {
@@ -49808,20 +49957,17 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
 
 app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, next) {
   try {
-    /* A PAUSE IS ALWAYS ALLOWED; ANY OTHER EDIT NEEDS A SUBSCRIPTION. A seller
-       who lapses must still be able to take a listing out of public view —
-       pausing, like deleting, only removes what strangers see. Changing its
-       price, text, media, category or tags, or setting it active or sold, is
-       editing a public listing. Only the fields this route reads count: a body
-       of exactly { status: "paused" } is a pause. */
+    /* A PAUSE IS ALWAYS ALLOWED; ANY OTHER EDIT NEEDS A CONFIRMED EMAIL.
+       NAMED (Nov 20 2026, P3-1): BEFORE any edit but a pause needed a subscription (refuseUnlessSubscribed, G3). AFTER listing
+       is free, so an edit needs only what listing needs: a confirmed email (lib/emailVerification.js). Pausing, like deleting,
+       only removes what strangers see, so it never needs either. Only the fields this route reads count: a body of exactly
+       { status: "paused" } is a pause. */
     const LISTING_EDIT_FIELDS = ["title", "description", "price_bfc", "price_usd", "category", "tags", "media"];
     const pauseOnly = req.body.status === "paused" &&
       LISTING_EDIT_FIELDS.every(function (f) { return req.body[f] === undefined; });
-    if (!pauseOnly && await refuseUnlessSubscribed(req, res, "put /api/marketplace/listings/:id")) {
-      recordGateDecision(req.user.id, "route_access", "route:put /api/marketplace/listings/:id", { G3: { result: "fail", code: "subscription_required" } }, { gates: ["G3"] });
-      return;
+    if (!pauseOnly && !require("./lib/emailVerification").isVerified(req.user)) {
+      return res.status(403).json(require("./lib/emailVerification").unverifiedBody("list_market"));
     }
-    if (!pauseOnly) recordGateDecision(req.user.id, "route_access", "route:put /api/marketplace/listings/:id", { G3: { result: "pass" } }, { gates: ["G3"] });
 
     const updates = { updated_at: nowIso() };
     if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
@@ -50440,6 +50586,10 @@ app.post("/api/crowdfunding/campaigns/:id/donate", requireAuth, requireActiveSub
       if ((await SF.hiddenAmong(supabase, "campaign", [campaign.id])).has(campaign.id) || await SF.blockedEitherWay(supabase, req.user.id, campaign.owner_id)) {
         return res.status(404).json({ error: SF.MESSAGES.notAvailable + " Nothing was sent.", reason: "not_available" });
       }
+    }
+    /* P3-1: the campaign's owner receives the BizCash, which needs a confirmed email (lib/emailVerification.js). */
+    if (!(await require("./lib/emailVerification").verifiedById(supabase, campaign.owner_id))) {
+      return res.status(409).json(require("./lib/emailVerification").recipientUnverifiedBody("receive_bizcash"));
     }
 
     const sent = await bfcSentLast24h(req.user.id);
@@ -51647,11 +51797,15 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
     var bookFull = await storageGuard(pdfBuffer.length);
     if (bookFull) return res.status(bookFull.status).json(bookFull.body);
+    // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+    var bookAccount = await storageAccountReserve(req.user.id, "bf-books", storagePath, pdfBuffer.length);
+    if (bookAccount) return res.status(bookAccount.status).json(bookAccount.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
       .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: false });
     if (uploadResult.error) {
+      await storageAccountRelease("bf-books", storagePath);
       console.error("[bizbook] Storage upload failed:", uploadResult.error.message || uploadResult.error);
       return res.status(500).json({ error: "Failed to store generated book: " + uploadResult.error.message });
     }
@@ -51663,10 +51817,13 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
       epubBuffer = await generateBookEpub(manuscriptText, { title: title, author: author });
       // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: EPUB is skipped, as when its upload fails)
       if (await storageGuard(epubBuffer.length)) throw new Error("the shared storage guard refused the EPUB");
+      // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard (refused: EPUB is skipped)
+      if (await storageAccountReserve(req.user.id, "bf-books", epubStoragePath, epubBuffer.length)) throw new Error("the account's storage is full, so the EPUB was skipped");
       var epubUploadResult = await supabase.storage
         .from("bf-books")
         .upload(epubStoragePath, epubBuffer, { contentType: "application/epub+zip", upsert: false });
       if (epubUploadResult.error) {
+        await storageAccountRelease("bf-books", epubStoragePath);
         console.error("[bizbook] EPUB storage upload failed:", epubUploadResult.error.message || epubUploadResult.error);
         epubUploadFailed = true;
       }
@@ -51685,11 +51842,14 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
         var candidateCoverPath = req.user.id + "/" + Date.now() + "_" + safeFileName + "_cover." + coverExt;
         // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: cover is skipped, as when its upload fails)
         if (await storageGuard(coverFile.buffer.length)) throw new Error("the shared storage guard refused the cover");
+        // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard (refused: cover is skipped)
+        if (await storageAccountReserve(req.user.id, "bf-books", candidateCoverPath, coverFile.buffer.length)) throw new Error("the account's storage is full, so the cover was skipped");
 
         var coverUploadResult = await supabase.storage
           .from("bf-books")
           .upload(candidateCoverPath, coverFile.buffer, { contentType: coverFile.mimetype, upsert: false });
         if (coverUploadResult.error) {
+          await storageAccountRelease("bf-books", candidateCoverPath);
           console.error("[bizbook] cover upload failed:", coverUploadResult.error.message || coverUploadResult.error);
         } else {
           coverStoragePath = candidateCoverPath;
@@ -51851,11 +52011,15 @@ app.post("/api/bizbook/books/:id/cover", requireAuth, oracleUpload.single("cover
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
     var coverFull = await storageGuard(coverFile.buffer.length);
     if (coverFull) return res.status(coverFull.status).json(coverFull.body);
+    // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+    var coverAccount = await storageAccountReserve(req.user.id, "bf-books", newCoverPath, coverFile.buffer.length);
+    if (coverAccount) return res.status(coverAccount.status).json(coverAccount.body);
 
     var coverUploadResult = await supabase.storage
       .from("bf-books")
       .upload(newCoverPath, coverFile.buffer, { contentType: coverFile.mimetype, upsert: false });
     if (coverUploadResult.error) {
+      await storageAccountRelease("bf-books", newCoverPath);
       console.error("[bizbook] cover upload failed:", coverUploadResult.error.message || coverUploadResult.error);
       return res.status(500).json({ error: "Failed to upload cover" });
     }
@@ -51872,6 +52036,7 @@ app.post("/api/bizbook/books/:id/cover", requireAuth, oracleUpload.single("cover
     if (book.cover_path && book.cover_path !== newCoverPath) {
       try {
         await supabase.storage.from("bf-books").remove([book.cover_path]);
+        await storageAccountRelease("bf-books", book.cover_path);
       } catch (cleanupErr) {
         console.error("[bizbook] Failed to remove old cover (non-fatal):", cleanupErr.message || cleanupErr);
       }
@@ -52057,11 +52222,15 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
     var contentBookFull = await storageGuard(pdfBuffer.length);
     if (contentBookFull) return res.status(contentBookFull.status).json(contentBookFull.body);
+    // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+    var contentBookAccount = await storageAccountReserve(req.user.id, "bf-books", storagePath, pdfBuffer.length);
+    if (contentBookAccount) return res.status(contentBookAccount.status).json(contentBookAccount.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
       .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: false });
     if (uploadResult.error) {
+      await storageAccountRelease("bf-books", storagePath);
       console.error("[bizbook] generate-from-content PDF upload failed:", uploadResult.error.message || uploadResult.error);
       return res.status(500).json({ error: "Failed to store generated book: " + uploadResult.error.message });
     }
@@ -52072,10 +52241,13 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
       // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: EPUB is skipped, as when its upload fails)
       if (await storageGuard(epubBuffer.length)) throw new Error("the shared storage guard refused the EPUB");
       var epubPath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".epub";
+      // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard (refused: EPUB is skipped)
+      if (await storageAccountReserve(req.user.id, "bf-books", epubPath, epubBuffer.length)) throw new Error("the account's storage is full, so the EPUB was skipped");
       var epubUploadResult = await supabase.storage
         .from("bf-books")
         .upload(epubPath, epubBuffer, { contentType: "application/epub+zip", upsert: false });
       if (epubUploadResult.error) {
+        await storageAccountRelease("bf-books", epubPath);
         console.error("[bizbook] generate-from-content EPUB upload failed:", epubUploadResult.error.message || epubUploadResult.error);
       } else {
         epubStoragePath = epubPath;
@@ -52110,6 +52282,7 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
     if (supersededPaths.length) {
       try {
         var removal = await supabase.storage.from("bf-books").remove(supersededPaths);
+        if (!(removal && removal.error)) await storageAccountReleaseMany("bf-books", supersededPaths);   // P3-1
         if (removal && removal.error) {
           console.error("[bizbook] Failed to remove superseded book files (non-fatal):", removal.error.message || removal.error);
         }
@@ -52173,11 +52346,15 @@ app.post("/api/bizbook/books/create-from-content", requireAuth, async function (
       // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
       var createdBookFull = await storageGuard(pdfBuffer.length);
       if (createdBookFull) return res.status(createdBookFull.status).json(Object.assign({ book: book }, createdBookFull.body));
+      // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+      var createdBookAccount = await storageAccountReserve(req.user.id, "bf-books", storagePath, pdfBuffer.length);
+      if (createdBookAccount) return res.status(createdBookAccount.status).json(Object.assign({ book: book }, createdBookAccount.body));
 
       var uploadResult = await supabase.storage
         .from("bf-books")
         .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: false });
       if (uploadResult.error) {
+        await storageAccountRelease("bf-books", storagePath);
         console.error("[bizbook] create-from-content PDF upload failed:", uploadResult.error.message || uploadResult.error);
         return res.status(200).json({ book: book });
       }
@@ -52188,10 +52365,13 @@ app.post("/api/bizbook/books/create-from-content", requireAuth, async function (
         // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: EPUB is skipped, as when its upload fails)
         if (await storageGuard(epubBuffer.length)) throw new Error("the shared storage guard refused the EPUB");
         var epubPath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".epub";
+        // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard (refused: EPUB is skipped)
+        if (await storageAccountReserve(req.user.id, "bf-books", epubPath, epubBuffer.length)) throw new Error("the account's storage is full, so the EPUB was skipped");
         var epubUploadResult = await supabase.storage
           .from("bf-books")
           .upload(epubPath, epubBuffer, { contentType: "application/epub+zip", upsert: false });
         if (epubUploadResult.error) {
+          await storageAccountRelease("bf-books", epubPath);
           console.error("[bizbook] create-from-content EPUB upload failed:", epubUploadResult.error.message || epubUploadResult.error);
         } else {
           epubStoragePath = epubPath;
@@ -52241,6 +52421,7 @@ app.delete("/api/bizbook/books/:id", requireAuth, async function (req, res, next
       if (book.storage_path_epub) pathsToRemove.push(book.storage_path_epub);
       if (book.cover_path) pathsToRemove.push(book.cover_path);
       await supabase.storage.from("bf-books").remove(pathsToRemove);
+      await storageAccountReleaseMany("bf-books", pathsToRemove);   // P3-1
     } catch (cleanupErr) {
       console.log("[bizbook] delete cleanup failed:", cleanupErr.message || cleanupErr);
     }
@@ -52446,11 +52627,15 @@ app.post("/api/cover-wraps/:id/bg-image", requireAuth, oracleUpload.single("bg_i
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
     var wrapFull = await storageGuard(bgFile.buffer.length);
     if (wrapFull) return res.status(wrapFull.status).json(wrapFull.body);
+    // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+    var wrapAccount = await storageAccountReserve(req.user.id, "bf-books", newPath, bgFile.buffer.length);
+    if (wrapAccount) return res.status(wrapAccount.status).json(wrapAccount.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
       .upload(newPath, bgFile.buffer, { contentType: bgFile.mimetype, upsert: false });
     if (uploadResult.error) {
+      await storageAccountRelease("bf-books", newPath);
       console.error("[cover-wraps] bg-image upload failed:", uploadResult.error.message || uploadResult.error);
       return res.status(500).json({ error: "Failed to upload image" });
     }
@@ -52461,6 +52646,7 @@ app.post("/api/cover-wraps/:id/bg-image", requireAuth, oracleUpload.single("bg_i
         && oldBgImage !== newPath) {
       try {
         await supabase.storage.from("bf-books").remove([oldBgImage]);
+        await storageAccountRelease("bf-books", oldBgImage);
       } catch (cleanupErr) {
         console.error("[cover-wraps] Failed to remove old bg-image (non-fatal):", cleanupErr.message || cleanupErr);
       }
@@ -52658,11 +52844,15 @@ app.post("/api/editor/image", requireAuth, oracleUpload.single("image"), async f
     // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
     var editorFull = await storageGuard(imgFile.buffer.length);
     if (editorFull) return res.status(editorFull.status).json(editorFull.body);
+    // P3-1: storage per account (free 50 MB, member 500 MB, the owner exempt), after the shared guard
+    var editorAccount = await storageAccountReserve(req.user.id, "bf-books", newPath, imgFile.buffer.length);
+    if (editorAccount) return res.status(editorAccount.status).json(editorAccount.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
       .upload(newPath, imgFile.buffer, { contentType: imgFile.mimetype, upsert: false });
     if (uploadResult.error) {
+      await storageAccountRelease("bf-books", newPath);
       console.error("[editor] image upload failed:", uploadResult.error.message || uploadResult.error);
       return res.status(500).json({ error: "Failed to upload image" });
     }
@@ -52961,6 +53151,7 @@ async function removeDisplacedCardMedia(priorRow, updatedRow, userId, logTag) {
 
   try {
     const removal = await supabase.storage.from("bf-public").remove(keys);
+    if (!removal.error) await storageAccountReleaseMany("bf-public", keys);   // P3-1
     if (removal.error) {
       console.error("[%s] Failed to remove displaced media (non-fatal): %s",
         tag, removal.error.message || removal.error);
@@ -53543,7 +53734,18 @@ const BFP_FONTS = ["modern", "classic", "technical"];
 // The folder is one of the pages' own nine, exactly: never media/ (the Media
 // Library, which only POST /api/media writes), never a path with "/".
 const UPLOAD_URL_FOLDERS = ["marketplace-media", "card-media", "banners", "avatars", "videos", "music", "music-art", "products", "portfolio"];
-app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
+/* P3-1 (Nov 20 2026): signed upload URLs are rate-limited per member (UPLOAD_URL_PER_HOUR an hour), so no account can
+   ask for an unbounded number of uploads; each URL also reserves its declared size against the account's storage. */
+const UPLOAD_URL_PER_HOUR = 60;
+const uploadUrlLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: UPLOAD_URL_PER_HOUR,
+  keyGenerator: function (req) { return "upload-url:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can start " + UPLOAD_URL_PER_HOUR + " uploads an hour. Try again later.", reason: "rate_limited" }
+});
+app.post("/api/bfp/upload-url", requireAuth, uploadUrlLimiter, async function (req, res, next) {
   if (typeof req.body.folder !== "string" || UPLOAD_URL_FOLDERS.indexOf(req.body.folder) === -1) {
     return res.status(400).json({ error: "folder must be one of: " + UPLOAD_URL_FOLDERS.join(", ") + ".", reason: "folder" });
   }
@@ -53561,6 +53763,9 @@ app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
   if (signedFull) return res.status(signedFull.status).json(signedFull.body);
   const safeName    = filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
   const storagePath = `${folder}/${req.user.id}/${Date.now()}_${safeName}`;
+  // P3-1: storage per account, the DECLARED size now; POST /api/bfp/upload-check reserves again with the real size
+  const signedAccount = await storageAccountReserve(req.user.id, "bf-public", storagePath, Number(req.body.size));
+  if (signedAccount) return res.status(signedAccount.status).json(signedAccount.body);
 
   console.log("[upload-url] REQUEST  folder=%s file=%s ct=%s path=%s", folder, filename, contentType, storagePath);
   console.log("[upload-url] ENV CHECK  SUPABASE_URL=%s  SERVICE_KEY_SET=%s",
@@ -53574,10 +53779,12 @@ app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
       .createSignedUploadUrl(storagePath);
 
     if (error) {
+      await storageAccountRelease("bf-public", storagePath);
       console.error("[upload-url] Supabase error:", JSON.stringify(error));
       return res.status(502).json({ error: "Storage error: " + (error.message || JSON.stringify(error)) });
     }
     if (!data || !data.signedUrl) {
+      await storageAccountRelease("bf-public", storagePath);
       console.error("[upload-url] No signedUrl in response — data:", JSON.stringify(data));
       return res.status(502).json({ error: "Storage returned no signed URL" });
     }
@@ -53606,7 +53813,17 @@ app.post("/api/bfp/upload-check", requireAuth, async function (req, res, next) {
     if (verdict.error) {
       const gone = await supabase.storage.from("bf-public").remove([req.body.path]);
       if (gone.error) console.error("[upload-check] a refused upload could not be deleted: " + req.body.path);
+      await storageAccountRelease("bf-public", req.body.path);
       return res.status(verdict.status).json({ error: verdict.error, reason: verdict.reason });
+    }
+    /* P3-1: the size that ARRIVED replaces the declared one in the account's storage count. Over the limit: the file is
+       deleted, its count released, and the page does not save the link. */
+    const arrived = await storageAccountReserve(req.user.id, "bf-public", req.body.path, buf.length);
+    if (arrived) {
+      const over = await supabase.storage.from("bf-public").remove([req.body.path]);
+      if (over.error) console.error("[upload-check] an upload over the account's storage could not be deleted: " + req.body.path);
+      await storageAccountRelease("bf-public", req.body.path);
+      return res.status(arrived.status).json(arrived.body);
     }
     return res.json({ ok: true, type: verdict.type });
   } catch (error) { next(error); }
@@ -53713,7 +53930,7 @@ app.delete("/api/bfp/profile/design", requireAuth, themesWriteLimiter, async fun
 app.get("/api/bfp/profile/:userId", async function (req, res, next) {
   try {
     const userId = safeText(req.params.userId, 60);
-    // Served only while its owner is entitled; otherwise it reads as no profile.
+    // Served only while its owner is in good standing (P3-1); otherwise it reads as no profile.
     if (!(await ownerPagePublic(userId))) return res.json({ profile: null });
     // NAMED (Nov 20 2026, P2-2): nor to a viewer blocked either way, nor while moderation hides it
     {
@@ -53728,7 +53945,9 @@ app.get("/api/bfp/profile/:userId", async function (req, res, next) {
     const design = profileDesignReply(data && data.profile_design, userId);
     if (data) data.profile_design = design.design;
     // Of the member's support settings, only the normalized links (URLs rebuilt) are public here.
-    return res.json({ profile: data, design_photo_url: design.photo_url, support_links: data ? await publicSupportLinks(userId) : [] });
+    // P3-1: member is true only for a BizForce member (ownerIsMember); the profile shows "BizForce member" only then.
+    return res.json({ profile: data, design_photo_url: design.photo_url, support_links: data ? await publicSupportLinks(userId) : [],
+      member: data ? await ownerIsMember(userId) : false });
   } catch (error) { next(error); }
 });
 
@@ -54212,7 +54431,9 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
       music: music,
       videos: videos,
       design_photo_url: sellerDesign.photo_url,
-      support_links: await publicSupportLinks(userId)
+      support_links: await publicSupportLinks(userId),
+      // P3-1: the storefront shows "BizForce member" only for a member (ownerIsMember).
+      member: await ownerIsMember(userId)
     });
   } catch (error) { next(error); }
 });
@@ -59423,6 +59644,16 @@ app.post("/api/sms/inbound", async function (req, res) {
      over a database problem helps nobody — the logs above carry the failure. */
   res.set("Content-Type", "text/xml");
   return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+});
+
+/* ── WHO MAY USE EACH ROUTE (P3-1, Nov 20 2026) ────────────────────────────
+   Every route is mounted above this line. lib/routeAccess.js names each one's
+   group (P public, F free and member, M members only, A admin), and this puts
+   requireActiveSubscription in front of every M route that is not written
+   with it, right after requireAuth. A route the table does not name is left
+   as written and logged; scripts/checkUnsubscribedSurface.js fails on it. */
+const ROUTE_ACCESS = require("./lib/routeAccess").applyRouteAccess(app, {
+  requireAuth: requireAuth, requireActiveSubscription: requireActiveSubscription, requireAdmin: requireAdmin
 });
 
 app.use(function (req, res) {

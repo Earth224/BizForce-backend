@@ -319,6 +319,8 @@ function liftRoutes(fake) {
     nowIso: () => "2026-10-31T00:00:00.000Z",
     safeText: (v, n) => v === undefined || v === null ? null : String(v).trim().slice(0, n || 5000),
     ownerPagePublic: async () => true, publicSupportLinks: async () => [],
+    // NAMED (Nov 20 2026, P3-1): the public profile says whether its owner is a member (checkFreeAccount runs ownerIsMember); here no one is.
+    ownerIsMember: async () => false,
     // NAMED (Nov 20 2026, P2-2): the save screens its text (policyScreen, policyQueue: checkContentPolicy runs the real screen) and the
     // public read asks who the viewer is (viewerIdFrom); here every text passes and no one is signed in.
     policyScreen: () => ({ ok: true, review: null }), policyRefused: (res, s) => res.status(400).json({ error: s.error }), policyQueue: async () => null,

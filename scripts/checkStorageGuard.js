@@ -40,7 +40,8 @@ const MUTATIONS = {
   "signed-unguarded": [[SERVER, "  const signedFull = await storageGuard(Number(req.body.size));\n", "  const signedFull = null;\n"]],
   "media-refusal-ignored": [[SERVER, "      const mediaFull = await storageGuard(checked.size);\n      if (mediaFull)", "      const mediaFull = await storageGuard(checked.size);\n      if (false)"]],
   "video-part-unguarded": [[MV, "    var partFull = await deps.storageGuard(0);\n    if (partFull) return partFull;\n", ""]],
-  "video-deps-no-guard": [[SERVER, "    storageGuard: storageGuard\n  };", "    storageGuard: null\n  };"]],
+  // NAMED (Nov 20 2026, P3-1): BEFORE the anchor ended the deps object ("storageGuard: storageGuard\n  };"); AFTER storage per account follows it.
+  "video-deps-no-guard": [[SERVER, "    storageGuard: storageGuard,\n", "    storageGuard: null,\n"]],
   "video-budget-one-page": [[MV, "    if (batch.length < PAGE_SIZE) return sum;\n  }\n  throw new Error(what + \" has more rows than the budget reads\");", "    return sum;\n  }\n  throw new Error(what + \" has more rows than the budget reads\");"]]
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, SG, SU, MV]);
@@ -120,7 +121,8 @@ const quiet = async fn => { const e = console.error; console.error = () => {}; t
   const stops = (S.match(/(?:const|var) (\w+Full) = await storageGuard\([^;]+\);\n\s+if \(\1\) return res\.status\(\1\.status\)\.json\([^\n]*\b\1\.body\)+;/g) || []).length;
   const optional = (S.match(/if \(await storageGuard\([^)]+\)\) throw new Error\("the shared storage guard refused the (EPUB|cover)"\);/g) || []).length;
   check("B2. a refusal stops each one: answered as the guard said (11), or an optional EPUB or cover skipped (4)", stops === 11 && optional === 4, stops + " + " + optional);
-  check("B3. post photos ask it through the route", has(S, "guard: function (bytes) { return storageGuard(bytes); } }, req.user.id, req.file);") &&
+  // NAMED (Nov 20 2026, P3-1): BEFORE the guard closed the deps ("...storageGuard(bytes); } }, req.user.id, req.file);"); AFTER storage per account (account, release) follows it.
+  check("B3. post photos ask it through the route", has(S, "        guard: function (bytes) { return storageGuard(bytes); },\n        account: function (bucket, key, bytes) { return storageAccountReserve(req.user.id, bucket, key, bytes); },") &&
     has(S, 'function storageGuard(bytes) {\n  return require("./lib/storageGuard").refusal(supabase, bytes);\n}'));
 
   /* ── C ── */
@@ -133,7 +135,7 @@ const quiet = async fn => { const e = console.error; console.error = () => {}; t
     up.indexOf("if (sharedFull) return sharedFull;") < up.indexOf("createSignedUploadUrl("));
   check("C2. each part asks again (for nothing more) before its signed URL", pu.indexOf("var partFull = await deps.storageGuard(0);\n    if (partFull) return partFull;") !== -1 &&
     pu.indexOf("deps.storageGuard(0)") < pu.indexOf("createSignedUploadUrl("));
-  check("C3. the server hands it in (youtubeDeps)", /function youtubeDeps\(\) \{[\s\S]{0,2500}?    storageGuard: storageGuard\n  \};/.test(S));
+  check("C3. the server hands it in (youtubeDeps)", /function youtubeDeps\(\) \{[\s\S]{0,2500}?    storageGuard: storageGuard,\n[\s\S]{0,300}?    storageAccount: storageAccountReserve,\n    storageRelease: storageAccountRelease\n  \};/.test(S));
   const MVX = T.libRequire("./lib/memberVideos");
   const rows = Array.from({ length: 2500 }, (_, i) => ({ id: "v" + String(i).padStart(5, "0"), bytes: 1000, status: "ready", path: "p" + i }));
   const db = memDb({ member_videos: rows, member_video_parts: [{ id: "q1", bytes: 7, video_id: null }] });

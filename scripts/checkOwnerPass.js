@@ -142,7 +142,7 @@ function liftFrom(src, name) {
 const NAMES = ["PAST_DUE_GRACE_DEFAULT_DAYS", "PAST_DUE_GRACE_MAX_DAYS", "parsePastDueGraceDays", "pastDueTimeOf", "pastDueGraceState",
   "SUBSCRIPTION_GRACE_DAYS", "SUBSCRIPTION_PAST_DUE_GRACE_DAYS", "subscriptionExpiryState", "subscriptionEntitlement",
   "ADMIN_EXEMPT_PLAN", "ADMIN_EXEMPT_CONFIG", "isExemptRole", "OWNER_PASS_PLAN", "isOwnerAccount", "getPlanConfig", "getUserPlan",
-  "BILLING_URL", "SUBSCRIPTION_REFUSAL_MESSAGES", "SUBSCRIPTION_REFUSAL_DEFAULT", "SUBSCRIPTION_PAST_DUE_MESSAGE", "subscriptionRequiredBody",
+  "BILLING_URL", "SUBSCRIPTION_REFUSAL_MESSAGES", "SUBSCRIPTION_REFUSAL_DEFAULT", "SUBSCRIPTION_PAST_DUE_MESSAGE", "membersPanelBody", "subscriptionRequiredBody",
   "refuseUnlessSubscribed", "ownerPagePublic", "requireActiveSubscription",
   "CHECKOUT_PRODUCTS", "PLAN_CONFIG", "AUTO_RENEW_CONSENT_VERSION", "autoRenewConsent"];
 const ROUTE_SIG = 'app.post("/api/stripe/checkout", requireAuth, async function (req, res) {';
@@ -186,7 +186,8 @@ function buildServer(src, opts) {
     const q = {};
     ["select", "eq", "not", "order", "limit", "in", "is", "gte", "lt"].forEach(k => { q[k] = () => q; });
     ["insert", "update", "upsert", "delete"].forEach(k => { q[k] = () => { dbCalls.push(table + ":" + k); return q; }; });
-    q.maybeSingle = async () => ({ data: null, error: null });
+    // NAMED (Nov 20 2026, P3-1): ownerPagePublic reads the owner's standing from users (not banned, not deleted); every account here is in good standing.
+    q.maybeSingle = async () => ({ data: table === "users" ? { id: OWNER, banned_at: null, role: "admin" } : null, error: null });
     q.then = (res, rej) => Promise.resolve({ data: null, error: null }).then(res, rej);
     return q;
   };
@@ -200,6 +201,7 @@ function buildServer(src, opts) {
     process: { env: Object.assign({ STRIPE_STARTER_PRICE_ID: "price_check" }, opts.env || {}) },
     console: { log: m => logs.push(String(m)), warn: m => logs.push(String(m)), error: m => logs.push(String(m)) },
     Date: D, Math, Number, String, Object, Array, JSON, Promise,
+    require: p => require(p.indexOf("./lib/") === 0 ? "." + p : p),   // NAMED (Nov 20 2026, P3-1): ownerPagePublic asks lib/safety, the 402 lib/membership
     AGENT_SYSTEM_PROMPTS: { seo: "", sales: "" },
     OWNER_ACCOUNT_ID: OWNER,
     getUserById: async (id) => USERS[id] || null,
@@ -295,7 +297,10 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       callers.push(m[0].replace(/^await /, "").replace("(", "") + " in " + last);
     }
     console.log("    entitlement readers:\n      " + callers.join("\n      "));
-    const KNOWN = ["subscriptionEntitlement in getUserPlan", "getUserPlan in refuseUnlessSubscribed", "getUserPlan in ownerPagePublic",
+    /* NAMED (Nov 20 2026, P3-1): BEFORE "getUserPlan in ownerPagePublic". AFTER ownerPagePublic means good standing and reads no plan;
+       two readers are new: ownerIsMember (the public "BizForce member" label; a failed read shows no label) and storageAccountReserve
+       (the storage limit, free 50 MB or member 500 MB; a failed read counts as free, the smaller limit). Neither lets a free account in. */
+    const KNOWN = ["subscriptionEntitlement in getUserPlan", "getUserPlan in refuseUnlessSubscribed", "getUserPlan in ownerIsMember", "getUserPlan in storageAccountReserve",
       "getUserPlan in requireActiveSubscription", "planLookup in createPassEntitlementCache",
       "getUserPlan in enforceAgentLimit", "getUserPlan in enforceTaskLimit", "getUserPlan in /api/auth/me", "getUserPlan in /api/agents",
       // NAMED (Oct 31 2026, gates B1): BEFORE "getUserPlan in dispatchToolCall"; AFTER "getUserPlan in dispatchToolCallSteps".

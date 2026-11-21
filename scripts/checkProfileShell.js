@@ -110,7 +110,7 @@ const settle = ms => new Promise(r => setTimeout(r, ms || 40));
   }
   const OWNER_ANSWERS = {
     // NAMED (Nov 20 2026, FX1): the owner is a paid member (BizCash, the wallet and "BizForce member" are a paid member's only)
-    "/api/auth/me": { access: { active: true } },
+    "/api/auth/me": { access: { active: true, tier: "member" } },   // NAMED (Nov 20 2026, P3-1): the shell reads access.tier
     "/api/bfp/profile/me": { profile: { username: "rose", display_name: "Rose", bio: "I make hats." } },
     "/api/bfp/profile/me/stats": { sales: 3, bizcash: 1500 },
     "/api/marketplace/my-listings": { listings: [
@@ -125,7 +125,7 @@ const settle = ms => new Promise(r => setTimeout(r, ms || 40));
   check("R2. Edit profile, Share profile and Wallet (wallet.html)", !!o.doc.getElementById("pfsEdit") && !!o.doc.getElementById("pfsShare") && !!o.doc.querySelector("a.pfs-btn.is-wallet[href=\"wallet.html\"]"));
   // NAMED (Nov 20 2026, FX1): the owner's decision: sending BizCash is for paid members, so BizCash, the gold wallet and
   // "BizForce member" show only for one (GET /api/auth/me access.active); a free owner, or one not yet known, sees none
-  const free = await render("https://bizforceai.net/profile.html", Object.assign({}, OWNER_ANSWERS, { "/api/auth/me": { access: { active: false } } }));
+  const free = await render("https://bizforceai.net/profile.html", Object.assign({}, OWNER_ANSWERS, { "/api/auth/me": { access: { active: false, tier: "free" } } }));
   const ft = free.text();
   check("R2b. a free owner: Sales, but no BizCash, no wallet and no \"BizForce member\"", /3\s*Sales/.test(ft) && !/BizCash|1,500|BizForce member/.test(ft) && !free.doc.querySelector(".pfs-btn.is-wallet") && /@rose/.test(ft), ft.slice(0, 300));
   check("R2c. a paid owner's handle line says BizForce member", /@rose · BizForce member/.test(ot), ot.slice(0, 120));

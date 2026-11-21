@@ -237,6 +237,8 @@ const LIMITS = loadModule(LIMITS_SRC);
 let idSeq = 1;
 const nextId = () => "row-" + (idSeq++);
 
+// NAMED (Nov 20 2026, P3-1): every account pushed below has confirmed its email (email_verified_at), so it can receive BizCash;
+// checkEmailVerified runs the unconfirmed one.
 function makeDb() {
   return { users: [], user_wallets: [], wallet_transactions: [], user_certifications: [], bf_profiles: [] };
 }
@@ -483,7 +485,7 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
   {
     const db = makeDb();
     const user = { id: uuid(10) };
-    db.users.push({ id: user.id, created_at: daysAgo(100) });
+    db.users.push({ id: user.id, email_verified_at: daysAgo(1), created_at: daysAgo(100) });
     const routes = buildRoutes(makeClient(db, { bfc_credit: bfcCreditModel }), {});
     const award = routes["post /api/certifications/award"];
     const sales1 = CATALOG.findCertification("sales-1");
@@ -537,7 +539,7 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
   {
     const db = makeDb();
     const user = { id: uuid(20) };
-    db.users.push({ id: user.id, created_at: daysAgo(100) });
+    db.users.push({ id: user.id, email_verified_at: daysAgo(1), created_at: daysAgo(100) });
     const routes = buildRoutes(makeClient(db, { bfc_credit: bfcCreditModel }), {});
     const award = routes["post /api/certifications/award"];
     const credit = Number((/await creditWallet\(req\.user\.id, (\d+), "Certification earned: " \+ certId\);/.exec(AWARD) || [])[1]);
@@ -589,7 +591,7 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
     const db = makeDb();
     const client = makeClient(db, { bfc_credit: bfcCreditModel, bfc_send: routeAlone ? bfcSendModel089 : bfcSendModel139 });
     const alice = { id: uuid(31) }, bob = { id: uuid(32) }, newbie = { id: uuid(33) }, ghost = uuid(99), gone = uuid(98);
-    db.users.push({ id: alice.id, created_at: daysAgo(30) }, { id: bob.id, created_at: daysAgo(30) }, { id: newbie.id, created_at: daysAgo(2) });
+    db.users.push({ id: alice.id, email_verified_at: daysAgo(1), created_at: daysAgo(30) }, { id: bob.id, email_verified_at: daysAgo(1), created_at: daysAgo(30) }, { id: newbie.id, email_verified_at: daysAgo(1), created_at: daysAgo(2) });
     // Profiles as they are stored: lowercase. "gone" is a profile whose account no longer exists.
     db.bf_profiles.push({ user_id: alice.id, username: "alice", display_name: "Alice A" }, { user_id: bob.id, username: "bob", display_name: "Bob B" },
       { user_id: newbie.id, username: "newbie", display_name: null }, { user_id: gone, username: "gone", display_name: "Gone" });
@@ -677,7 +679,7 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
       invariant(db, tag + "a raced transfer");
 
       const carol = { id: uuid(34) };
-      db.users.push({ id: carol.id, created_at: daysAgo(30) });
+      db.users.push({ id: carol.id, email_verified_at: daysAgo(1), created_at: daysAgo(30) });
       db.bf_profiles.push({ user_id: carol.id, username: "carol", display_name: "Carol C" });
       bfcCreditModel(db, { p_user_id: carol.id, p_amount: 50, p_type: "reward", p_description: "fixture" });
       const walletsBefore = JSON.stringify(db.user_wallets);
@@ -702,8 +704,8 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
     const db = makeDb();
     const client = makeClient(db, {});
     const me = { id: uuid(41) }, bob = uuid(42), plain = uuid(43);
-    db.users.push({ id: me.id, email: "me-private@example.com", created_at: daysAgo(30) },
-      { id: bob, email: "bob-private@example.com", created_at: daysAgo(30) }, { id: plain, email: "plain-private@example.com", created_at: daysAgo(30) });
+    db.users.push({ id: me.id, email: "me-private@example.com", email_verified_at: daysAgo(1), created_at: daysAgo(30) },
+      { id: bob, email: "bob-private@example.com", email_verified_at: daysAgo(1), created_at: daysAgo(30) }, { id: plain, email: "plain-private@example.com", email_verified_at: daysAgo(1), created_at: daysAgo(30) });
     db.user_wallets.push({ id: "w-bob", user_id: bob, balance: 4321 });
     // The fake hands back every column it holds, so the route must pick what it answers.
     db.bf_profiles.push({ user_id: me.id, username: "me", display_name: "Me" },

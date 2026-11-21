@@ -290,7 +290,8 @@ const R = {
   prefDel: routeText(SV, 'app.delete("/api/agents/:agentType/preferences/:id",'),
   owner: routeText(SV, 'app.get("/api/admin/agent-learning",')
 };
-const STUB = new Set(["supabase", "console", "process", "require", "module", "app", "requireAuth", "ownerPagePublic", "publicSupportLinks",
+// NAMED (Nov 20 2026, P3-1): ownerIsMember (the profile's member label) is stubbed; checkFreeAccount runs the real one.
+const STUB = new Set(["supabase", "console", "process", "require", "module", "app", "requireAuth", "ownerPagePublic", "publicSupportLinks", "ownerIsMember",
   "isOwnerAccount", "loadArrivals", "callAnthropicText", "Date", "Math", "JSON", "Object", "Number", "String", "Array", "Promise", "Error", "Set", "Map", "URL", "Buffer"]);
 function closure(root) {
   const have = new Map();
@@ -319,6 +320,7 @@ const CTX = {
   },
   requireAuth: function requireAuth(req, res, next) { next(); },
   ownerPagePublic: async function () { return true; },
+  ownerIsMember: async function () { return false; },
   publicSupportLinks: async function () { return []; },
   isOwnerAccount: function (id) { return id === OWNER; },
   loadArrivals: async function () { return { visits: { rows: [{ ref: "bl-1", created_at: daysAgo(2) }, { ref: "bl-2", created_at: daysAgo(40) }] } }; },

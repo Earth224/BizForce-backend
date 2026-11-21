@@ -9,7 +9,7 @@
    download, and the listing sold out after one copy.
 
    WHAT THIS PROVES
-     R. THE MIGRATIONS: 194 is the highest (P2-3); only 191 to 194 are above 190.
+     R. THE MIGRATIONS: 198 is the highest (P3-1); only 191 to 198 are above 190.
      S. MIGRATION 192, as text: one transaction; the guard drops only a
         single-column unique rule on marketplace_orders.listing_id (and says
         so); and the function is 089's body with exactly the documented
@@ -57,8 +57,11 @@ const BUYER = "11111111-1111-4111-8111-111111111111", SELLER = "22222222-2222-42
   const above = fs.readdirSync(dir).filter(f => /^\d{3}_.*\.sql$/.test(f) && Number(f.slice(0, 3)) > 190).sort();
   // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): BEFORE "the highest migration is 192" and "only 191 and 192 are above 190".
   // AFTER 194 is the highest, and 193_posts.sql and 194_social_graph.sql are allowed above 190 too, by name.
-  check("R1. the highest migration is 194 (P2-3)", Math.max(...nums) === 194, Math.max(...nums));
-  check("R2. only 191, 192, 193 and 194 are above 190", J(above) === J(["191_safety.sql", "192_buy_listing_digital.sql", "193_posts.sql", "194_social_graph.sql"]), J(above));
+  // NAMED (Nov 20 2026, P3-1, migrations 195 to 198): BEFORE "the highest migration is 194" and "only 191 to 194 are above 190".
+  // AFTER 198 is the highest, and 195_users_email_canonical.sql, 196_storage_account_tables.sql, 197_storage_account_functions.sql and
+  // 198_storage_account_backfill.sql (P3-1A's 196a/196b/196c, renamed) are allowed above 190 too, by name.
+  check("R1. the highest migration is 198 (P3-1)", Math.max(...nums) === 198, Math.max(...nums));
+  check("R2. only 191 to 198 are above 190", J(above) === J(["191_safety.sql", "192_buy_listing_digital.sql", "193_posts.sql", "194_social_graph.sql", "195_users_email_canonical.sql", "196_storage_account_tables.sql", "197_storage_account_functions.sql", "198_storage_account_backfill.sql"]), J(above));
 
   /* ── S ── */
   console.log("\n══ S. migration 192 ══");

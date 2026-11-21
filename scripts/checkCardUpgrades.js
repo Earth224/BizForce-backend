@@ -302,6 +302,11 @@ function seed() {
       card("other", OTHER, { slug: "other-card", discoverable: false }),
       card("quiet", OWNER, { slug: "quiet-card", discoverable: false })
     ],
+    /* NAMED (Nov 20 2026, P3-1): ownerPagePublic means good standing (users: not banned, not deleted, not hidden by moderation),
+       so LAPSED, the owner whose card must not be public, is BANNED here; before, LAPSED's plan had lapsed (a free account's
+       card is public now). Every account has confirmed its email. */
+    users: [{ id: OWNER, role: "user", banned_at: null, email_verified_at: "2026-10-01T10:00:00.000Z" }, { id: OTHER, role: "user", banned_at: null, email_verified_at: "2026-10-01T10:00:00.000Z" },
+      { id: LAPSED, role: "user", banned_at: "2026-11-19T10:00:00.000Z", email_verified_at: "2026-10-01T10:00:00.000Z" }, { id: THROWER, role: "user", banned_at: null, email_verified_at: "2026-10-01T10:00:00.000Z" }],
     bf_profiles: [{ user_id: OWNER, avatar_url: PHOTO }, { user_id: OTHER, avatar_url: "http://insecure.example.com/x.jpg" }, { user_id: LAPSED, avatar_url: PHOTO }],
     card_view_counts: [],
     member_support: []
@@ -352,9 +357,22 @@ let CUR = makeDb(seed());
 const ROUTES = {};
 const LIMITERS = [];
 const PLAN = { [OWNER]: true, [OTHER]: true, [LAPSED]: false };
+/* NAMED (Nov 20 2026, P3-1): the owner standing read (users) fails for THROWER, so ownerPagePublic fails closed on an error. */
+function usersReadFailsFor(q, badId) {
+  let bad = false;
+  const down = () => Promise.resolve({ data: null, error: { message: "users lookup down" } });
+  const w = new Proxy(q, { get(o, k) {
+    if (k === "eq") return function (c, v) { if (c === "id" && v === badId) bad = true; o.eq(c, v); return w; };
+    if (k === "maybeSingle" || k === "single") return function () { return bad ? down() : o[k](); };
+    if (k === "then") return function (a, b) { return (bad ? down() : o.then(function (x) { return x; })).then(a, b); };
+    const v = o[k];
+    return typeof v === "function" ? function () { const r = v.apply(o, arguments); return r === o ? w : r; } : v;
+  } });
+  return w;
+}
 const CTX = {
   supabase: {
-    from: t => CUR.from(t),
+    from: t => (t === "users" ? usersReadFailsFor(CUR.from(t), THROWER) : CUR.from(t)),
     rpc: (fn, args) => CUR.rpc(fn, args),
     storage: { from: bucket => ({ remove: async keys => { CUR.removed.push({ bucket, keys: keys.slice() }); return { data: null, error: null }; } }) }
   },
@@ -628,8 +646,9 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
     r.headers["x-frame-options"] === "DENY" && (r.text || "").indexOf("Card ") !== -1 && (r.text || "").indexOf("lapsed+bftest") === -1;
   check("S1. a missing card, a malformed slug and an unknown or malformed token: 404 \"Card not found\", noindex, no-store, the security headers",
     nf(st.missing) && nf(st.bad) && nf(st.badTok) && nf(st.noTok), J([st.missing.status, st.bad.status, st.badTok.status, st.noTok.status]));
-  check("S2. a lapsed owner's card, by slug or token: the same 404, nothing of the card in it", nf(st.lapsed) && nf(st.lapsedTok) && (st.lapsed.text || "").indexOf("Card lapsed") === -1);
-  check("S3. an owner whose plan lookup throws: the same 404 (ownerPagePublic fails closed)", nf(st.thrower));
+  check("S2. a banned owner's card (P3-1; before, a lapsed owner's), by slug or token: the same 404, nothing of the card in it", nf(st.lapsed) && nf(st.lapsedTok) && (st.lapsed.text || "").indexOf("Card lapsed") === -1);
+  // NAMED (Nov 20 2026, P3-1): BEFORE "an owner whose plan lookup throws"; AFTER the standing read (users) is what fails.
+  check("S3. an owner whose standing lookup fails: the same 404 (ownerPagePublic fails closed)", nf(st.thrower));
   const realOPP = CTX.ownerPagePublic;
   CTX.ownerPagePublic = async () => { throw new Error("lookup exploded"); };
   const thrown = await slugPage("jane-doe");
@@ -1038,7 +1057,8 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "2026-11-07". AFTER "2026-11-08", the version the Etsy privacy sentence set.
   // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
-  check("G3. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 20 2026 (P2-2; this change set Nov 6)", LEGAL.TERMS_VERSION === "2026-11-20" && LEGAL.TERMS_UPDATED === "Last updated November 20, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20" and "Last updated November 20, 2026" (P2-2). AFTER "2026-11-21", the version P3-1's free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule set.
+  check("G3. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 21 2026 (P3-1; this change set Nov 6)", LEGAL.TERMS_VERSION === "2026-11-21" && LEGAL.TERMS_UPDATED === "Last updated November 21, 2026", LEGAL.TERMS_VERSION);
   const guide = fe("scripts/termaximus-guide.js") || "";
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE the editor tip named the search switch and the card-view
   // tip said the owner never learns who you are. AFTER both still tell of the counts, and say truthfully that the owner
@@ -1067,7 +1087,8 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
     // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
     // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
     // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): 193_posts.sql (posts, post_media) and 194_social_graph.sql (follows, likes, saves, comments, share days, the count triggers) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
-    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || /* NAMED (Nov 7 2026, TikTok posting, migration 178): 178 is allowed too; "the highest" is checkTiktokPosting R1's. */ f === "178_tiktok_posting.sql" || /* NAMED (Nov 7 2026, Instagram posting, migration 179): 179 is allowed too; "the highest" is checkInstagramPosting R1's. */ f === "179_instagram_posting.sql" || /* NAMED (Nov 7 2026, Facebook Pages posting, migration 180): 180 is allowed too; "the highest" is checkFacebookPages R1's. */ f === "180_facebook_pages.sql" || /* NAMED (Nov 8 2026, Etsy store connection, migration 181): 181 is allowed too; "the highest" is checkEtsyConnect R1's. */ f === "181_etsy_store.sql" || /* NAMED (Nov 8 2026, Amazon store connection, migration 182): 182 is allowed too; "the highest" is checkAmazonConnect R1's. */ f === "182_amazon_store.sql" || /* NAMED (Nov 11 2026, orbit stage 2, migration 183): it adds 183_weekly_goal_and_order_status.sql too; "the highest" is checkOrbitStage2 R1's. */ f === "183_weekly_goal_and_order_status.sql" || /* NAMED (Nov 15 2026, Shopify webhooks, migration 184): 184 is allowed too; "the highest" is checkShopifyWebhooks R1's. */ f === "184_shopify_webhook_requests.sql" || /* NAMED (Nov 15 2026, W-T4, migration 185): 185 is allowed too; "the highest" is checkShopifyUninstallHook R1's. */ f === "185_shopify_uninstall_hook.sql" || f === "186_member_videos_duration.sql" || f === "187_member_video_parts.sql" || f === "188_user_preferences_hq_view.sql" || f === "189_handles_and_place.sql" || f === "190_notifications_links.sql" || f === "191_safety.sql" || f === "192_buy_listing_digital.sql" || f === "193_posts.sql" || f === "194_social_graph.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
+    // NAMED (Nov 20 2026, P3-1, migrations 195 to 198): 195_users_email_canonical.sql (users.email_canonical, one account per inbox), 196_storage_account_tables.sql, 197_storage_account_functions.sql and 198_storage_account_backfill.sql (per-account storage totals; written in P3-1A as 196a/196b/196c and renamed) are allowed above the earlier highest too, by name; "the highest" (198) is checkBuyListingDigital R1's.
+    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || /* NAMED (Nov 7 2026, TikTok posting, migration 178): 178 is allowed too; "the highest" is checkTiktokPosting R1's. */ f === "178_tiktok_posting.sql" || /* NAMED (Nov 7 2026, Instagram posting, migration 179): 179 is allowed too; "the highest" is checkInstagramPosting R1's. */ f === "179_instagram_posting.sql" || /* NAMED (Nov 7 2026, Facebook Pages posting, migration 180): 180 is allowed too; "the highest" is checkFacebookPages R1's. */ f === "180_facebook_pages.sql" || /* NAMED (Nov 8 2026, Etsy store connection, migration 181): 181 is allowed too; "the highest" is checkEtsyConnect R1's. */ f === "181_etsy_store.sql" || /* NAMED (Nov 8 2026, Amazon store connection, migration 182): 182 is allowed too; "the highest" is checkAmazonConnect R1's. */ f === "182_amazon_store.sql" || /* NAMED (Nov 11 2026, orbit stage 2, migration 183): it adds 183_weekly_goal_and_order_status.sql too; "the highest" is checkOrbitStage2 R1's. */ f === "183_weekly_goal_and_order_status.sql" || /* NAMED (Nov 15 2026, Shopify webhooks, migration 184): 184 is allowed too; "the highest" is checkShopifyWebhooks R1's. */ f === "184_shopify_webhook_requests.sql" || /* NAMED (Nov 15 2026, W-T4, migration 185): 185 is allowed too; "the highest" is checkShopifyUninstallHook R1's. */ f === "185_shopify_uninstall_hook.sql" || f === "186_member_videos_duration.sql" || f === "187_member_video_parts.sql" || f === "188_user_preferences_hq_view.sql" || f === "189_handles_and_place.sql" || f === "190_notifications_links.sql" || f === "191_safety.sql" || f === "192_buy_listing_digital.sql" || f === "193_posts.sql" || f === "194_social_graph.sql" || f === "195_users_email_canonical.sql" || f === "196_storage_account_tables.sql" || f === "197_storage_account_functions.sql" || f === "198_storage_account_backfill.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. RLS on, anon and authenticated revoked, the function SECURITY DEFINER with a fixed search_path, executable by service_role only",
     /ALTER TABLE public\.card_view_counts ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON FUNCTION public\.bump_card_count\(uuid, text\) FROM PUBLIC, anon, authenticated;/.test(ALL[MIG]) &&

@@ -54,7 +54,9 @@ const MUTATIONS = {
   "thumb-not-in-use": [[PM, '  for (const col of ["media_id", "thumb_media_id"]) {', '  for (const col of ["media_id"]) {']],
   "delete-in-use": [[SERVER, "    if (await require(\"./lib/postMedia\").usedInPosts(supabase, item.id)) {", "    if (false) {"]],
   "composer-bigger": [[COMPOSER, "LONG_EDGE = 1080, THUMB_EDGE = 360,", "LONG_EDGE = 2048, THUMB_EDGE = 360,"]],
-  "photos-without-plan": [[SERVER, 'app.post("/api/posts/photos", requireAuth, requireActiveSubscription, postPhotoLimiter,', 'app.post("/api/posts/photos", requireAuth, postPhotoLimiter,']],
+  // NAMED (Nov 20 2026, P3-1): BEFORE "photos-without-plan" dropped the plan gate; posting photos is free now, so that is the
+  // intended route. AFTER "photos-members-only" puts the plan gate back (a free account could not post photos) and D3 must fail.
+  "photos-members-only": [[SERVER, 'app.post("/api/posts/photos", requireAuth, postPhotoLimiter,', 'app.post("/api/posts/photos", requireAuth, requireActiveSubscription, postPhotoLimiter,']],
   "migration-cascade": [[MIG, "  media_id uuid NOT NULL REFERENCES public.member_media(id) ON DELETE RESTRICT,", "  media_id uuid NOT NULL REFERENCES public.member_media(id) ON DELETE CASCADE,"]]
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, PM, POSTS, MIG, COMPOSER]);
@@ -88,9 +90,16 @@ function world(seed) {
   const db = memDb(Object.assign({ member_media: [], post_media: [], posts: [] }, seed || {}));
   const st = storage();
   const asked = [];
-  let refuse = null;
-  const deps = { sb: db.client, storage: st, base: "https://x.supabase.co", guard: async n => { asked.push(n); return refuse; } };
-  return { db, st, deps, asked, refuseWith: v => { refuse = v; } };
+  let refuse = null, accountRefuse = null;
+  // NAMED (Nov 20 2026, P3-1): storage per account. account() counts a file at its path before the upload (null, or the refusal);
+  // release() stops counting it. Both are recorded, so A9 to A11 can hold the order.
+  const counted = [], released = [], order = [];
+  const deps = { sb: db.client, storage: st, base: "https://x.supabase.co", guard: async n => { asked.push(n); order.push("guard"); return refuse; },
+    account: async (bucket, key, bytes) => { order.push("account"); if (accountRefuse) return accountRefuse; counted.push({ bucket, key, bytes }); return null; },
+    release: async (bucket, key) => { order.push("release"); released.push({ bucket, key }); return true; } };
+  const up = st.from;
+  st.from = b => { const o = up.call(st, b); const u = o.upload; o.upload = function () { order.push("upload"); return u.apply(o, arguments); }; return o; };
+  return { db, st, deps, asked, counted, released, order, refuseWith: v => { refuse = v; }, accountRefuseWith: v => { accountRefuse = v; } };
 }
 
 (async function main() {
@@ -118,6 +127,23 @@ function world(seed) {
   w.refuseWith({ status: 507, body: { error: "full", reason: "storage_full" } });
   r = await PMX.storePhoto(w.deps, ME, file(png()));
   check("A8. the shared storage guard's refusal is the answer, and nothing is uploaded or written", r.status === 507 && r.body.reason === "storage_full" && w.st.uploads.length === 0 && w.db.t.member_media.length === 0);
+  // NAMED (Nov 20 2026, P3-1): storage per account
+  w = world();
+  r = await PMX.storePhoto(w.deps, ME, file(png()));
+  const kept = w.db.t.member_media[0];
+  check("A9. storage per account: the file is counted at its own path and size, after the shared guard and before the upload; nothing released",
+    r.status === 201 && w.counted.length === 1 && w.counted[0].bucket === MM.BUCKET && kept && w.counted[0].key === kept.path && w.counted[0].bytes === kept.bytes &&
+    J(w.order) === J(["guard", "account", "upload"]) && w.released.length === 0, J([w.order, w.counted]));
+  w = world();
+  w.accountRefuseWith({ status: 413, body: { error: "Your storage is full: 50.0 MB of 50 MB used.", reason: "account_storage_full" } });
+  r = await PMX.storePhoto(w.deps, ME, file(png()));
+  check("A10. the account's storage full: its refusal is the answer, and nothing is uploaded or written", r.status === 413 && r.body.reason === "account_storage_full" && w.st.uploads.length === 0 && w.db.t.member_media.length === 0, J(r));
+  w = world();
+  w.st.failNext = true;
+  const upFail = w.st.from;
+  w.st.from = b => { const o = upFail.call(w.st, b); o.upload = async () => { w.order.push("upload"); return { data: null, error: { message: "storage down" } }; }; return o; };
+  r = await PMX.storePhoto(w.deps, ME, file(png()));
+  check("A11. an upload that fails: 502, and the counted file is released at the same path", r.status === 502 && w.released.length === 1 && w.counted.length === 1 && w.released[0].key === w.counted[0].key && w.db.t.member_media.length === 0, J([r, w.order]));
 
   /* ── B ── */
   console.log("\n══ B. naming them in a post ══");
@@ -135,7 +161,7 @@ function world(seed) {
   check("B4. over 600 KB: 413", (await c([{ media_id: mid(5) }])).status === 413);
   check("B5. the same photo twice: 400 twice; an id that is not one: 400 bad_id", (await c([{ media_id: mid(1) }, { media_id: mid(1) }])).reason === "twice" && (await c([{ media_id: "x" }])).reason === "bad_id");
   const P = T.libRequire("./lib/posts");
-  const pw = memDb({ member_media: lib, post_media: [], posts: [], users: [{ id: ME, created_at: "2026-01-01T00:00:00.000Z" }], bf_profiles: [], profiles: [], moderation_queue: [],
+  const pw = memDb({ member_media: lib, post_media: [], posts: [], users: [{ id: ME, created_at: "2026-01-01T00:00:00.000Z", email_verified_at: "2026-01-01T00:00:00.000Z" }], bf_profiles: [],   /* NAMED (Nov 20 2026, P3-1): the author has confirmed their email (public posts need it) */ profiles: [], moderation_queue: [],
     follows: [], member_blocks: [], member_mutes: [], post_likes: [], post_saves: [] });
   const made = await P.createPost({ sb: pw.client, now: () => "2026-11-20T12:00:00.000Z", claims: () => null, ownerPublic: async () => true, env: { SUPABASE_URL: "https://x.supabase.co" } },
     ME, { kind: "photo", body: "", media: [{ media_id: mid(1), thumb_media_id: mid(2) }, { media_id: mid(6) }] });
@@ -163,10 +189,13 @@ function world(seed) {
   check("D2. it sends each as \"file\" to POST /api/posts/photos, and only offers JPEG, PNG and WebP", has(comp, 'fd.append("file", blob,') && has(comp, 'api() + "/api/posts/photos", { method: "POST"') &&
     has(comp, 'accept="image/jpeg,image/png,image/webp"'));
   const S = FILES[SERVER];
-  check("D3. the route: signed in, an active plan, 80 an hour, one file of at most 600 KB, through storePhoto with the shared guard",
-    has(S, 'app.post("/api/posts/photos", requireAuth, requireActiveSubscription, postPhotoLimiter, function (req, res, next) {') &&
+  /* NAMED (Nov 20 2026, P3-1): BEFORE "signed in, an active plan" (requireAuth, requireActiveSubscription). AFTER posting photos is free,
+     so the route is signed in only; storePhoto also gets storage per account (account, release). */
+  check("D3. the route: signed in (free accounts post too), 80 an hour, one file of at most 600 KB, through storePhoto with the shared guard and storage per account",
+    has(S, 'app.post("/api/posts/photos", requireAuth, postPhotoLimiter, function (req, res, next) {') &&
+    has(S, "        account: function (bucket, key, bytes) { return storageAccountReserve(req.user.id, bucket, key, bytes); },\n        release: function (bucket, key) { return storageAccountRelease(bucket, key); } }, req.user.id, req.file);") &&
     has(S, "const postPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: require(\"./lib/postMedia\").PHOTO_MAX_BYTES, files: 1 } });") &&
-    /const postPhotoLimiter = rateLimit\(\{\n  windowMs: 60 \* 60 \* 1000,\n  max: 80,/.test(S) && has(S, "guard: function (bytes) { return storageGuard(bytes); } }, req.user.id, req.file);"));
+    /const postPhotoLimiter = rateLimit\(\{\n  windowMs: 60 \* 60 \* 1000,\n  max: 80,/.test(S) && has(S, "guard: function (bytes) { return storageGuard(bytes); },"));
 
   /* ── E ── */
   console.log("\n══ E. migration 193 ══");

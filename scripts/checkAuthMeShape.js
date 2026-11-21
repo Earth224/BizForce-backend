@@ -76,7 +76,10 @@ function check(label, ok, detail) {
    commit as the change. */
 const TOP_KEYS = ["access", "profile", "subscription", "user"];
 const USER_KEYS = ["banned_at", "created_at", "email", "email_verified_at", "id", "role", "subscription_active", "subscription_plan", "subscription_status"];
-const ACCESS_KEYS = ["access_reason", "active", "exempt", "inactive_reason"];
+/* NAMED (Nov 20 2026, P3-1): BEFORE access_reason, active, exempt, inactive_reason. AFTER also email_verified (from
+   req.user.email_verified_at), tier ("member" or "free", server.js accessTier, from the same getUserPlan answer) and
+   members_panel (lib/membership.js membersPanelFromCode: what membership adds and its price from PLAN_CONFIG, for the app's panel). */
+const ACCESS_KEYS = ["access_reason", "active", "email_verified", "exempt", "inactive_reason", "members_panel", "tier"];
 
 /* ── the route, out of the source ─────────────────────────────────────────── */
 const SRC = fs.readFileSync(path.join(REPO, "server.js"), "utf8");
@@ -116,10 +119,13 @@ function build(lookups) {
   const ctx = Object.assign({
     console: { log: function (m) { logs.push(String(m)); }, error: function (m) { logs.push(String(m)); }, warn: function (m) { logs.push(String(m)); } },
     requireAuth: 0,
+    // NAMED (Nov 20 2026, P3-1): the route reads the members panel through require("./lib/membership") (the real file, price from code)
+    require: function (n) { return require(n.indexOf("./lib/") === 0 ? path.join(__dirname, "..", n) : n); },
     app: { get: function () { handler = arguments[arguments.length - 1]; } }
   }, lookups);
   vm.createContext(ctx);
-  vm.runInContext(PUBLIC_USER + "\n\n" + routeSource(SRC), ctx);
+  // NAMED (Nov 20 2026, P3-1): accessTier names the tier the route reports
+  vm.runInContext(PUBLIC_USER + "\n\n" + functionSource(SRC, "accessTier") + "\n\n" + routeSource(SRC), ctx);
   if (!handler) throw new Error("handler not captured");
   return { handler: handler, logs: logs };
 }

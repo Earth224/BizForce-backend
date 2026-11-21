@@ -141,7 +141,9 @@ function lift(name) {
 const ENTITLEMENT_NAMES = ["PAST_DUE_GRACE_DEFAULT_DAYS", "PAST_DUE_GRACE_MAX_DAYS", "parsePastDueGraceDays", "pastDueTimeOf", "pastDueGraceState",
   "SUBSCRIPTION_GRACE_DAYS", "SUBSCRIPTION_PAST_DUE_GRACE_DAYS", "subscriptionExpiryState", "subscriptionEntitlement",
   "ADMIN_EXEMPT_PLAN", "ADMIN_EXEMPT_CONFIG", "isExemptRole", "OWNER_PASS_PLAN", "isOwnerAccount", "getUserPlan",
-  "BILLING_URL", "SUBSCRIPTION_REFUSAL_MESSAGES", "SUBSCRIPTION_REFUSAL_DEFAULT", "SUBSCRIPTION_PAST_DUE_MESSAGE", "subscriptionRequiredBody",
+  "BILLING_URL", "SUBSCRIPTION_REFUSAL_MESSAGES", "SUBSCRIPTION_REFUSAL_DEFAULT", "SUBSCRIPTION_PAST_DUE_MESSAGE",
+  "membersPanelBody",   // NAMED (Nov 20 2026, P3-1): the 402 carries the "Members get this" panel (lib/membership.js)
+  "subscriptionRequiredBody",
   "CHECKOUT_PRODUCTS", "PLAN_CONFIG", "AUTO_RENEW_CONSENT_VERSION", "autoRenewConsent"];
 const ROUTE_SIG = 'app.post("/api/stripe/checkout", requireAuth, async function (req, res) {';
 function checkoutRoute() {
@@ -167,6 +169,7 @@ function buildServer(opts) {
     process: { env: Object.assign({ STRIPE_STARTER_PRICE_ID: "price_check" }, opts.env || {}) },
     console: { log: m => logs.push(String(m)), warn: m => logs.push(String(m)), error: m => logs.push(String(m)) },
     Date: opts.Date || Date, Math, Number, String, Object, Array, JSON, Promise,
+    require: p => require(p.indexOf("./lib/") === 0 ? "." + p : p),   // NAMED (Nov 20 2026, P3-1): membersPanelBody reads lib/membership.js
     AGENT_SYSTEM_PROMPTS: { seo: "" },
     // getUserPlan and checkout key the owner pass on it (scripts/checkOwnerPass.js); u1 is not him.
     OWNER_ACCOUNT_ID: require("../lib/ownerAccount").OWNER_ACCOUNT_ID,
