@@ -433,7 +433,11 @@ const ADDED = [
   ["delete", "/api/follows/:userId"],                        // login-only (541 -> 542)
   ["get", "/api/follows/:userId/counts"],                    // PUBLIC, gated by ownerPagePublic and blocks: the two counts (542 -> 543)
   ["get", "/api/follows/:userId/:which"],                    // login-only: followers or following, blocks respected (543 -> 544)
-  ["get", "/p/:id"]                                          // PUBLIC: a public post's page with its OG tags; 404 for anything else (544 -> 545)
+  ["get", "/p/:id"],                                         // PUBLIC: a public post's page with its OG tags; 404 for anything else (544 -> 545)
+  // NAMED (Nov 21 2026, P3-2, migration 199): BEFORE 545 routes; AFTER 547, the owner's Verified sellers list and un-verify
+  // (checkVerifiedBadge, checkUnsubscribedSurface EXPECTED_ADMIN)
+  ["get", "/api/admin/verified"],                            // admin only: the seller and official badges, and ?handle= to find one (545 -> 546)
+  ["post", "/api/admin/unverify/:userId"]                     // admin only: removes the seller or official badge; a paid member keeps "member" (546 -> 547)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

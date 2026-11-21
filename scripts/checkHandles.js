@@ -61,8 +61,9 @@ const ME = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8
   // NAMED (Nov 20 2026, P3-1, migrations 195 to 198): 195_users_email_canonical.sql (users.email_canonical, one account per inbox), 196_storage_account_tables.sql, 197_storage_account_functions.sql and 198_storage_account_backfill.sql (per-account storage totals; written in P3-1A as 196a/196b/196c and renamed) are allowed above the earlier highest too, by name; "the highest" (198) is checkBuyListingDigital R1's.
   // 192_buy_listing_digital.sql are above it, by name; "the highest" is checkBuyListingDigital R1's.
   check("R1. 190_notifications_links.sql is the only 190, and only 191_safety.sql and 192_buy_listing_digital.sql are above it; 189_handles_and_place.sql the only 189",
-    top === 198 && migNames.filter(x => /^190_/.test(x)).join() === "190_notifications_links.sql" && migNames.filter(x => /^189_/.test(x)).join() === "189_handles_and_place.sql" &&
-    migNames.filter(x => Number(x.slice(0, 3)) > 190).join() === "191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql", J([top]));
+    // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
+    top === 199 && migNames.filter(x => /^190_/.test(x)).join() === "190_notifications_links.sql" && migNames.filter(x => /^189_/.test(x)).join() === "189_handles_and_place.sql" &&
+    migNames.filter(x => Number(x.slice(0, 3)) > 190).join() === "191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql", J([top]));
   const m189 = FILES[M189] || "", m190 = FILES[M190] || "";
   check("R2. 189 holds the handle format as a named CHECK, dropped first (safe to re-run)",
     has(m189, "DROP CONSTRAINT IF EXISTS bf_profiles_username_format;") && has(m189, "CHECK (username IS NULL OR username ~ '^[a-z0-9_][a-z0-9_-]{2,29}$')"));

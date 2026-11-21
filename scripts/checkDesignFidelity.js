@@ -23,7 +23,7 @@
         the wallet, the bio, the four tabs, the grid; BizCash, the wallet and
         "BizForce member" only for a paid member; Reviews opens Coming soon;
         the page's old header hidden on a phone; desktop parts hidden.
-     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "p31" (NAMED, P3-1: BEFORE "fx1").
+     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "p32" (NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31").
    Every phone rule is checked to be inside its file's @media (max-width:
    760px) block, so the desktop is unchanged.
 
@@ -65,7 +65,7 @@ const MUTATIONS = {
   "grid-gap": [[SHELL, "\".pfs-grid{gap:2px}\",", "\".pfs-grid{gap:8px}\","]],
   "old-header": [[SHELL, "\"body:not(.edit-mode) .pf-nav,body:not(.edit-mode) .pf-banner,body:not(.edit-mode) .pf-header-wrap{display:none}\",\n", ""]],
   "no-soon-script": [[PROFILE, "<script src=\"/scripts/bf-feed.js\"></script>", ""]],
-  "shell-rev": [[SW, "var SHELL_REV = \"p31\";", "var SHELL_REV = \"p23\";"]]
+  "shell-rev": [[SW, "var SHELL_REV = \"p32\";", "var SHELL_REV = \"p23\";"]]
 };
 const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE]);
 const { FILES, check, J } = T;
@@ -238,6 +238,7 @@ check("D31. a desktop shows none of the phone header's parts (hidden outside the
 
 /* ── E ── */
 console.log("\n══ E. the shell's version ══");
-check("E1. sw.js SHELL_REV is \"p31\"", /\nvar SHELL_REV = "p31";\n/.test(FILES[SW] || ""));
+// NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32" (the Verified badge). The only edit P3-2 made here; no design figure changed.
+check("E1. sw.js SHELL_REV is \"p32\"", /\nvar SHELL_REV = "p32";\n/.test(FILES[SW] || ""));
 
 T.finish();

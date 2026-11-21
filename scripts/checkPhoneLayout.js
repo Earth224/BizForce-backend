@@ -99,7 +99,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
   // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"p31\";", "var SHELL_REV = \"\";"]],
+  // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"p32\";", "var SHELL_REV = \"\";"]],
   // bf-phone.css is not cached for offline (S)
   "sw-without-phone-css": [[SW, "  \"/css/bf-phone.css\",", ""]],
   // an emoji slips into the phone stylesheet (N)
@@ -263,7 +264,8 @@ const W = FILES[SW] || "";
 // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
 // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
 // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
-check("S1. the shell's cache version is bumped: SHELL_REV \"p31\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"p31\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+// NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
+check("S1. the shell's cache version is bumped: SHELL_REV \"p32\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"p32\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
 check("S2. css/bf-phone.css is cached with the shell, for a page opened offline", /\n  "\/css\/bf-phone\.css",/.test(W));
 
 /* ── N. no emoji ── */

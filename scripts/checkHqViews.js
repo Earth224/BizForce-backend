@@ -108,7 +108,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
   // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"p31\";", "var SHELL_REV = \"ph1\";"]],
+  // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"p32\";", "var SHELL_REV = \"ph1\";"]],
   // (a crescent moon, built from its code point so this file holds none: checkNoEmoji N2)
   "emoji": [[VIEWS, "  var VIEW_KEY = \"bf_hq_view\"", "  /* " + String.fromCodePoint(0x1F319) + " */ var VIEW_KEY = \"bf_hq_view\""]]
 };
@@ -170,8 +171,9 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 20 2026, P3-1, migrations 195 to 198): 195_users_email_canonical.sql (users.email_canonical, one account per inbox), 196_storage_account_tables.sql, 197_storage_account_functions.sql and 198_storage_account_backfill.sql (per-account storage totals; written in P3-1A as 196a/196b/196c and renamed) are allowed above the earlier highest too, by name; "the highest" (198) is checkBuyListingDigital R1's.
   // name; "the highest" is checkBuyListingDigital R1's.
   check("R1. 188_user_preferences_hq_view.sql is the only 188, and only 189_handles_and_place.sql, 190_notifications_links.sql, 191_safety.sql and 192_buy_listing_digital.sql are above it (checkBuyListingDigital R1)",
-    top === 198 && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
-    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql", J([top]));
+    // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
+    top === 199 && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
+    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql", J([top]));
   check("R2. it adds hq_card_view and hq_orbit as text, only if they do not exist (safe to re-run)",
     has(mig, "ADD COLUMN IF NOT EXISTS hq_card_view text,") && has(mig, "ADD COLUMN IF NOT EXISTS hq_orbit     text;"));
   check("R3. the named CHECKs as live: user_preferences_hq_card_view_check (NULL or large, compact, grid) and user_preferences_hq_orbit_check (NULL or shown, hidden), each dropped if it exists first",
@@ -535,7 +537,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
   // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
-  check("W1. SHELL_REV \"p31\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p31\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
+  check("W1. SHELL_REV \"p32\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p32\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

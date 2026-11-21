@@ -47,7 +47,8 @@ const MUTATIONS = {
   "tier-any-plan": [[SERVER, "  return planState && planState.active === true ? \"member\" : \"free\";", "  return planState ? \"member\" : \"free\";"]],
   "member-on-a-guess": [[SERVER, " — shown as not a member.\");\n    return false;", " — shown as not a member.\");\n    return true;"]],
   "price-typed": [[MEM, "    price_text: \"$\" + Number(price) + \" a \" + per,", "    price_text: \"$99 a month\","]],
-  "storefront-always-member": [[SERVER, "      member: await ownerIsMember(userId)\n", "      member: true\n"]],
+  // NAMED (Nov 21 2026, P3-2): BEFORE the anchor ended "(userId)\n"; AFTER "(userId),\n", the Verified badge's key follows it.
+  "storefront-always-member": [[SERVER, "      member: await ownerIsMember(userId),\n", "      member: true,\n"]],
   // the app: the HQ tab goes to the dashboard for everyone
   "hq-tab-open": [[ACCESS, "    if (!a || state.tier !== \"free\") return;\n", "    return;\n"]],
   // the app: a free account lands on the dashboard
@@ -59,7 +60,14 @@ const MUTATIONS = {
   // the app: bf-session.js stops loading the access script
   "session-no-access": [[SESSION, "    loadTabBar();\n    loadAccess();\n", "    loadTabBar();\n"]],
   // the members panel no longer comes with /api/auth/me
-  "me-no-panel": [[SERVER, "          members_panel: require(\"./lib/membership\").membersPanelFromCode()\n", "          members_panel: null\n"]]
+  "me-no-panel": [[SERVER, "          members_panel: require(\"./lib/membership\").membersPanelFromCode()\n", "          members_panel: null\n"]],
+  // NAMED (Nov 21 2026, P3-2): the owner's route decisions (section H)
+  // adding a video goes back to sign-in only
+  "videos-free": [[RA, "\"post /api/bfp/music\", \"post /api/bfp/videos\", ", "\"post /api/bfp/music\", "]],
+  // the upload URL no longer refuses a free account for the videos and music folders
+  "upload-url-ungated": [[SERVER, "  if (UPLOAD_URL_MEMBER_FOLDERS.indexOf(folder) !== -1 && (await refuseUnlessSubscribed(req, res, \"post /api/bfp/upload-url \" + folder))) return;\n", ""]],
+  // the media library shows a free account no members panel
+  "media-page-free": [[ACCESS, "    \"media.html\", \"business-id.html\"\n", "    \"business-id.html\"\n"]]
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, MEM, RA, ACCESS, APP, SESSION, WALLET]);
 const { FILES, check, finish, J, has } = T;
@@ -144,7 +152,9 @@ const MEMBER_ROUTES = {
   check("E1. ownerIsMember: true for an active plan, false for a lapsed one, false when the lookup throws, false for no id",
     (await ownerIsMember(async () => ({ active: true }))("u")) === true && (await ownerIsMember(async () => ({ active: false }))("u")) === false &&
     (await ownerIsMember(async () => { throw new Error("down"); })("u")) === false && (await ownerIsMember(async () => ({ active: true }))(null)) === false);
-  check("E2. the public profile and the storefront answer member from ownerIsMember", has(S, "member: data ? await ownerIsMember(userId) : false });") && has(S, "      member: await ownerIsMember(userId)\n"));
+  // NAMED (Nov 21 2026, P3-2): BEFORE the profile line ended "member: data ? await ownerIsMember(userId) : false });". AFTER the
+  // Verified badge's key follows it on the same line.
+  check("E2. the public profile and the storefront answer member from ownerIsMember", has(S, "member: data ? await ownerIsMember(userId) : false, verified: data ? await verifiedReasonOf(userId) : null });") && has(S, "      member: await ownerIsMember(userId),\n"));   // NAMED (Nov 21 2026, P3-2): BEFORE the storefront line ended the object (no comma); AFTER verified follows it
 
   console.log("\n══ F. a public page is good standing ══");
   const opp = fnText(S, "async function ownerPagePublic(userId) {");
@@ -203,9 +213,11 @@ const MEMBER_ROUTES = {
   check("G7. the bottom bar's HQ tab opens the panel for a free account, instead of the dashboard", pg.clicks.length === 1 && pg.hq(pg.clicks[0]) === true && !!pg.document.getElementById("bf-members-panel"));
   const mpg = await page("home.html", member);
   check("G8. ...and opens the dashboard for a member", mpg.hq(mpg.clicks[0]) === false && !mpg.panel);
-  const freePages = ["home.html", "profile.html", "marketplace.html", "garage-sale.html", "services.html", "inbox.html", "messages.html", "settings.html", "your-data.html", "billing.html", "wallet.html", "compose.html", "media.html", "campaigns.html"];
+  const freePages = ["home.html", "profile.html", "marketplace.html", "garage-sale.html", "services.html", "inbox.html", "messages.html", "settings.html", "your-data.html", "billing.html", "wallet.html", "compose.html", "campaigns.html"];
+  // NAMED (Nov 21 2026, P3-2, the owner's decision): BEFORE media.html was in this list. AFTER it is a member-only page (G9b).
   const listed = (pg.ctx.window.bfAccess && pg.ctx.window.bfAccess.MEMBER_PAGES) || [];
   check("G9. the free pages are never member-only", freePages.every(p => listed.indexOf(p) === -1) && listed.length >= 40, freePages.filter(p => listed.indexOf(p) !== -1).join(", "));
+  check("G9b. the media library and the business ID are member-only pages (the owner, P3-2)", listed.indexOf("media.html") !== -1 && listed.indexOf("business-id.html") !== -1, J(listed.slice(-3)));
   const missing = listed.filter(p => { try { return !/bf-session\.js/.test(require("fs").readFileSync(require("path").join(H.FRONTEND, p), "utf8")); } catch (e) { return true; } });
   check("G10. every member-only page exists and loads scripts/bf-session.js (which loads the panel)", missing.length === 0, missing.join(", "));
   check("G11. bf-session.js loads scripts/bf-access.js with the bottom bar", has(FILES[SESSION], "    loadTabBar();\n    loadAccess();\n") && has(FILES[SESSION], "tag.src = \"/scripts/bf-access.js\";"));
@@ -222,5 +234,33 @@ const MEMBER_ROUTES = {
     pg.fetched.some(f => /\/api\/auth\/resend-verification$/.test(f[0]) && f[1] === "POST") && /We sent a new link/.test(pg.bannerText + " " + (pg.banner ? pg.banner.children.map(c => c.textContent).join(" ") : "")), J(pg.fetched));
   pg = await page("home.html", free);
   check("G17. a confirmed email: no banner", !pg.banner);
+
+  /* ── H. THE OWNER'S ROUTE DECISIONS (P3-2, Nov 21 2026), read from lib/routeAccess.js (held to the live router by
+     checkUnsubscribedSurface). ── */
+  console.log("\n══ H. the owner's route decisions (P3-2) ══");
+  const inG = (g, keys) => keys.filter(k => R.groupOf(k) !== g).map(k => k + " " + R.groupOf(k));
+  let bad = inG("M", ["get /api/business-profile", "post /api/business-profile", "put /api/business-profile"]);
+  check("H1. the business-profile routes are members only (M)", bad.length === 0, bad.join(", "));
+  bad = inG("F", ["post /api/themes/photo", "get /api/bfp/pproducts", "post /api/bfp/pproducts", "put /api/bfp/pproducts/:id", "delete /api/bfp/pproducts/:id",
+    "get /api/bfp/pportfolio", "post /api/bfp/pportfolio", "put /api/bfp/pportfolio/:id", "delete /api/bfp/pportfolio/:id"]);
+  check("H2. themes/photo, pproducts and pportfolio are sign-in only (F)", bad.length === 0, bad.join(", "));
+  bad = inG("M", ["post /api/bfp/videos", "put /api/bfp/videos/:id"]).concat(inG("F", ["get /api/bfp/videos", "delete /api/bfp/videos/:id"]));
+  check("H3. bfp/videos: adding and editing a video are members only (M, for now); reading and removing stay free", bad.length === 0, bad.join(", "));
+  const uploadUrl = H.routeStatement(S, "post", "/api/bfp/upload-url") || "";
+  check("H4. ...and the upload URL refuses a free account for the videos and music folders (refuseUnlessSubscribed in the handler)",
+    has(S, "const UPLOAD_URL_MEMBER_FOLDERS = [\"videos\", \"music\", \"music-art\"];") &&
+    uploadUrl.indexOf("if (UPLOAD_URL_MEMBER_FOLDERS.indexOf(folder) !== -1 && (await refuseUnlessSubscribed(req, res, \"post /api/bfp/upload-url \" + folder))) return;") !== -1, uploadUrl.length);
+  bad = inG("F", ["get /api/crowdfunding/campaigns", "get /api/crowdfunding/campaigns/by-share/:shareId", "get /api/crowdfunding/my-campaigns", "get /api/crowdfunding/donations"])
+    .concat(inG("M", ["post /api/crowdfunding/campaigns", "post /api/crowdfunding/campaigns/:id/donate"]));
+  check("H5. campaign reads are free (F); creating a campaign and donating are members only (M)", bad.length === 0, bad.join(", "));
+  const radar = ["get /api/leads", "get /api/leads/youtube-signals", "get /api/agents/sales/leads", "post /api/agents/sales/lead-status", "get /api/agents/sales/pipeline"];
+  bad = inG("A", radar).concat(radar.filter(k => R.ADMIN_IN_HANDLER.indexOf(k) === -1));
+  check("H6. the Lead Radar routes stay the owner's (A) until the Radar-for-every-member block", bad.length === 0, bad.join(", "));
+  const wallet = H.routeStatement(S, "get", "/api/cards/google-wallet") || "";
+  check("H7. get /api/cards/google-wallet is public (P), served while the card's owner is in good standing (ownerPagePublic)",
+    R.groupOf("get /api/cards/google-wallet") === "P" && /ownerPagePublic\(/.test(wallet), R.groupOf("get /api/cards/google-wallet") + " " + wallet.length);
+  bad = inG("M", ["post /api/media", "patch /api/media/:id"]);
+  check("H8. the media library's writes are members only (M); removing a file stays free", bad.length === 0 && R.groupOf("delete /api/media/:id") === "F", bad.join(", "));
+  check("H9. put /api/profile/me stays sign-in only: Settings (free) writes it", R.groupOf("put /api/profile/me") === "F");
   finish();
 })().catch(e => { console.log("    FAIL  the check threw: " + (e && e.stack || e)); process.exit(1); });

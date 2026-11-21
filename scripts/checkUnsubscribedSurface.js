@@ -313,6 +313,11 @@ const EXPECTED_GATED = [
 const EXPECTED_ADMIN = [
   "get /api/admin/flagged-accounts", "post /api/admin/ban/:userId", "post /api/admin/unban/:userId",
   "post /api/admin/verify/:userId", "post /api/admin/flag/:userId", "post /api/admin/store-proposals/run",
+  // NAMED (Nov 21 2026, P3-2; admin 15 -> 17): BEFORE no way to remove a badge or list who has one. AFTER the owner's
+  // "Verified sellers" on moderation.html: removing a seller or official badge (writes bf_profiles.verified_reason and a
+  // moderation_logs row) and the list of verified accounts with a handle lookup (read-only), both requireAuth and
+  // requireAdmin (checkVerifiedBadge).
+  "post /api/admin/unverify/:userId", "get /api/admin/verified",
   // NAMED (Nov 3 2026, the schema check; admin 6 -> 7): BEFORE no admin health route. AFTER /health's admin detail,
   // requireAuth and requireAdmin, which reads only the last schema check's result and writes nothing (checkSchemaCheck H2).
   "get /api/admin/health",

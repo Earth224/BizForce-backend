@@ -181,6 +181,10 @@ const FILES_GATE = "ENABLE_STORAGE_DELETION_RETRY";
 const SWEEP_GATE = "ENABLE_GATE_DECISIONS_SWEEP";
 // And this one (lib/schemaCheck.js): a missing table must be named whether or not anyone set a variable.
 const SCHEMA_GATE = "ENABLE_SCHEMA_CHECK";
+// NAMED (Nov 21 2026, P3-2): and the Verified badge's reconcile (lib/verified.js), on unless exactly "false". With the gates unset
+// it is set "false" here unless a scenario names it, so every default-on scenario above it reads as it did before P3-2; the
+// reconcile's own scenarios (verified-unset, verified-False, verified-false) are below.
+const VERIFIED_GATE = "ENABLE_VERIFIED_SYNC";
 
 const MUTATIONS = {
   // the self-review job loses its timezone and runs on the host's clock
@@ -378,6 +382,7 @@ const t0 = Date.now();
       gates: logs.filter(l => /\\[startup\\] (storeProposalTick|selfReviewTick|agentScheduleTick|emailSequenceTick|runNightlyBackup|youtubeRetentionTick|pendingStorageDeletionTick|triggerTick|storeSyncTick) /.test(l)),
       sweepLogs: logs.filter(l => /gate decisions sweep (scheduled|disabled)/.test(l)),
       schemaLogs: logs.filter(l => /schema check (scheduled|disabled)/.test(l)),
+      verifiedLogs: logs.filter(l => /Verified badge reconcile (scheduled|disabled)/.test(l)),
       schemaRuns: logs.filter(l => /\\[SchemaCheck\\]/.test(l)) }));
     process.exit(0);
   }, 1500);
@@ -408,7 +413,7 @@ const SRC_FILE = path.join(TMP, "server.src.js");
 fs.writeFileSync(LOAD_FILE, LOAD_CHILD);
 fs.writeFileSync(PROGRAM_FILE, PROGRAM_PRELOAD);
 fs.writeFileSync(SRC_FILE, SRC);
-function childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep, schema) {
+function childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep, schema, verified) {
   const env = Object.assign({}, process.env, { BLUESKY_IDENTIFIER: "", BLUESKY_APP_PASSWORD: "" });
   GATES.forEach(g => { if (gatesOn) env[g] = "true"; else delete env[g]; });
   if (retention === undefined) delete env[RETENTION_GATE]; else env[RETENTION_GATE] = retention;
@@ -416,14 +421,16 @@ function childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep, schema) {
   if (filesRetry === undefined) delete env[FILES_GATE]; else env[FILES_GATE] = filesRetry;
   if (sweep === undefined) delete env[SWEEP_GATE]; else env[SWEEP_GATE] = sweep;
   if (schema === undefined) delete env[SCHEMA_GATE]; else env[SCHEMA_GATE] = schema;
+  if (verified === undefined) { if (gatesOn) delete env[VERIFIED_GATE]; else env[VERIFIED_GATE] = "false"; }
+  else if (verified === null) delete env[VERIFIED_GATE]; else env[VERIFIED_GATE] = verified;
   delete env.BACKUP_CRON; delete env.BACKUP_TIMEZONE;
   return env;
 }
 function parseChild(r) {
   try { return JSON.parse(r.stdout); } catch (e) { return { error: "child: " + (String(r.stdout) + String(r.stderr)).slice(0, 400) }; }
 }
-function loadServer(gatesOn, retention, opsAlerts, filesRetry, sweep, schema) {
-  return parseChild(spawnSync(process.execPath, [LOAD_FILE, SRC_FILE], { cwd: REPO, env: childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep, schema), encoding: "utf8", timeout: 120000 }));
+function loadServer(gatesOn, retention, opsAlerts, filesRetry, sweep, schema, verified) {
+  return parseChild(spawnSync(process.execPath, [LOAD_FILE, SRC_FILE], { cwd: REPO, env: childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep, schema, verified), encoding: "utf8", timeout: 120000 }));
 }
 function runServerAsProgram() {
   return parseChild(spawnSync(process.execPath, ["-r", PROGRAM_FILE, SERVER_PATH], { cwd: REPO, env: childEnv(false), encoding: "utf8", timeout: 120000 }));
@@ -442,7 +449,9 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     // NAMED (Nov 3 2026, store connections): BEFORE "exactly eleven"; AFTER "exactly twelve", the twelfth storeSyncTick at 05:00 UTC.
     // NAMED (Nov 6 2026, card upgrades C2): BEFORE "exactly twelve"; AFTER "exactly thirteen", the thirteenth the card leads
     // purge at 04:45 UTC, scheduled only when server.js is the program (checkCardLeads U4).
-    check("server.js has exactly thirteen cron.schedule calls", calls.length === 13, calls.length);
+    // NAMED (Nov 21 2026, P3-2): BEFORE "exactly thirteen"; AFTER "exactly fourteen", the fourteenth the Verified badge's
+    // reconcile at :20 every hour UTC (on unless ENABLE_VERIFIED_SYNC is exactly "false"; checkVerifiedBadge).
+    check("server.js has exactly fourteen cron.schedule calls", calls.length === 14, calls.length);
     check("each expression resolves from the source", calls.every(c => typeof c.expression.value === "string"), JSON.stringify(calls.map(c => c.expression)));
     check("each passes exactly one option, a timezone, resolved from the source",
       calls.every(c => typeof c.timezone.value === "string" && c.timezone.value.length > 0), JSON.stringify(calls.map(c => [c.line, c.timezone.from])));
@@ -566,6 +575,20 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     check("…and with ENABLE_SCHEMA_CHECK exactly \"false\" as well: no task at all, and the schema check says it is disabled",
       fiveOff.listened === true && !fiveOff.crashed && Array.isArray(fiveOff.tasks) && fiveOff.tasks.length === 0 &&
       (fiveOff.schemaLogs || []).some(l => /schema check disabled \(ENABLE_SCHEMA_CHECK is exactly "false"\)/.test(l)), JSON.stringify(fiveOff).slice(0, 400));
+    // NAMED (Nov 21 2026, P3-2): the Verified badge's reconcile, on by default at :20 every hour UTC (verified-unset, verified-False,
+    // verified-false). Every other default-on job is "false" here, so the reconcile stands alone.
+    const verifiedCall = calls.find(c => c.expression.value === "20 * * * *" && c.timezone.value === "UTC");
+    const verifiedDeclared = verifiedCall ? convertExpression(verifiedCall.expression.value) + " @ UTC" : null;
+    const verifiedUnset = loadServer(false, "false", "false", "false", "false", "false", null);
+    check("ENABLE_VERIFIED_SYNC unset: the Verified badge's reconcile is registered at :20 every hour UTC, alone, and says so; loaded as a check it never runs",
+      verifiedUnset.listened === true && !verifiedUnset.crashed && !!verifiedDeclared && JSON.stringify(taskList(verifiedUnset)) === JSON.stringify([verifiedDeclared]) &&
+      verifiedUnset.runs === 0 && (verifiedUnset.verifiedLogs || []).length === 1 && /Verified badge reconcile scheduled — :20 every hour UTC/.test(verifiedUnset.verifiedLogs[0]),
+      JSON.stringify([verifiedUnset.tasks, verifiedUnset.verifiedLogs]));
+    const verifiedFalsey = loadServer(false, "false", "false", "false", "false", "false", "False");
+    check("ENABLE_VERIFIED_SYNC \"False\" (not exactly \"false\"): the reconcile is still registered",
+      verifiedFalsey.listened === true && JSON.stringify(taskList(verifiedFalsey)) === JSON.stringify([verifiedDeclared]), JSON.stringify(verifiedFalsey.tasks));
+    check("ENABLE_VERIFIED_SYNC exactly \"false\" (with every other default-on job off): no task, and the reconcile says it is disabled",
+      (fiveOff.verifiedLogs || []).some(l => /Verified badge reconcile disabled \(ENABLE_VERIFIED_SYNC is exactly "false"\)/.test(l)), JSON.stringify(fiveOff.verifiedLogs));
     const schemaFalsey = loadServer(false, "false", "false", "false", "false", "False");
     check("ENABLE_SCHEMA_CHECK \"False\" (not exactly \"false\"): the schema check is still registered",
       schemaFalsey.listened === true && JSON.stringify(taskList(schemaFalsey)) === JSON.stringify([schemaDeclared]), JSON.stringify(schemaFalsey.tasks));
@@ -601,8 +624,9 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     // the card leads purge (04:45 UTC, exactly one call) left out here because it registers only when server.js is the program;
     // the check below proves it is registered then.
     check("the card leads purge is exactly one call, at 04:45 UTC", PROGRAM_ONLY.length === 1, JSON.stringify(PROGRAM_ONLY));
-    check("gates set: exactly the twelve declared schedules other than the program-only purge are registered, with their expressions and timezones",
-      on.listened === true && !on.crashed && registered.length === 12 && JSON.stringify(registered) === JSON.stringify(declared),
+    // NAMED (Nov 21 2026, P3-2): BEFORE twelve; AFTER thirteen, the Verified badge's reconcile (gates-set).
+    check("gates set: exactly the thirteen declared schedules other than the program-only purge are registered, with their expressions and timezones",
+      on.listened === true && !on.crashed && registered.length === 13 && JSON.stringify(registered) === JSON.stringify(declared),
       JSON.stringify(on.crashed || on.error || registered.map(r => r.slice(0, 40))) + " vs " + JSON.stringify(declared.map(r => r.slice(0, 40))));
     check("…none of them ran while server.js loaded, and still no reminder pass",
       on.listened === true && on.runs === 0 && off.runs === 0 && !reminderRead(on.attempts), JSON.stringify({ runs: on.runs, offRuns: off.runs, attempts: on.attempts }));

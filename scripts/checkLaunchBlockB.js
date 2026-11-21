@@ -205,8 +205,10 @@ const MUTATIONS = {
   // carry that line, and the mutation (the owner check removed) is the same.
   // NAMED BEFORE → AFTER (Nov 6 2026, Google Wallet): BEFORE the card was publicCardFrom(...) and the profile banner came next.
   // AFTER it is withGoogleWalletFlag(publicCardFrom(...)) and the Google Wallet route follows; the mutation is the same.
-  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n/* Public. \"Add to Google Wallet\"",
-    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n/* Public. \"Add to Google Wallet\""]],
+  // NAMED (Nov 21 2026, P3-2): BEFORE both texts ended "support_links: await publicSupportLinks(data.user_id) });". AFTER the
+  // Verified badge's comment line and verified key are part of them (the slug route's answer).
+  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    // NAMED (Nov 21 2026, P3-2): the card owner's Verified badge (lib/verified.js), or null; user_id itself is never returned\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id),\n      verified: await verifiedReasonOf(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n/* Public. \"Add to Google Wallet\"",
+    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    // NAMED (Nov 21 2026, P3-2): the card owner's Verified badge (lib/verified.js), or null; user_id itself is never returned\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id),\n      verified: await verifiedReasonOf(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n/* Public. \"Add to Google Wallet\""]],
   // #10: Netlify does not serve /c/<slug>
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C1): BEFORE the anchor was the rewrite "/c/:slug /card-view.html 200".
   // AFTER the proxy to the backend's GET /c/:slug, which serves card-view.html with the card's own head; the mutation
@@ -323,7 +325,9 @@ function fakeDb(tables, fail) {
           return { data: rows.map(r => Object.assign({}, r)), count, error: null };
         }
         const chain = {
-          select() { return chain; }, order() { return chain; },
+          // NAMED (Nov 21 2026, P3-2): BEFORE select() kept nothing. AFTER it keeps the columns asked for (q.cols), so check 10 can tell
+          // a photo read from the Verified badge's read of verified_reason.
+          select(cols) { q.cols = String(cols || "*"); return chain; }, order() { return chain; },
           eq(c, v) { q.eqs.push([c, v]); return chain; },
           in(c, ids) { q.ins = [c, ids]; return chain; },
           range(a, b) { q.range = [a, b]; return chain; },
@@ -909,10 +913,13 @@ function fakeDb(tables, fail) {
       await handler({ params: { slug } }, res, e => { nextErr = e; });
       return { status: res.statusCode, body: res.body, nextErr };
     }
-    const photoReadsBefore = db.reads.filter(q => q.table === "bf_profiles").length;
+    // NAMED (Nov 21 2026, P3-2): BEFORE any bf_profiles read counted. AFTER only a read that could carry the photo (any column but
+    // user_id and verified_reason): the card now also reads the owner's Verified badge, which is not the photo.
+    const photoReads = () => db.reads.filter(q => q.table === "bf_profiles" && !/^\s*user_id\s*,\s*verified_reason\s*$/.test(q.cols || "*")).length;
+    const photoReadsBefore = photoReads();
     const g1 = await get("Jane-Doe");
     check("10. a card whose photo is hidden never reads the owner's profile photo at all",
-      db.reads.filter(q => q.table === "bf_profiles").length === photoReadsBefore, db.reads.filter(q => q.table === "bf_profiles").length - photoReadsBefore);
+      photoReads() === photoReadsBefore, photoReads() - photoReadsBefore);
     check("10. GET /api/cards/slug/Jane-Doe: 200, the card with its email and photo hidden as the member chose",
       g1.status === 200 && g1.body && g1.body.card && g1.body.card.full_name === "Jane" && g1.body.card.email === "" && g1.body.card.photo_url === null &&
       !("user_id" in g1.body.card), JSON.stringify(g1));
@@ -929,7 +936,9 @@ function fakeDb(tables, fail) {
     // owner's normalized support links only (publicSupportLinks; checkMemberSupport D1-D2 holds what they carry).
     // NAMED (Nov 6 2026, Google Wallet): BEFORE card was publicCardFrom(...) as it is. AFTER withGoogleWalletFlag(publicCardFrom(...)),
     // which adds google_wallet: true while Google Wallet is configured and nothing else (checkGoogleWallet holds it too).
-    check("10. GET /api/cards/share/:token serves the same allowlist", /app\.get\("\/api\/cards\/share\/:token"[\s\S]*?return res\.json\(\{ card: withGoogleWalletFlag\(publicCardFrom\(data, await cardOwnerPhoto\(data\)\)\), support_links: await publicSupportLinks\(data\.user_id\) \}\);/.test(code) &&
+    // NAMED (Nov 21 2026, P3-2): BEFORE the answer ended "support_links: await publicSupportLinks(data.user_id) });". AFTER the owner's
+    // Verified badge follows it on the next line, verified: await verifiedReasonOf(data.user_id) (checkVerifiedBadge).
+    check("10. GET /api/cards/share/:token serves the same allowlist", /app\.get\("\/api\/cards\/share\/:token"[\s\S]*?return res\.json\(\{ card: withGoogleWalletFlag\(publicCardFrom\(data, await cardOwnerPhoto\(data\)\)\), support_links: await publicSupportLinks\(data\.user_id\),\n {6}verified: await verifiedReasonOf\(data\.user_id\) \}\);/.test(code) &&
       /function withGoogleWalletFlag\(card\) \{\n  if \(card && googleWallet\.config\(\)\) card\.google_wallet = true;\n  return card;\n\}/.test(code));
     check("10. POST and PUT /api/digital-cards validate the privacy fields and map the slug refusals",
       (code.match(/const privacy = cardPrivacyUpdates\(req\.body\);/g) || []).length === 2 && /const postRefusal = cardWriteRefusal\(error\);/.test(code) && /const putRefusal = cardWriteRefusal\(error\);/.test(code));

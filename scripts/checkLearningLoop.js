@@ -401,7 +401,10 @@ function bfProfileColumns() {
   const PD = require(path.join(__dirname, "..", "lib", "profileDesign.js"));
   // NAMED (Nov 19 2026, P2-1, migration 189): the place for Local is private (Settings, Local reads it through
   // GET /api/me/place only), so the leak test below also proves the public profile never carries it.
-  const PRIVATE_COLS = ["id", "user_id", "created_at", "updated_at", "place_city", "place_region", "place_country", "local_opt_in"];
+  // NAMED (Nov 21 2026, P3-2, migration 199): BEFORE 8 private columns. AFTER 10: verified_reason and verified_at are not in the
+  // public allow-list; the profile carries the badge as its own key, verified, read through lib/verified.js reasonOf, which
+  // answers only "member", "seller", "official" or null (so the raw value planted below never goes out).
+  const PRIVATE_COLS = ["id", "user_id", "created_at", "updated_at", "place_city", "place_region", "place_country", "local_opt_in", "verified_reason", "verified_at"];
   const migCols = bfProfileColumns();
   check("P1. every bf_profiles column of the migrations is classified, public or private (" + migCols.length + " columns)",
     migCols.length === PUBLIC.length + PRIVATE_COLS.length && migCols.every(c => PUBLIC.indexOf(c) !== -1 || PRIVATE_COLS.indexOf(c) !== -1), migCols.join(","));

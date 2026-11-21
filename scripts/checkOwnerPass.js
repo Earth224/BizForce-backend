@@ -320,7 +320,11 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       "getUserPlan in triggerDeps",
       // NAMED (Nov 3 2026, store connections): BEFORE 18 readers; AFTER 19. storeSyncDeps hands lib/storeSync.js the plan
       // for the daily read; .active !== true, or a lookup that fails, skips that member's store (checkStoreConnections J3, J6).
-      "getUserPlan in storeSyncDeps"];
+      "getUserPlan in storeSyncDeps",
+      // NAMED (Nov 21 2026, P3-2): BEFORE 19 readers; AFTER 20. verifiedDeps hands lib/verified.js the plan for the Verified
+      // badge only; paidMember counts .active === true with access_reason "subscription", so the owner's pass and an admin
+      // never get the "member" badge from it, and a lookup that fails leaves the badge as it is (checkVerifiedBadge).
+      "getUserPlan in verifiedDeps"];
     const extra = callers.filter(c => KNOWN.indexOf(c) === -1), missing = KNOWN.filter(c => callers.indexOf(c) === -1);
     check("A. the entitlement readers are exactly the " + KNOWN.length + " listed (a new one must be added here and reviewed)",
       extra.length === 0 && missing.length === 0, "new: " + extra.join(", ") + "; gone: " + missing.join(", "));

@@ -312,7 +312,8 @@ function liftRoutes(fake) {
     console: { log() {}, error() {}, warn() {} },
     // NAMED (Nov 20 2026, P2-2): BEFORE only ./lib/profileDesign. AFTER the public profile route also asks ./lib/safety whether the
     // viewer is blocked and whether the page is hidden (the real module, against this check's client).
-    require: name => { if (name === "./lib/profileDesign") return L; if (name === "./lib/safety") return require("../lib/safety"); throw new Error("unexpected require " + name); },
+    // NAMED (Nov 21 2026, P3-2): AFTER ./lib/verified too (the real module: reasonOf reads the badge from the profile row).
+    require: name => { if (name === "./lib/profileDesign") return L; if (name === "./lib/safety") return require("../lib/safety"); if (name === "./lib/verified") return require("../lib/verified"); throw new Error("unexpected require " + name); },
     supabase: fake.client, Promise: Promise, Object: Object, Array: Array, String: String, JSON: JSON,
     requireAuth: (req, res, next) => next(), themesWriteLimiter: (req, res, next) => next(),
     THEME_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
@@ -321,6 +322,8 @@ function liftRoutes(fake) {
     ownerPagePublic: async () => true, publicSupportLinks: async () => [],
     // NAMED (Nov 20 2026, P3-1): the public profile says whether its owner is a member (checkFreeAccount runs ownerIsMember); here no one is.
     ownerIsMember: async () => false,
+    // NAMED (Nov 21 2026, P3-2): the public profile carries its owner's Verified badge (checkVerifiedBadge runs verifiedReasonOf); here none.
+    verifiedReasonOf: async () => null,
     // NAMED (Nov 20 2026, P2-2): the save screens its text (policyScreen, policyQueue: checkContentPolicy runs the real screen) and the
     // public read asks who the viewer is (viewerIdFrom); here every text passes and no one is signed in.
     policyScreen: () => ({ ok: true, review: null }), policyRefused: (res, s) => res.status(400).json({ error: s.error }), policyQueue: async () => null,

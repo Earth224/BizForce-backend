@@ -164,7 +164,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
   // the mutation still winds it back before this check's change.
   // NAMED (Nov 20 2026, P3-1): BEFORE the anchor named "2026-11-20". AFTER "2026-11-21", P3-1's version.
-  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-21\";", "const TERMS_VERSION = \"2026-10-26\";"]],
+  // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
+  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-21b\";", "const TERMS_VERSION = \"2026-10-26\";"]],
   // support's ledger legs are described differently, so the shared total in SQL misses them
   "support-debit-not-transfer": [["mig", "v_balance := bfc_transfer(p_from, p_to, p_amount, 'Transfer');", "v_balance := bfc_transfer(p_from, p_to, p_amount, case when p_kind = 'support' then 'Support' else 'Transfer' end);"]]
 };
@@ -890,7 +891,9 @@ function pageDom(html, url, opts) {
   const escH = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   check("G1. the Terms carry \"Member support\" with its five points", terms.indexOf('<h3 id="support">Member support</h3>') !== -1 && LP.MEMBER_SUPPORT_TERMS.length === 5 &&
     LP.MEMBER_SUPPORT_TERMS.every(b => terms.indexOf("<li>" + escH(b) + "</li>") !== -1) && /does not handle, hold or refund the money/.test(LP.MEMBER_SUPPORT_TERMS.join(" ")));
-  const versionOf = t => { const m = /const TERMS_VERSION = "(\d{4}-\d{2}-\d{2})";/.exec(t); return m && m[1]; };
+  // NAMED (Nov 21 2026, P3-2): BEFORE a version was a bare date. AFTER a same-day letter is allowed ("2026-11-21b"), which still
+  // sorts after the date alone, so "moved past" stays a string comparison.
+  const versionOf = t => { const m = /const TERMS_VERSION = "(\d{4}-\d{2}-\d{2}[a-z]?)";/.exec(t); return m && m[1]; };
   let preVersion = null;
   try { preVersion = versionOf(execFileSync("git", ["show", PRE_SUPPORT + ":lib/legal.js"], { cwd: REPO, encoding: "utf8" })); } catch (e) { preVersion = null; }
   const nowVersion = versionOf(ALL[LEGAL]);

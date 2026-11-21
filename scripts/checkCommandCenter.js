@@ -829,8 +829,9 @@ const SECTIONS = ["needs_you", "plans", "activity", "autopilot", "outbound", "sp
     const reg = JOB_SCHEDULES.SCHEDULES;
     const regCron = reg.filter(r => r.cron), regEvery = reg.filter(r => r.every_ms);
     const matched = crons.map(c => { const hits = regCron.filter(r => c.body.indexOf(r.tick) !== -1); return hits.length === 1 && hits[0].cron === literal(c.expr) ? hits[0] : null; });
+    // NAMED (Nov 21 2026, P3-2): BEFORE 13 cron.schedule calls; AFTER 14, the Verified badge's reconcile at :20 every hour UTC.
     check("the registry is the scheduler's: each of server.js's " + crons.length + " cron.schedule calls has exactly one entry, with the same expression",
-      crons.length === 13 && regCron.length === crons.length && matched.every(Boolean) && new Set(matched).size === crons.length,
+      crons.length === 14 && regCron.length === crons.length && matched.every(Boolean) && new Set(matched).size === crons.length,
       JSON.stringify(crons.map((c, i) => [c.expr, matched[i] && matched[i].tick])));
     check("... and each tracked setInterval has its entry with the same interval",
       intervals.length === regEvery.length && intervals.every(t => regEvery.some(r => r.tick === t.tick && r.every_ms === t.ms)), JSON.stringify(intervals));

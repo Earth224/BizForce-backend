@@ -318,7 +318,9 @@ const LIVE_ROWS = [
     // too, for the platform spend ceiling alone (platformSpendTestAccounts); the line above still proves no gate asks.
     // NAMED (Nov 14 2026, L1): BEFORE lib/selfReview.js and server.js. AFTER lib/renewalEmails.js too, to leave test accounts and the
     // owner out of the yearly reminder and the price-change notice (and test accounts out of the terms-change email); it is no gate.
-    check("4. only lib/renewalEmails.js, lib/selfReview.js and server.js require lib/testAccounts.js", JSON.stringify(requirers) === JSON.stringify(["lib/renewalEmails.js", "lib/selfReview.js", "server.js"]), requirers.join(", "));
+    // NAMED (Nov 21 2026, P3-2): BEFORE three requirers. AFTER lib/verified.js too: the Verified badge's hourly reconcile leaves test
+    // accounts and the owner out of its subscriptions list (isUncountedAccount); it decides only the badge and is no gate.
+    check("4. only lib/renewalEmails.js, lib/selfReview.js, lib/verified.js and server.js require lib/testAccounts.js", JSON.stringify(requirers) === JSON.stringify(["lib/renewalEmails.js", "lib/selfReview.js", "lib/verified.js", "server.js"]), requirers.join(", "));
     const askers = Object.keys(FNS_ASKING_TEST(SERVER));
     check("4. in server.js only platformSpendTestAccounts asks isTestAccount", JSON.stringify(askers) === JSON.stringify(["platformSpendTestAccounts"]), askers.join(", "));
     check("4. the cleanup leaves the check account's subscription, which checkRunResidue requires active",

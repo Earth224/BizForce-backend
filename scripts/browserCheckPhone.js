@@ -115,6 +115,18 @@
                        text. The other 79 pages are unchanged at 1440 (the members
                        panel and the banner show only for a free or unconfirmed
                        account). The proof is Downloads\phone1\p31-desktop-proof.json.
+                       NAMED (Nov 21 2026, P3-2): three pages changed on purpose and
+                       are re-recorded: moderation.html (the owner's "Verified
+                       sellers" section: 13 new, none gone), privacy.html (what is
+                       kept for the Verified badge and who sees it: 2 list items
+                       new, none gone) and terms.html (section "The Verified
+                       badge": 7 new, none gone), in desktop-baseline-p32-moderation,
+                       p32-privacy and p32-terms.json; every other element is the
+                       same, moved down below the new text, or a container grown
+                       to hold it. The other 79 pages are unchanged at 1440 (the
+                       badge draws only for an account the server says is
+                       verified, and the fixtures say none). The proof is
+                       Downloads\phone1\p32-desktop-proof.json.
      PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
@@ -138,6 +150,12 @@
                            create, the Inbox, the HQ tab's members panel, the dashboard and
                            an agent page behind it); at 360, 390 and 430; screenshots to
                            Downloadsp31.
+
+     PHONE_P32=1           only P3-2's own screens (p32Run): the Verified badge on the
+                           Following feed, Talk, the profile, a storefront and the public
+                           post page /p/; its tap sheet ("Verified: [kind]. This is not an
+                           endorsement."); at 360, 390 and 430; screenshots at 390 x 844
+                           to Downloads\p32.
 
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
@@ -186,7 +204,7 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -382,6 +400,8 @@ function api(method, u, request) {
   const p = u.pathname;
   // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
   if (P31) { const a = p31Api(method, p); if (a !== undefined) return a; }
+  // NAMED (Nov 21 2026, P3-2): with PHONE_P32=1, the profile and the storefront carry the server's verified field (p32Api)
+  if (P32) { const a = p32Api(method, p); if (a !== undefined) return a; }
   const since = "2026-11-07T10:00:00Z";
   // NAMED (Nov 20 2026, P3-1): access.tier "member" and email_verified true (Rose is a member with a confirmed email): no panel, no banner
   if (p === "/api/auth/me") return { user: ROSE, access: { active: true, reason: "subscription", tier: "member", email_verified: true }, subscription: { status: "active", plan: "all_access", current_period_end: ago(-24 * 20), cancel_at_period_end: false } };
@@ -423,9 +443,9 @@ function api(method, u, request) {
   if (P22) { const a = p22Api(method, p); if (a !== undefined) return a; }
   // NAMED (Nov 20 2026, P2-3): with PHONE_P23=1, posts, the feed, comments and follows are lib/posts.js over P23S.db
   // (p23Api, a promise; the request handler awaits every answer), then P2-1's fixtures (the profile, the counts).
-  if ((P23 || P31) && P23_IS(p)) return p23Api(method, u, request);
+  if ((P23 || P31 || P32) && P23_IS(p)) return p23Api(method, u, request);   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
   if (P23) { const a = fx1Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 20 2026, FX1)
-  if (P21 || P22 || P23 || P31) { const a = p21Api(method, p); if (a !== undefined) return a; }
+  if (P21 || P22 || P23 || P31 || P32) { const a = p21Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -442,12 +462,12 @@ function serve() {
     if (p === "/__hq1/tone.wav") { res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": TONE.length, "Cache-Control": "no-store" }); res.end(TONE); return; }   // HQ1
     if (p.endsWith("/")) p += "index.html";
     // NAMED (Nov 20 2026, P2-3): /p/<id> is the backend's page (lib/postPage.js over P23S.db), as _redirects proxies it
-    if (P23 && /^\/p\/[^/]+$/.test(p)) {
+    if ((P23 || P32) && /^\/p\/[^/]+$/.test(p)) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
       p23PostPage(p.slice(3)).then(r => { res.writeHead(r.code, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(r.html); },
         e => { res.writeHead(500); res.end(String(e && e.message)); });
       return;
     }
-    if (P21 || P23) p = p21Rewrite(p);   // P2-1: /@handle, /listing/:id, /blog/... as the site rewrites them
+    if (P21 || P23 || P32) p = p21Rewrite(p);   // NAMED (Nov 21 2026, P3-2): and PHONE_P32   // P2-1: /@handle, /listing/:id, /blog/... as the site rewrites them
     let file = path.resolve(root, "." + p);
     if (!fs.existsSync(file) && fs.existsSync(file + ".html")) file += ".html";
     if (!file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); res.end("not found"); return; }
@@ -684,7 +704,7 @@ const ORBIT = String.raw`(function(){
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: code, body: Buffer.from(body).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,PATCH,DELETE,OPTIONS" }] });
-        } else if (P23 && u.origin === P23_STORAGE) {
+        } else if ((P23 || P32) && u.origin === P23_STORAGE) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
           // NAMED (Nov 20 2026, P2-3): a post's photos, the frontend's own brand pictures
           const pic = P21_IMG[(u.pathname.length % P21_IMG.length)];
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: fs.readFileSync(path.join(FRONTEND, pic)).toString("base64"),
@@ -717,6 +737,7 @@ const ORBIT = String.raw`(function(){
     else if (P22) { await p22Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-2)
     else if (P23) { await p23Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-3)
     else if (P31) { await p31Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P3-1)
+    else if (P32) { await p32Run(cdp, origin); PAGES = []; }   // NAMED (Nov 21 2026, P3-2)
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -1927,5 +1948,127 @@ async function p31Run(cdp, origin) {
       await pageChecks(at, { panel: true });
       await shot(pg.replace(/\//g, "-").replace(/\.html$/, "") + "-panel");
     }
+  }
+}
+
+/* ══ P3-2 (Nov 21 2026): PHONE_P32=1 ═════════════════════════════════════════════════════════════════════════════
+   The Verified badge at PHONE_P32_WIDTHS (default 360, 390, 430), screenshots at 390 x 844 to PHONE_P32_OUT (default
+   Downloads\p32). P2-3's in-memory world (lib/posts.js over scripts/_p23Db.js) with bf_profiles.verified_reason set:
+   Pat's Pantry 'seller', Lee Ceramics 'member', Rose 'official'. So the feed and Talk get the badge from lib/posts.js
+   peopleById, and /p/ from lib/postPage.js, as the server draws them; the profile (/api/bfp/profile/me) and the
+   storefront (/api/bfp/seller/pat) answer the server's verified field beside what P2-1 and P2-3 answer.
+   On each surface: the mark is inside the name, after its text, 16 x 16, on the name's line, inside the screen; its
+   accessible name is its kind; a tap opens the sheet ("Verified: [kind]. This is not an endorsement.") inside the
+   screen with a 44 px Close, and stays on the page; Close closes it; and the page keeps every rule of the phone run. */
+const P32 = process.env.PHONE_P32 === "1";
+const P32_WIDTHS = String(process.env.PHONE_P32_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const P32_OUT = process.env.PHONE_P32_OUT || path.join(os.homedir(), "Downloads", "p32");
+const P32_KIND = { [ROSE.id]: "official", [P21_PEER]: "seller", [P21_PEER2]: "member" };
+function p32Api(method, p) {
+  if (p === "/api/bfp/profile/me" && method === "GET") return Object.assign({}, P21_FIX.profile, { verified: P32_KIND[ROSE.id] });
+  if (p === "/api/bfp/seller/pat") return { seller: { user_id: P21_PEER, username: "pat", display_name: "Pat's Pantry", tagline: "Jams and preserves", avatar_url: null }, products: [], services: [], support_links: [],
+    member: true, verified: P32_KIND[P21_PEER] };
+  return undefined;
+}
+// the mark inside the name element sel (the first one that holds a mark), measured
+const P32_MARK = String.raw`(function(sel,kind){
+  var names=[].filter.call(document.querySelectorAll(sel),function(n){var r=n.getBoundingClientRect();return r.width>0&&n.querySelector('.bf-vb[data-bf-verified="'+kind+'"]');});
+  var n=names[0];if(!n)return null;var b=n.querySelector('.bf-vb'),nr=n.getBoundingClientRect(),br=b.getBoundingClientRect();
+  var txt=document.createRange();txt.selectNodeContents(n);txt.setEndBefore(b);var tr=txt.getBoundingClientRect();
+  var R=function(r){return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),r:+r.right.toFixed(1),b:+r.bottom.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+  return {name:n.textContent.trim(),kind:b.getAttribute('data-bf-verified'),label:b.getAttribute('aria-label'),role:b.getAttribute('role'),focusable:b.tabIndex>=0,
+    mark:R(br),nameBox:R(nr),text:R(tr),last:n.lastElementChild===b,W:innerWidth,H:innerHeight,hscroll:document.documentElement.scrollWidth>innerWidth+1};
+})`;
+async function p32Run(cdp, origin) {
+  fs.mkdirSync(P32_OUT, { recursive: true });
+  console.log("browserCheckPhone P3-2 (the Verified badge on the feed, Talk, the profile, a storefront and the public post page, and its sheet) at " + P32_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const VB = require("../lib/verified");
+  const viewShot = async file => { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P32_OUT, file), Buffer.from(r.data, "base64")); };
+  const SHEETS = /^(div|section|aside)[#.](bf-vb-veil|bf-vb-sheet|bfp-talk|bfp-talk-backdrop)[ .]/;
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    const tiles = await ev("[].map.call(document.querySelectorAll('.pfs-cell.is-text > span'),function(s){return s.textContent.slice(0,40);})");
+    const clipped = m.clipped.filter(x => !tiles.some(t => x.indexOf('"' + t.slice(0, 30)) !== -1));
+    check(at + "no text cut off" + (clipped.length < m.clipped.length ? " (a text post's tile excerpt aside)" : ""), clipped.length === 0, J(clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const deco = m.deco.filter(x => !(opts && opts.sheet && SHEETS.test(x)));
+    check(at + "decoration is under the text" + (opts && opts.sheet ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && SHEETS.test(x)));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
+  };
+  // the mark, then a tap on it: the sheet, Close, and the page stays
+  const markAndSheet = async (at, sel, kind, w, h, shotName, shot) => {
+    const m = await ev(P32_MARK + "(" + J(sel) + "," + J(kind) + ")");
+    check(at + "the " + VB.LABELS[kind] + " mark is inside the name, after its text, 16 x 16, on the name's line, inside the screen",
+      !!m && m.kind === kind && m.last && Math.abs(m.mark.w - 16) <= 0.5 && Math.abs(m.mark.h - 16) <= 0.5 && m.mark.l >= m.text.r - 0.5 &&
+      m.mark.t >= m.nameBox.t - 1 && m.mark.b <= m.nameBox.b + 1 && m.mark.r <= w + 0.5 && m.mark.l >= 0 && !m.hscroll, J(m));
+    check(at + "...its accessible name is its kind (role img, not a tab stop of its own)", !!m && m.role === "img" && m.label === VB.LABELS[kind] && m.focusable === false, J(m && [m.role, m.label, m.focusable]));
+    await shot(shotName);
+    const path0 = await ev("location.pathname + location.search");
+    await ev("(function(){var k=" + J(kind) + ",n=[].filter.call(document.querySelectorAll(" + J(sel) + "),function(x){return x.getBoundingClientRect().width>0&&x.querySelector('.bf-vb[data-bf-verified=\"'+k+'\"]');})[0];var b=n&&n.querySelector('.bf-vb');if(b)b.click();return !!b;})()");
+    await sleep(400);
+    const sh = await ev("(function(){var v=document.querySelector('.bf-vb-veil'),s=v&&v.querySelector('.bf-vb-sheet');if(!s)return null;var r=s.getBoundingClientRect(),c=s.querySelector('button'),q=c&&c.getBoundingClientRect();" +
+      "return {text:(s.querySelector('[data-bf-verified-text]')||{}).textContent,role:s.getAttribute('role'),l:Math.round(r.left),r:Math.round(r.right),t:Math.round(r.top),b:Math.round(r.bottom),close:c&&c.textContent,cw:q&&Math.round(q.width),ch:q&&Math.round(q.height),focus:document.activeElement===c,hscroll:document.documentElement.scrollWidth>innerWidth+1};})()");
+    const path1 = await ev("location.pathname + location.search");
+    check(at + "a tap opens the sheet: \"" + VB.sheetText(kind) + "\", inside the screen, Close 44 px or more, focused",
+      !!sh && sh.text === VB.sheetText(kind) && sh.role === "dialog" && sh.l >= -1 && sh.r <= w + 1 && sh.t >= -1 && sh.b <= h + 1 && sh.cw >= 44 && sh.ch >= 44 && sh.focus && !sh.hscroll, J(sh));
+    check(at + "...and the tap stays on the page (the name's link is not followed)", path1 === path0, J([path0, path1]));
+    await pageChecks(at + "with the sheet open: ", { sheet: true });
+    await shot(shotName + "-sheet");
+    await ev("(function(){var c=document.querySelector('.bf-vb-sheet button');if(c)c.click();return !!c;})()"); await sleep(250);
+    check(at + "Close closes it", (await ev("!document.querySelector('.bf-vb-veil')")) === true);
+  };
+  for (const w of P32_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) await viewShot(name + "-390x844.png"); };
+    Object.assign(P23S, await p23World(false));
+    P23S.db.t.bf_profiles.forEach(r => { r.verified_reason = P32_KIND[r.user_id] || null; r.verified_at = P32_KIND[r.user_id] ? ago(24) : null; });
+
+    // 1. the Following feed: Pat's text post first (a seller)
+    await open(cdp, origin, "home.html", w, h, true);
+    let at = "P32 feed at " + w + ": ";
+    const first = await ev("(function(){var p=document.querySelector('#feed [data-post]');return p&&p.getAttribute('data-post');})()");
+    check(at + "Pat's post is first, as P2-3 has it", first === P23_POST.text, first);
+    await pageChecks(at);
+    await markAndSheet(at, "#feed [data-post=\"" + P23_POST.text + "\"] .bfp-name", "seller", w, h, "feed", shot);
+    const plain = await ev("(function(){var p=document.querySelector('#feed [data-post=\"" + P23_POST.other + "\"]');return p?!!p.querySelector('.bf-vb'):'absent';})()");
+    check(at + "an account with no badge draws none (Maple Mill, not followed, is not in this feed or shows no mark)", plain === false || plain === "absent", J(plain));
+
+    // 2. Talk on Lee's photo post: Pat (seller) and Rose (official) comment
+    await ev("(function(){var e=document.querySelector('#feed [data-post=\"" + P23_POST.photo + "\"]');if(e)e.scrollIntoView({block:'start'});return !!e;})()"); await sleep(500);
+    await markAndSheet("P32 feed (Lee's post) at " + w + ": ", "#feed [data-post=\"" + P23_POST.photo + "\"] .bfp-name", "member", w, h, "feed-member", shot);
+    await ev("(function(){var b=document.querySelector('#feed [data-post=\"" + P23_POST.photo + "\"] [data-act=talk]');if(b)b.click();return !!b;})()"); await sleep(1200);
+    at = "P32 Talk at " + w + ": ";
+    const talkNames = await ev("[].map.call(document.querySelectorAll('.bfp-c-name'),function(n){var b=n.querySelector('.bf-vb');return n.textContent.trim()+'|'+(b?b.getAttribute('data-bf-verified'):'');})");
+    check(at + "each comment's name carries its author's mark (Pat seller, Rose official)", talkNames.indexOf("Pat's Pantry|seller") !== -1 && talkNames.indexOf("Rose|official") !== -1, J(talkNames));
+    await markAndSheet(at, ".bfp-c-name", "seller", w, h, "talk", shot);
+
+    // 3. the profile (Rose's own: official)
+    await open(cdp, origin, "profile.html", w, h, true);
+    at = "P32 profile at " + w + ": ";
+    await pageChecks(at);
+    await markAndSheet(at, ".pfs-title", "official", w, h, "profile", shot);
+
+    // 4. a storefront (Pat: seller)
+    await open(cdp, origin, "@pat", w, h, true);
+    at = "P32 storefront at " + w + ": ";
+    await pageChecks(at);
+    await markAndSheet(at, "#sfName", "seller", w, h, "storefront", shot);
+
+    // 5. the public post page /p/ (Lee's photo post: member), signed in, then signed out
+    await open(cdp, origin, "p/" + P23_POST.photo, w, h, true);
+    at = "P32 public post page at " + w + ": ";
+    await pageChecks(at);
+    await markAndSheet(at, ".pp-name", "member", w, h, "post-page", shot);
+    await ev("sessionStorage.setItem('phone_check_out','1'),localStorage.removeItem('bf_token'),localStorage.removeItem('bf_user'),true");
+    await open(cdp, origin, "p/" + P23_POST.text, w, h, true);
+    at = "P32 public post page (signed out) at " + w + ": ";
+    await pageChecks(at);
+    await markAndSheet(at, ".pp-name", "seller", w, h, "post-page-signed-out", shot);
+    await ev("sessionStorage.removeItem('phone_check_out'),true");
   }
 }

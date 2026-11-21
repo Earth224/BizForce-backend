@@ -1046,6 +1046,8 @@ app.post(
 
     try {
       await handleStripeEvent(event);
+      // NAMED (Nov 21 2026, P3-2): the Verified badge follows the membership the event changed (lib/verified.js; never throws)
+      try { await require("./lib/verified").afterStripeEvent(verifiedDeps(), event); } catch (badgeError) { console.error("[verified] after the Stripe event: " + ((badgeError && badgeError.message) || badgeError)); }
       return res.json({ received: true });
     } catch (error) {
       console.error("Stripe webhook handler failed:", error);
@@ -4126,6 +4128,26 @@ async function ownerPagePublic(userId) {
       ((standingErr && standingErr.message) || standingErr) + " — page hidden.");
     return false;
   }
+}
+
+/* P3-2 (Nov 21 2026): what lib/verified.js needs from the server. planOf is getUserPlan; the badge's 'member' is a
+   PAID membership only (access_reason "subscription"), never the owner pass or the admin exemption. */
+/* The Verified badge's reason for one account, for a page that shows it. A failed read shows no badge: it is never
+   shown on a guess. */
+async function verifiedReasonOf(userId) {
+  if (!userId) return null;
+  try {
+    const r = await supabase.from("bf_profiles").select("user_id, verified_reason").eq("user_id", userId).maybeSingle();
+    if (r.error) throw r.error;
+    return require("./lib/verified").reasonOf(r.data);
+  } catch (badgeReadError) {
+    console.error("[verified] could not read the badge of " + userId + ": " + ((badgeReadError && badgeReadError.message) || badgeReadError) + " — none shown.");
+    return null;
+  }
+}
+
+function verifiedDeps() {
+  return { sb: supabase, planOf: function (id) { return getUserPlan(id); }, now: nowIso };
 }
 
 /* P3-1: "member" while getUserPlan says active (a paying member, the owner or
@@ -48267,7 +48289,14 @@ app.post("/api/admin/ban/:userId", requireAuth, requireAdmin, async function (re
         JSON.stringify(reason || null) + ".");
     }
 
-    return res.json({ user: data });
+    /* NAMED (Nov 21 2026, P3-2): a ban takes the Verified badge away, whatever its kind (lib/verified.js clearFor).
+       The ban has landed; a failure here is logged, the badge is not shown anyway (the page is not public), and the
+       scheduled pass clears it. */
+    let badgeCleared = false;
+    try { badgeCleared = (await require("./lib/verified").clearFor(verifiedDeps(), userId)).cleared; }
+    catch (badgeError) { console.error("[verified] the ban of " + userId + " stands; its badge could not be cleared now: " + ((badgeError && badgeError.message) || badgeError)); }
+
+    return res.json({ user: data, badge_cleared: badgeCleared });
   } catch (error) {
     next(error);
   }
@@ -48315,6 +48344,11 @@ app.post("/api/admin/unban/:userId", requireAuth, requireAdmin, async function (
         JSON.stringify(unbanReason || null) + ".");
     }
 
+    /* NAMED (Nov 21 2026, P3-2): a paid member's 'member' badge comes back with the unban; a seller or official badge
+       does not (the owner sets it again). */
+    try { await require("./lib/verified").syncOne(verifiedDeps(), userId); }
+    catch (badgeError) { console.error("[verified] the unban of " + userId + " stands; its badge waits for the scheduled pass: " + ((badgeError && badgeError.message) || badgeError)); }
+
     return res.json({ user: data });
   } catch (error) {
     next(error);
@@ -48331,10 +48365,11 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
        touch. b4fbb11 stripped this write along with the profiles one below;
        it was right about profiles, which has no such column, and wrong here.
 
-       NOTHING READS IT YET. No route, page or script in either repo reads
-       verification_status, so the value is recorded but nothing surfaces it.
-       A "verified" badge (on the profile, in search, in the admin list) is the
-       work that would make it mean something to anyone. */
+       NAMED (Nov 21 2026, P3-2): BEFORE "NOTHING READS IT YET": the value was
+       recorded and nothing surfaced it. AFTER the route also gives the Verified
+       badge (bf_profiles.verified_reason, lib/verified.js setByOwner), below:
+       'seller' by default, or 'official' when the body says reason
+       "official". verification_status is still recorded here, first. */
     const { data, error } = await supabase
       .from("users")
       .update({
@@ -48377,6 +48412,22 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
         ". The verification stands; only the profile's timestamp is stale.");
     }
 
+    /* NAMED (Nov 21 2026, P3-2): THE BADGE. Refused (and said so) for an account with no profile, a banned account
+       or a removed profile; the verification_status record above stands either way. Each badge given is logged in
+       moderation_logs as "verify_seller" or "verify_official". */
+    const badgeReason = req.body && req.body.reason === "official" ? "official" : "seller";
+    let badge;
+    try { badge = await require("./lib/verified").setByOwner(verifiedDeps(), userId, badgeReason); }
+    catch (badgeError) {
+      console.error("[admin/verify] the badge for " + userId + " could not be recorded: " + ((badgeError && badgeError.message) || badgeError));
+      badge = { status: 500, body: { error: "The badge could not be recorded. Nothing was changed on the profile." } };
+    }
+    if (badge.status === 200) {
+      const badgeLog = await supabase.from("moderation_logs").insert({ admin_id: req.user.id, target_user_id: userId,
+        action: "verify_" + badgeReason, reason: safeText(req.body && req.body.note, 1000) || null, created_at: nowIso() });
+      if (badgeLog.error) console.error("[admin] AUDIT ROW LOST for the " + badgeReason + " badge given to " + userId + "; THE BADGE STANDS.");
+    }
+
     var verificationNotification = await supabase.from("notifications").insert({
       user_id: userId,
       type: "verification",
@@ -48389,10 +48440,44 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
       console.warn("[notifications] insert failed for POST /api/admin/verify/:userId — the route still succeeded, the user simply was not notified:", verificationNotification.error.message || verificationNotification.error);
     }
 
-    return res.json({ user: data, profile_updated: profileUpdated });
+    return res.json({ user: data, profile_updated: profileUpdated, badge: badge.body, badge_status: badge.status });
   } catch (error) {
     next(error);
   }
+});
+
+/* P3-2 (Nov 21 2026): the owner removes a seller or official badge (moderation.html "Verified sellers"). A paid
+   member keeps the 'member' badge (lib/verified.js unsetByOwner). Logged in moderation_logs as "unverify". */
+app.post("/api/admin/unverify/:userId", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    const targetId = safeText(req.params.userId, 60);
+    if (!require("./lib/inbox").isUuid(targetId)) return res.status(404).json({ error: "No such account. Nothing was changed." });
+    const r = await require("./lib/verified").unsetByOwner(verifiedDeps(), targetId);
+    if (r.status === 200 && r.body.from) {
+      const unverifyLog = await supabase.from("moderation_logs").insert({ admin_id: req.user.id, target_user_id: targetId,
+        action: "unverify", reason: ("was " + r.body.from + (r.body.verified_reason ? ", now " + r.body.verified_reason : "")).slice(0, 1000), created_at: nowIso() });
+      if (unverifyLog.error) console.error("[admin] AUDIT ROW LOST for the unverify of " + targetId + "; THE CHANGE STANDS.");
+    }
+    return res.status(r.status).json(r.body);
+  } catch (error) { next(error); }
+});
+
+/* P3-2: the accounts the owner verified (seller and official), and with ?handle= the one account that handle names,
+   for moderation.html. Never an email. */
+app.get("/api/admin/verified", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    const cols = "user_id, username, display_name, verified_reason, verified_at";
+    const handle = typeof req.query.handle === "string" ? req.query.handle.trim().replace(/^@/, "").toLowerCase().slice(0, 40) : "";
+    let found = null;
+    if (handle) {
+      const f = await supabase.from("bf_profiles").select(cols).eq("username", handle).maybeSingle();
+      if (f.error) throw f.error;
+      found = f.data || null;
+    }
+    const list = await supabase.from("bf_profiles").select(cols).in("verified_reason", ["seller", "official"]).order("verified_at", { ascending: false }).limit(500);
+    if (list.error) throw list.error;
+    return res.json({ accounts: list.data || [], found: found, handle: handle || null, labels: require("./lib/verified").LABELS });
+  } catch (error) { next(error); }
 });
 
 app.post("/api/admin/flag/:userId", requireAuth, requireAdmin, async function (req, res, next) {
@@ -53671,7 +53756,9 @@ app.get("/api/cards/share/:token", cardPageLimiter, async function (req, res, ne
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
     noStoreIfLeadForm(res, data);
-    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });
+    // NAMED (Nov 21 2026, P3-2): the card owner's Verified badge (lib/verified.js), or null; user_id itself is never returned
+    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id),
+      verified: await verifiedReasonOf(data.user_id) });
   } catch (error) { next(error); }
 });
 
@@ -53692,7 +53779,9 @@ app.get("/api/cards/slug/:slug", cardPageLimiter, async function (req, res, next
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
     noStoreIfLeadForm(res, data);
-    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });
+    // NAMED (Nov 21 2026, P3-2): the card owner's Verified badge (lib/verified.js), or null; user_id itself is never returned
+    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id),
+      verified: await verifiedReasonOf(data.user_id) });
   } catch (error) { next(error); }
 });
 
@@ -53734,6 +53823,8 @@ const BFP_FONTS = ["modern", "classic", "technical"];
 // The folder is one of the pages' own nine, exactly: never media/ (the Media
 // Library, which only POST /api/media writes), never a path with "/".
 const UPLOAD_URL_FOLDERS = ["marketplace-media", "card-media", "banners", "avatars", "videos", "music", "music-art", "products", "portfolio"];
+/* P3-2 (Nov 21 2026): the folders a free account may not upload to (members only, refused 402 with the members panel). */
+const UPLOAD_URL_MEMBER_FOLDERS = ["videos", "music", "music-art"];
 /* P3-1 (Nov 20 2026): signed upload URLs are rate-limited per member (UPLOAD_URL_PER_HOUR an hour), so no account can
    ask for an unbounded number of uploads; each URL also reserves its declared size against the account's storage. */
 const UPLOAD_URL_PER_HOUR = 60;
@@ -53750,6 +53841,10 @@ app.post("/api/bfp/upload-url", requireAuth, uploadUrlLimiter, async function (r
     return res.status(400).json({ error: "folder must be one of: " + UPLOAD_URL_FOLDERS.join(", ") + ".", reason: "folder" });
   }
   const folder      = req.body.folder;
+  /* NAMED (Nov 21 2026, P3-2, the owner's route decision): profile video uploads are for members for now (video uses
+     the most storage), and music uploads are a member feature (lib/membership.js MEMBER_ADDS), so these folders need a
+     membership here as POST /api/bfp/videos and POST /api/bfp/music do. Photos, products and portfolio stay free. */
+  if (UPLOAD_URL_MEMBER_FOLDERS.indexOf(folder) !== -1 && (await refuseUnlessSubscribed(req, res, "post /api/bfp/upload-url " + folder))) return;
   const filename    = safeText(req.body.filename, 200) || "file";
   /* NAMED (Nov 20 2026, P2-2, fix c): the declared size (now required) and type must fit the folder, with the media
      library's and the music library's own limits (lib/uploadCheck.js); after the upload the page calls
@@ -53837,7 +53932,8 @@ app.get("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
     if (error) throw error;
     const design = profileDesignReply(data && data.profile_design, req.user.id);
     if (data) data.profile_design = design.design;
-    return res.json({ profile: data, design_photo_url: design.photo_url });
+    // NAMED (Nov 21 2026, P3-2): verified, the Verified badge's reason (lib/verified.js), or null
+    return res.json({ profile: data, design_photo_url: design.photo_url, verified: require("./lib/verified").reasonOf(data) });
   } catch (error) { next(error); }
 });
 
@@ -53947,7 +54043,7 @@ app.get("/api/bfp/profile/:userId", async function (req, res, next) {
     // Of the member's support settings, only the normalized links (URLs rebuilt) are public here.
     // P3-1: member is true only for a BizForce member (ownerIsMember); the profile shows "BizForce member" only then.
     return res.json({ profile: data, design_photo_url: design.photo_url, support_links: data ? await publicSupportLinks(userId) : [],
-      member: data ? await ownerIsMember(userId) : false });
+      member: data ? await ownerIsMember(userId) : false, verified: data ? await verifiedReasonOf(userId) : null });   // NAMED (Nov 21 2026, P3-2): the Verified badge
   } catch (error) { next(error); }
 });
 
@@ -54198,7 +54294,7 @@ app.get("/api/bfp/services/browse", async function (req, res, next) {
     if (userIds.length) {
       const { data: sellers, error: sellersError } = await supabase
         .from("bf_profiles")
-        .select("user_id, username, display_name, avatar_url")
+        .select("user_id, username, display_name, avatar_url, verified_reason")   // NAMED (Nov 21 2026, P3-2): the Verified badge
         .in("user_id", userIds);
       if (sellersError) throw sellersError;
       (sellers || []).forEach(function (s) { sellerById[s.user_id] = s; });
@@ -54207,7 +54303,7 @@ app.get("/api/bfp/services/browse", async function (req, res, next) {
     const result = (services || []).map(function (s) {
       const seller = sellerById[s.user_id];
       return Object.assign({}, s, {
-        seller: seller ? { username: seller.username, display_name: seller.display_name, avatar_url: seller.avatar_url } : null
+        seller: seller ? { username: seller.username, display_name: seller.display_name, avatar_url: seller.avatar_url, verified: require("./lib/verified").reasonOf(seller) } : null
       });
     });
 
@@ -54433,7 +54529,9 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
       design_photo_url: sellerDesign.photo_url,
       support_links: await publicSupportLinks(userId),
       // P3-1: the storefront shows "BizForce member" only for a member (ownerIsMember).
-      member: await ownerIsMember(userId)
+      member: await ownerIsMember(userId),
+      // NAMED (Nov 21 2026, P3-2): the Verified badge's reason (lib/verified.js), or null
+      verified: await verifiedReasonOf(userId)
     });
   } catch (error) { next(error); }
 });
@@ -54664,7 +54762,9 @@ app.get("/api/marketplace/listings/:id", async function (req, res, next) {
     return res.json({
       listing: publicListing,
       handle: seller ? seller.username : null,
-      display_name: seller ? seller.display_name : null
+      display_name: seller ? seller.display_name : null,
+      // NAMED (Nov 21 2026, P3-2): the seller's Verified badge (lib/verified.js), or null
+      verified: seller ? await verifiedReasonOf(listing.seller_id) : null
     });
   } catch (error) { next(error); }
 });
@@ -62390,6 +62490,26 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] schema check scheduled — 06:00 UTC daily, claimed through job_runs.schema_check, and once 60 seconds after boot; read-only head counts.");
   } else {
     console.log("[startup] schema check disabled (ENABLE_SCHEMA_CHECK is exactly \"false\")");
+  }
+
+  /* P3-2 (Nov 21 2026): the Verified badge's reconcile (lib/verified.js reconcile). Every account showing a badge and
+     every account with a subscription row is brought in step: a paid membership that became active shows 'member', one
+     that ended loses it, and a banned account or a removed profile loses any badge. Every hour at :20 UTC, so a
+     membership that ends is cleared the same day even when no Stripe event arrives (the webhook brings it in step at
+     once when one does). Idempotent: a second run changes nothing. ON unless ENABLE_VERIFIED_SYNC is exactly "false". */
+  if (process.env.ENABLE_VERIFIED_SYNC !== "false") {
+    cron.schedule("20 * * * *", function () {
+      require("./lib/verified").reconcile(verifiedDeps()).then(function (n) {
+        if (n.set || n.cleared || n.failed) console.log("[verified] reconcile: " + n.checked + " checked, " + n.set + " set, " + n.cleared + " cleared, " + n.failed + " failed.");
+      }).catch(function (err) {
+        console.error("[verified] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] Verified badge reconcile scheduled — :20 every hour UTC; writes only bf_profiles.verified_reason and verified_at.");
+  } else {
+    console.log("[startup] Verified badge reconcile disabled (ENABLE_VERIFIED_SYNC is exactly \"false\")");
   }
 
   /* Store connections (lib/storeSync.js): every connected Shopify and
