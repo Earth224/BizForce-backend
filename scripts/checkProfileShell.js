@@ -26,7 +26,10 @@ const MUTATIONS = {
   "visitor-stats-ungated": [[SERVER, "    if (!require(\"./lib/inbox\").isUuid(userId) || !(await ownerPagePublic(userId))) return res.json({ stats: null });", "    if (!require(\"./lib/inbox\").isUuid(userId)) return res.json({ stats: null });"]],
   "sales-any-status": [[SERVER, "    .eq(\"seller_id\", userId).eq(\"status\", \"completed\");", "    .eq(\"seller_id\", userId);"]],
   "bizcash-someone-else": [[SERVER, "    const wallet = await supabase.from(\"user_wallets\").select(\"balance\").eq(\"user_id\", req.user.id).maybeSingle();", "    const wallet = await supabase.from(\"user_wallets\").select(\"balance\").maybeSingle();"]],
-  "shell-bizcash-for-all": [[SHELL, "    if (owner && typeof s.bizcash === \"number\")", "    if (typeof s.bizcash === \"number\")"]],
+  // NAMED (Nov 20 2026, FX1): BEFORE the anchor "if (owner && typeof s.bizcash"; AFTER BizCash is a paid member's only (state.member)
+  "shell-bizcash-for-all": [[SHELL, "    if (owner && state.member === true && typeof s.bizcash === \"number\")", "    if (typeof s.bizcash === \"number\")"]],
+  "shell-bizcash-unpaid": [[SHELL, "    if (owner && state.member === true && typeof s.bizcash === \"number\")", "    if (owner && typeof s.bizcash === \"number\")"]],
+  "shell-wallet-unpaid": [[SHELL, "          (owner && paid ? '<a class=\"pfs-btn is-wallet\" href=\"wallet.html\"", "          (owner ? '<a class=\"pfs-btn is-wallet\" href=\"wallet.html\""]],
   "shell-fake-follow-counts": [[SHELL, "    return out.length ? '<ul class=\"pfs-stats\"", "    out.push('<li class=\"pfs-stat\"><span class=\"pfs-num\">0</span><span class=\"pfs-lab\">Followers</span></li>');\n    return out.length ? '<ul class=\"pfs-stats\""]],
   "shell-edit-for-visitor": [[SHELL, "          (owner ? '<button type=\"button\" class=\"pfs-btn\" id=\"pfsEdit\">Edit profile</button>' : \"\") +", "          '<button type=\"button\" class=\"pfs-btn\" id=\"pfsEdit\">Edit profile</button>' +"]],
   "shell-share-wrong-url": [[SHELL, "    var url = ORIGIN + \"/@\" + handle;", "    var url = ORIGIN + \"/profile.html\";"]],
@@ -34,9 +37,11 @@ const MUTATIONS = {
   "shell-drafts-in-shop": [[SHELL, "    var active = (rows || []).filter(function (l) { return l.status === \"active\"; });", "    var active = rows || [];"]],
   "shell-services-in-shop": [[SHELL, "    state.shop = active.filter(function (l) { return l.listing_kind !== \"service\"; }).map(map);", "    state.shop = active.map(map);"]],
   "shell-no-storefront": [[SHELL, "      (handle ? '<a class=\"pfs-store\" href=\"/@' + encodeURIComponent(handle) + '\">'", "      (false ? '<a class=\"pfs-store\" href=\"/@' + encodeURIComponent(handle) + '\">'"]],
-  "shell-posts-fake": [[SHELL, "    return '<p class=\"pfs-empty\">' + (owner ? \"Your posts will show here. Posts are coming soon.\" : \"Posts are coming soon.\") + '</p>';", "    return '<p class=\"pfs-empty\">3 posts</p>';"]],
+  // NAMED (Nov 20 2026, FX1): BEFORE the anchor was the "Posts are coming soon" line P2-3 removed (a MUTATION ANCHOR ERROR since);
+  // AFTER a failed load claims posts instead of saying it failed (R6)
+  "shell-posts-fake": [[SHELL, "    if (failed) return '<p class=\"pfs-empty\">These could not be loaded just now. This is not a statement that there are none.</p>';", "    if (failed) return '<p class=\"pfs-empty\">3 posts</p>';"]],
   "shell-edit-not-wired": [[SHELL, "      if (typeof window.toggleEditMode === \"function\") window.toggleEditMode();\n", ""]],
-  "shell-no-wallet": [[SHELL, "          (owner ? '<a class=\"pfs-btn is-wallet\" href=\"wallet.html\"", "          (false ? '<a class=\"pfs-btn is-wallet\" href=\"wallet.html\""]],
+  "shell-no-wallet": [[SHELL, "          (owner && paid ? '<a class=\"pfs-btn is-wallet\" href=\"wallet.html\"", "          (false ? '<a class=\"pfs-btn is-wallet\" href=\"wallet.html\""]],
   "shell-small-targets": [[SHELL, ".pfs-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;", ".pfs-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;"]],
   "page-no-container": [[PAGE, "<div id=\"pfShell\"></div>\n", ""]],
   "page-no-script": [[PAGE, "<script src=\"/scripts/bf-profile-shell.js\"></script>\n", ""]]
@@ -104,6 +109,8 @@ const settle = ms => new Promise(r => setTimeout(r, ms || 40));
     return { w, doc: w.document, calls, copied, text: () => w.document.getElementById("pfShell").textContent.replace(/\s+/g, " ") };
   }
   const OWNER_ANSWERS = {
+    // NAMED (Nov 20 2026, FX1): the owner is a paid member (BizCash, the wallet and "BizForce member" are a paid member's only)
+    "/api/auth/me": { access: { active: true } },
     "/api/bfp/profile/me": { profile: { username: "rose", display_name: "Rose", bio: "I make hats." } },
     "/api/bfp/profile/me/stats": { sales: 3, bizcash: 1500 },
     "/api/marketplace/my-listings": { listings: [
@@ -116,16 +123,24 @@ const settle = ms => new Promise(r => setTimeout(r, ms || 40));
   const ot = o.text();
   check("R1. the owner sees @handle, Sales 3 and BizCash 1,500", /@rose/.test(ot) && /3\s*Sales/.test(ot) && /1,500\s*BizCash/.test(ot), ot.slice(0, 300));
   check("R2. Edit profile, Share profile and Wallet (wallet.html)", !!o.doc.getElementById("pfsEdit") && !!o.doc.getElementById("pfsShare") && !!o.doc.querySelector("a.pfs-btn.is-wallet[href=\"wallet.html\"]"));
+  // NAMED (Nov 20 2026, FX1): the owner's decision: sending BizCash is for paid members, so BizCash, the gold wallet and
+  // "BizForce member" show only for one (GET /api/auth/me access.active); a free owner, or one not yet known, sees none
+  const free = await render("https://bizforceai.net/profile.html", Object.assign({}, OWNER_ANSWERS, { "/api/auth/me": { access: { active: false } } }));
+  const ft = free.text();
+  check("R2b. a free owner: Sales, but no BizCash, no wallet and no \"BizForce member\"", /3\s*Sales/.test(ft) && !/BizCash|1,500|BizForce member/.test(ft) && !free.doc.querySelector(".pfs-btn.is-wallet") && /@rose/.test(ft), ft.slice(0, 300));
+  check("R2c. a paid owner's handle line says BizForce member", /@rose · BizForce member/.test(ot), ot.slice(0, 120));
   o.doc.getElementById("pfsEdit").click();
   check("R3. Edit profile opens the page's own edit mode", o.w.__edited === 1);
   check("R4. the bio and the storefront link (/@handle)", /I make hats\./.test(ot) && !!o.doc.querySelector("a.pfs-store[href=\"/@rose\"]"));
   // NAMED (Nov 20 2026, P2-3): BEFORE never Following or Followers. AFTER they are shown only from the server's counts
   // (GET /api/follows/:id/counts); this page answers none, so none is shown. Reviews are still not shown.
-  check("R5. with no counts from the server, no Following or Followers figure; no Reviews", !/Follow|Review/i.test(ot));
+  // NAMED (Nov 20 2026, FX1): BEFORE "no Reviews"; AFTER the approved design's Reviews tab (Coming soon), still no review shown
+  check("R5. with no counts from the server, no Following or Followers figure; Reviews only as the tab", !/Follow/i.test(ot) && (ot.match(/Review/g) || []).length === 1);
   const tabs = Array.from(o.doc.querySelectorAll("[role=tab]")).map(t => t.textContent + ":" + t.getAttribute("aria-selected"));
   // NAMED (Nov 20 2026, P2-3): BEFORE tabs Posts, Shop, Services, and Posts said "Posts are coming soon". AFTER the owner also has a
   // private Saved tab, and Posts is the member's grid from GET /api/posts/by/:id; unanswered here, it says so and claims nothing.
-  check("R6. tabs Posts (selected), Shop, Services, Saved (the owner's); Posts unanswered says so, never a made-up post", J(tabs) === J(["Posts:true", "Shop:false", "Services:false", "Saved:false"]) &&
+  // NAMED (Nov 20 2026, FX1): + Reviews (a phone shows Posts, Shop, Services and Reviews; a desktop Posts, Shop, Services and Saved)
+  check("R6. tabs Posts (selected), Shop, Services, Saved (the owner's), Reviews; Posts unanswered says so, never a made-up post", J(tabs) === J(["Posts:true", "Shop:false", "Services:false", "Saved:false", "Reviews:false"]) &&
     /These could not be loaded just now\. This is not a statement that there are none\./.test(o.doc.getElementById("pfsPanel").textContent) && !o.doc.querySelector("#pfsPanel .pfs-grid"), J(tabs));
   o.doc.querySelector("[data-pfs-tab=shop]").click(); await settle();
   const shop = Array.from(o.doc.querySelectorAll("#pfsPanel .pfs-cell")).map(a => a.getAttribute("href") + "|" + a.textContent);
@@ -162,7 +177,8 @@ const settle = ms => new Promise(r => setTimeout(r, ms || 40));
   check("R17. every button and tab is at least 44 px tall", has(css, ".pfs-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;min-width:44px;") &&
     has(css, ".pfs-tab{flex:1 1 0;min-height:44px;") && has(css, ".pfs-store{display:inline-flex;align-items:center;gap:6px;min-height:44px;"));
   check("R18. the bio line shows on a phone only (on a desktop the About section has it); the grid is three to a row",
-    has(css, ".pfs-bio{display:none;") && /@media \(max-width: 760px\)\{[\s\S]*\.pfs-bio\{display:block\}/.test(css) && has(css, ".pfs-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));"));
+  // NAMED (Nov 20 2026, FX1): BEFORE ".pfs-bio{display:block}"; AFTER the phone rule also carries the design's size and spacing
+    has(css, ".pfs-bio{display:none;") && /@media \(max-width: 760px\)\{[\s\S]*\.pfs-bio\{display:block[;}]/.test(css) && has(css, ".pfs-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));"));
 
   /* ══ P ══ */
   console.log("\n══ P. profile.html ══");

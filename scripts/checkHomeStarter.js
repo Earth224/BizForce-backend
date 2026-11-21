@@ -25,14 +25,15 @@ const MUTATIONS = {
   "listings-without-photo": [[SERVER, ".filter(function (l) { return l.photo; });", ";"]],
   "listings-any-status": [[SERVER, "      supabase.from(\"marketplace_listings\").select(\"id, slug, seller_id, title, price_bfc, category, listing_kind, media, created_at\")\n        .eq(\"status\", \"active\")", "      supabase.from(\"marketplace_listings\").select(\"id, slug, seller_id, title, price_bfc, category, listing_kind, media, created_at\")\n        .neq(\"status\", \"deleted\")"]],
   "campaigns-unshared": [[SERVER, ".eq(\"status\", \"active\").not(\"share_id\", \"is\", null)", ".eq(\"status\", \"active\")"]],
-  "private-sellers-shown": [[SERVER, "      listings: withPhoto.filter(function (l) { return visible.has(l.seller_id); })", "      listings: withPhoto.filter(function (l) { return true; })"]],
-  "self-in-people": [[SERVER, "return visible.has(p.user_id) && p.user_id !== req.user.id;", "return visible.has(p.user_id);"]],
+  // NAMED (Nov 20 2026, FX1): BEFORE these three anchors were text P2-2 and P2-3 changed (MUTATION ANCHOR ERRORs since); AFTER today's text
+  "private-sellers-shown": [[SERVER, "      listings: withPhoto.filter(function (l) { return visible.has(l.seller_id) && !hiddenL.has(l.id) && shownMember(l.seller_id); })", "      listings: withPhoto.filter(function (l) { return !hiddenL.has(l.id) && shownMember(l.seller_id); })"]],
+  "self-in-people": [[SERVER, "return visible.has(p.user_id) && p.user_id !== req.user.id && !hiddenP.has(p.user_id)", "return visible.has(p.user_id) && !hiddenP.has(p.user_id)"]],
   "no-cap": [[SERVER, "const HOME_LISTINGS = 8, HOME_CAMPAIGNS = 6, HOME_PEOPLE = 8;", "const HOME_LISTINGS = 80, HOME_CAMPAIGNS = 6, HOME_PEOPLE = 8;"]],
   "video-as-photo": [[SERVER, "(!x.type || /^image/.test(String(x.type)) || x.kind === \"image\")", "true"]],
   "route-public": [[SERVER, "app.get(\"/api/home/starter\", requireAuth, async function", "app.get(\"/api/home/starter\", async function"]],
   "people-leak-id": [[SERVER, "return { username: p.username, name: p.display_name || \"@\" + p.username,", "return { user_id: p.user_id, username: p.username, name: p.display_name || \"@\" + p.username,"]],
   "page-no-create": [[PAGE, "  if (window.BFTabbar) { window.BFTabbar.openCreate(btn); return; }", "  return;"]],
-  "page-no-soon-line": [[PAGE, "Posts are coming. The Following, Local, Market and For You tabs arrive with them.", "Welcome home."]],
+  "page-no-soon-line": [[PAGE, "Video posts are coming. The Local, Market and For You tabs arrive later.", "Welcome home."]],
   "page-sample-content": [[PAGE, "  if (!list.length) { el.innerHTML = '<p class=\"empty\">No public member pages yet.</p>'; return; }", "  if (!list.length) list = [{ name: \"Jane Doe\", username: \"jane\", link: \"/@jane\" }];"]],
   "page-desktop-one-column": [[PAGE, ".home-grid{display:grid;grid-template-columns:minmax(0,600px) minmax(0,300px);", ".home-grid{display:grid;grid-template-columns:minmax(0,600px);"]],
   "page-error-as-empty": [[PAGE, "  } catch (e) {\n    showError();\n  }", "  } catch (e) {\n    renderMarket([]); renderCampaigns([]); renderPeople([]);\n  }"]],
@@ -97,7 +98,8 @@ const id = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
   check("P6. people have a Visit button to their page", has(pg, "aria-label=\"Visit ' + escapeHtml(p.name) + '\">Visit</a>"));
   check("P7. a desktop has the 600 px column and a right column; a phone one column",
   // NAMED (Nov 20 2026, P2-3): BEFORE the phone rule sat within 200 characters of the media query; AFTER 1200: the feed's full-screen rules come first.
-    has(pg, ".home-grid{display:grid;grid-template-columns:minmax(0,600px) minmax(0,300px);") && /@media \(max-width: 760px\)\{[\s\S]{0,1200}\.home-grid\{grid-template-columns:minmax\(0,1fr\)/.test(pg));
+  // NAMED (Nov 20 2026, FX1): BEFORE within 1200 characters; AFTER 3000: the approved design's top row rules come first too.
+    has(pg, ".home-grid{display:grid;grid-template-columns:minmax(0,600px) minmax(0,300px);") && /@media \(max-width: 760px\)\{[\s\S]{0,3000}\.home-grid\{grid-template-columns:minmax\(0,1fr\)/.test(pg));
   check("P8. no sample people, listings or numbers in the page", !/Jane|John|Lorem|sample|example\.com/i.test(pg.replace(/\/\*[\s\S]*?\*\//g, "")));
   check("P9. the page carries the theme, the session guard, the phone stylesheet last in the head, the bfc notice and the legal footer, and no Guide",
     has(pg, "<script src=\"/scripts/bf-session.js\"></script>") && pg.indexOf("/css/bf-phone.css") > pg.indexOf("</style>") && pg.indexOf("/css/bf-phone.css") < pg.indexOf("</head>") &&

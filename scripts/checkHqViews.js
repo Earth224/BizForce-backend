@@ -106,7 +106,8 @@ const MUTATIONS = {
   // NAMED (Nov 19 2026, P2-1): BEFORE "hq1". AFTER "p21": the bottom bar, Home, the Inbox, the profile header and Settings, Local in the shell (checkAppShell W).
   // NAMED (Nov 20 2026, P2-2): BEFORE "p21". AFTER "p22": the report, block and mute menu (bf-safety.js), moderation.html and copyright.html in the shell.
   // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"p23\";", "var SHELL_REV = \"ph1\";"]],
+  // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx1\";", "var SHELL_REV = \"ph1\";"]],
   // (a crescent moon, built from its code point so this file holds none: checkNoEmoji N2)
   "emoji": [[VIEWS, "  var VIEW_KEY = \"bf_hq_view\"", "  /* " + String.fromCodePoint(0x1F319) + " */ var VIEW_KEY = \"bf_hq_view\""]]
 };
@@ -530,7 +531,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 19 2026, P2-1): BEFORE "hq1". AFTER "p21": the bottom bar, Home, the Inbox, the profile header and Settings, Local in the shell (checkAppShell W).
   // NAMED (Nov 20 2026, P2-2): BEFORE "p21". AFTER "p22": the report, block and mute menu (bf-safety.js), moderation.html and copyright.html in the shell.
   // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
-  check("W1. SHELL_REV \"p23\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p23\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
+  check("W1. SHELL_REV \"fx1\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"fx1\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

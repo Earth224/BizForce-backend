@@ -97,7 +97,14 @@
                        p23-privacy.json; compose.html is new (p23-new). The other
                        79 pages, profile.html among them, are unchanged at 1440.
                        The proof is Downloads\phone1\p23-desktop-proof.json.
-     PHONE_P21=1           only P2-1's own pages (p21Run): the rewritten addresses,
+                       NAMED (Nov 20 2026, FX1): compose.html gains the legal footer
+                       every page carries (P2-3 left it out): its 73 elements are
+                       where they were and the footer's 13 are new; it is
+                       re-recorded in desktop-baseline-pfx1-compose.json (the name
+                       sorts after p23-new, so it replaces that one page). Home and
+                       the Profile are unchanged at 1440. The proof is
+                       Downloads\phone1\fx1-desktop-proof.json.
+     PHONE_P21=1          only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
                            at 360, 390 and 430; screenshots to Downloads\p21.
@@ -396,6 +403,7 @@ function api(method, u, request) {
   // NAMED (Nov 20 2026, P2-3): with PHONE_P23=1, posts, the feed, comments and follows are lib/posts.js over P23S.db
   // (p23Api, a promise; the request handler awaits every answer), then P2-1's fixtures (the profile, the counts).
   if (P23 && P23_IS(p)) return p23Api(method, u, request);
+  if (P23) { const a = fx1Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 20 2026, FX1)
   if (P21 || P22 || P23) { const a = p21Api(method, p); if (a !== undefined) return a; }
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
@@ -1108,7 +1116,8 @@ async function p21Run(cdp, origin) {
           "return {t:Math.round(r.top),b:Math.round(r.bottom),l:Math.round(r.left),r:Math.round(r.right),role:s.getAttribute('role'),opts:[].map.call(s.querySelectorAll('.bf-create-opt'),function(o){var q=o.getBoundingClientRect();return Math.round(q.width)+'x'+Math.round(q.height);})," +
           "soon:s.querySelectorAll('.is-soon').length,overBar:!!top&&(s.contains(top)||top.id==='bf-create-backdrop'),focus:s.contains(document.activeElement)};})()");
         check(at + "the Create sheet opens from + as a bottom sheet inside the screen, over the bar, focus in it", !!c && c.role === "dialog" && c.t >= 0 && c.b <= h + 1 && c.l <= 0 && c.r >= w - 1 && c.overBar && c.focus, J(c));
-        check(at + "eight choices, each at least 44 px tall; Post and Video say Coming soon", !!c && c.opts.length === 8 && c.opts.every(o => Number(o.split("x")[1]) >= 44 && Number(o.split("x")[0]) >= 44) && c.soon === 2, J(c && c.opts));
+        // NAMED (Nov 20 2026, FX1): BEFORE "Post and Video say Coming soon" (c.soon === 2); P2-3 made Post live, so AFTER only Video does
+        check(at + "eight choices, each at least 44 px tall; Video says Coming soon (Post is live since P2-3)", !!c && c.opts.length === 8 && c.opts.every(o => Number(o.split("x")[1]) >= 44 && Number(o.split("x")[0]) >= 44) && c.soon === 1, J(c && [c.opts, c.soon]));
         continue;
       }
       await ev("scrollTo(0,document.documentElement.scrollHeight),true");
@@ -1121,12 +1130,14 @@ async function p21Run(cdp, origin) {
       const k = await ev("(function(){function q(s){return document.querySelectorAll(s).length;}function t(s){var n=document.querySelector(s);return n?n.textContent.replace(/\\s+/g,' ').trim():'';}" +
         "return {tiles:q('#marketList .tile'),camps:q('#campaignList .tile'),people:q('#peopleList .person'),soon:t('#soonLine'),tab:(document.querySelector('[role=tab][aria-selected=true]')||{}).id||null," +
         "rows:q('#listBody .item'),msgs:q('#paneOpen .msg, #paneOpen [data-msg], #paneOpen li'),shell:t('#pfShell'),open:document.body.className};})()");
-      if (name === "home") check(at + "Home shows the market, campaigns and people from the fixtures, and the line about posts", k.tiles === 4 && k.camps === 2 && k.people === 2 && /Posts are coming/.test(k.soon), J(k));
+      // NAMED (Nov 20 2026, FX1): BEFORE /Posts are coming/; since P2-3 the line reads "Video posts are coming. ..."
+      if (name === "home") check(at + "Home shows the market, campaigns and people from the fixtures, and the line about video posts", k.tiles === 4 && k.camps === 2 && k.people === 2 && /^Video posts are coming/.test(k.soon), J(k));
       if (name === "inbox-messages") check(at + "the Messages tab lists the two conversations", k.tab === "tab-messages" && k.rows === 2, J(k));
       if (name === "inbox-thread") check(at + "?with= opens the conversation with its messages", k.tab === "tab-messages" && k.msgs >= 2, J(k));
       if (name === "inbox-approvals") check(at + "the Approvals tab lists the waiting proposals", k.tab === "tab-approvals" && k.rows === 10, J(k));
       if (name === "inbox-notifications") check(at + "the Notifications tab lists the three notices", k.tab === "tab-notifications" && k.rows === 3, J(k));
-      if (name === "profile") check(at + "the profile header: @rose, Sales 12, BizCash 2,400, the tabs; no Following, Followers or Reviews", /@rose/.test(k.shell) && /12\s*Sales/.test(k.shell) && /2,400\s*BizCash/.test(k.shell) && /Posts\s*Shop\s*Services/.test(k.shell) && !/Follow|Review/.test(k.shell), k.shell.slice(0, 300));
+      // NAMED (Nov 20 2026, FX1): BEFORE no Reviews; AFTER the approved design's fourth tab, Reviews (Coming soon). These fixtures answer no follow counts.
+      if (name === "profile") check(at + "the profile header: @rose, Sales 12, BizCash 2,400, the tabs with Reviews; no Following or Followers", /@rose/.test(k.shell) && /12\s*Sales/.test(k.shell) && /2,400\s*BizCash/.test(k.shell) && /Posts\s*Shop\s*Services/.test(k.shell) && /Reviews/.test(k.shell) && !/Follow/.test(k.shell), k.shell.slice(0, 300));
     }
   }
   // the screenshots the brief asks for, full length too for the pages that scroll
@@ -1376,8 +1387,61 @@ async function p23Api(method, u, request) {
     return { user_id: who, self: who === me, blocked: false, muted: false };
   }
   if (p === "/api/bfp/seller/pat") return { seller: { user_id: P21_PEER, username: "pat", display_name: "Pat's Pantry", tagline: "Jams and preserves", avatar_url: null }, products: [], services: [], support_links: [] };
+  // NAMED (Nov 20 2026, FX1): a visitor's view of Lee Ceramics' profile (profile.html?id=<Lee>)
+  if (p === "/api/bfp/seller/lee-ceramics") return { seller: { user_id: P21_PEER2, username: "lee-ceramics", display_name: "Lee Ceramics", avatar_url: null }, products: [], services: [], support_links: [] };
   return { __status: 404, __body: { error: "Not found" } };
 }
+// NAMED (Nov 20 2026, FX1): Lee Ceramics' public profile and counts, for the visitor's view; only with PHONE_P23=1
+const FX1_LEE = { profile: { user_id: P21_PEER2, username: "lee-ceramics", display_name: "Lee Ceramics", title: "Potter", tagline: "Lee Ceramics", bio: "Hand-thrown mugs and bowls, glazed in small batches.", avatar_url: null } };
+function fx1Api(method, p) {
+  if (p === "/api/bfp/profile/" + P21_PEER2) return FX1_LEE;
+  if (p === "/api/bfp/profile/" + P21_PEER2 + "/stats") return { stats: { sales: 3 } };
+  return undefined;
+}
+/* NAMED (Nov 20 2026, FX1): the approved design's boxes, measured in the page (scripts/designSpec.js). Every box is the
+   element's getBoundingClientRect; a style is getComputedStyle. */
+const FX1_FEED_MEASURE = String.raw`(function(id){
+  var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),r:+r.right.toFixed(1),b:+r.bottom.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+  var S=function(e,p,pe){return e?getComputedStyle(e,pe||null)[p]:null;};
+  var post=document.querySelector('#feed [data-post="'+id+'"]');if(!post)return null;
+  var bar=document.getElementById('bf-tabbar'),act=document.querySelector('.feed-tab[aria-selected=true]'),mk=document.getElementById('tabMarket');
+  var tabs=[].filter.call(document.querySelectorAll('.feed-tab'),function(t){return t.getBoundingClientRect().width>0;});
+  var rail=post.querySelector('.bfp-actions');
+  var items=[].filter.call(rail.children,function(c){return c.matches('.bfp-rail-av,.bfp-act')&&getComputedStyle(c).display!=='none';});
+  var av=post.querySelector('.bfp-rail-av'),dot=post.querySelector('.bfp-badge:not([hidden]) .bfp-badge-dot'),badge=post.querySelector('.bfp-badge:not([hidden])');
+  var meta=post.querySelector('.bfp-meta'),name=post.querySelector('.bfp-name'),text=post.querySelector('.bfp-info .bfp-text');
+  var plus=bar&&bar.querySelector('.bf-tab-plus'),home=bar&&bar.querySelector('[data-tab=home]');
+  return {W:innerWidth,H:innerHeight,bar:R(bar),barBg:S(bar,'backgroundColor'),barBorder:S(bar,'borderTopColor'),homeColor:S(home,'color'),plus:R(plus),plusRadius:S(plus,'borderTopLeftRadius'),
+    live:R(document.getElementById('feedLive')),search:R(document.getElementById('feedSearch')),
+    tabs:tabs.map(function(t){return {text:t.textContent.trim(),box:R(t),font:S(t,'fontSize'),weight:S(t,'fontWeight'),color:S(t,'color'),sel:t.getAttribute('aria-selected')};}),
+    under:{h:S(act,'height','::after'),bg:S(act,'backgroundColor','::after'),bottom:S(act,'bottom','::after'),content:S(act,'content','::after')},
+    dot:{w:S(mk,'width','::before'),h:S(mk,'height','::before'),top:S(mk,'top','::before'),bg:S(mk,'backgroundColor','::before'),content:S(mk,'content','::before')},
+    rail:R(rail),items:items.map(function(c){var ic=c.querySelector('svg:not(.ic-desk)')||c.querySelector('svg');var lab=c.querySelector('.bfp-word')&&getComputedStyle(c.querySelector('.bfp-word')).display!=='none'?c.querySelector('.bfp-word'):c.querySelector('span:not(.bfp-word)');
+      return {kind:c.classList.contains('bfp-rail-av')?'avatar':c.getAttribute('data-act'),box:R(c),icon:R(ic),label:lab?lab.textContent:'',labelFont:S(lab,'fontSize'),color:S(c,'color'),vis:S(c,'visibility')};}),
+    av:R(av&&av.querySelector('.bfp-rail-pic')),avBg:S(av&&av.querySelector('.bfp-rail-pic'),'backgroundImage'),badge:R(badge),badgeDot:R(dot),dotBg:S(dot,'backgroundColor'),
+    meta:R(meta),metaGap:S(meta,'rowGap'),name:R(name),nameFont:S(name,'fontSize'),nameWeight:S(name,'fontWeight'),text:R(text),textFont:S(text,'fontSize'),textLine:S(text,'lineHeight'),
+    hidden:{handle:!!post.querySelector('.bfp-handle')&&post.querySelector('.bfp-handle').getBoundingClientRect().width>0,dots:!!post.querySelector('.bfp-menu .bf-safety-dots')&&post.querySelector('.bfp-menu .bf-safety-dots').getBoundingClientRect().width>0}};
+})`;
+const FX1_PROFILE_MEASURE = String.raw`(function(){
+  var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),r:+r.right.toFixed(1),b:+r.bottom.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+  var S=function(e,p){return e?getComputedStyle(e)[p]:null;};
+  var vis=function(e){return !!e&&e.getBoundingClientRect().width>0;};
+  var q=function(s){return document.querySelector(s);};
+  var stats=[].filter.call(document.querySelectorAll('.pfs-stats > li'),vis).map(function(li){var n=li.querySelector('.pfs-num'),l=li.querySelector('.pfs-lab');return {label:l.textContent,num:n.textContent,box:R(li),numBox:R(n),numFont:S(n,'fontSize'),numColor:S(n,'color'),labFont:S(l,'fontSize')};}).sort(function(a,b){return a.box.l-b.box.l;});
+  var btns=[].filter.call(document.querySelectorAll('.pfs-actions .pfs-btn'),vis).map(function(b){return {text:b.textContent.trim(),id:b.id,cls:b.className,box:R(b),radius:S(b,'borderTopLeftRadius'),bg:S(b,'backgroundColor'),font:S(b,'fontSize'),weight:S(b,'fontWeight')};});
+  var tabs=[].filter.call(document.querySelectorAll('.pfs-tab'),vis).map(function(t){return {text:t.textContent.trim(),box:R(t),sel:t.getAttribute('aria-selected'),under:S(t,'borderBottomWidth'),underColor:S(t,'borderBottomColor')};});
+  var cells=[].filter.call(document.querySelectorAll('#pfsPanel .pfs-cell'),vis).map(function(c){var lb=c.querySelector('.pfs-cell-label');return {box:R(c),label:vis(lb)?lb.textContent:null,labelBox:R(lb),labelFont:S(lb,'fontSize')};});
+  var store=q('.pfs-store'),bio=q('.pfs-bio'),tb=q('.pfs-tabs');
+  return {W:innerWidth,bar:R(q('.pfs-bar')),invite:R(q('#pfsInvite')),menu:R(q('#pfsMenu')),title:R(q('.pfs-title')),titleText:(q('.pfs-title')||{}).textContent,titleFont:S(q('.pfs-title'),'fontSize'),titleWeight:S(q('.pfs-title'),'fontWeight'),
+    av:R(q('.pfs-av')),avPad:S(q('.pfs-av'),'paddingTop'),avBg:S(q('.pfs-av'),'backgroundImage'),avInner:S(q('.pfs-av-in'),'backgroundColor'),initials:(q('.pfs-av-in')||{}).textContent,
+    handle:R(q('.pfs-handle')),handleText:(q('.pfs-handle')||{}).textContent,handleFont:S(q('.pfs-handle'),'fontSize'),stats:stats,btns:btns,
+    bio:R(bio),bioFont:S(bio,'fontSize'),bioAlign:S(bio,'textAlign'),store:R(store),storeText:store?store.textContent.trim():'',
+    tabsBox:R(tb),divider:S(tb,'borderBottomWidth'),dividerColor:S(tb,'borderBottomColor'),tabs:tabs,cells:cells,
+    oldHeader:[].some.call(document.querySelectorAll('.pf-nav,.pf-banner,.pf-header-wrap'),vis),fab:vis(document.getElementById('tmx-guide-fab'))};
+})()`;
+// FX1: the before and after screenshots beside the design pictures (Downloads\design), named by FX1_TAG (default "after")
+const FX1_DIR = path.join(os.homedir(), "Downloads", "design");
+const FX1_TAG = process.env.FX1_TAG === "before" ? "before" : "after";
 async function p23PostPage(id) {
   const P = require("../lib/posts"), PG = require("../lib/postPage");
   const post = PG.isPostId(id) ? await P.publicPost(P23S.deps, id) : null;
@@ -1399,7 +1463,11 @@ async function p23Run(cdp, origin) {
   const ev = x => evaluate(cdp, x);
   const HT = { 360: 780, 390: 844, 430: 932 };
   const viewShot = async file => { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P23_OUT, file), Buffer.from(r.data, "base64")); };
-  const SHEETS = /^(div|section|aside)[#.](bf-safety|bf-safety-backdrop|bfp-talk|bfp-talk-backdrop)[ .]/;
+  // NAMED (Nov 20 2026, FX1): at the pictures' own scale (1 px per CSS px), beside them in Downloads\design
+  const fx1Shot = async file => { fs.mkdirSync(FX1_DIR, { recursive: true });
+    const r = await cdp.send("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: 390, height: 844, scale: 0.5 } });
+    fs.writeFileSync(path.join(FX1_DIR, file), Buffer.from(r.data, "base64")); };
+  const SHEETS = /^(div|section|aside)[#.](bf-safety|bf-safety-backdrop|bfp-talk|bfp-talk-backdrop|bfp-soon|bfp-soon-back|pfs-menu|pfs-menu-back)[ .]/;   // NAMED (Nov 20 2026, FX1): + the Coming soon sheet and the profile menu
   const pageChecks = async (at, opts) => {
     const m = await ev(MEASURE);
     check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
@@ -1416,11 +1484,91 @@ async function p23Run(cdp, origin) {
   };
   const inScreen = (b, w, h) => !!b && b.l >= -1 && b.r <= w + 1 && b.t >= -1 && b.b <= h + 1 && b.small.length === 0 && !b.hscroll;
   const postBox = id => ev("(function(){var e=document.querySelector('#feed [data-post=\"" + id + "\"]');if(!e)return null;var r=e.getBoundingClientRect();" +
-    "var acts=[].map.call(e.querySelectorAll('.bfp-act'),function(b){var q=b.getBoundingClientRect();return b.getAttribute('data-act')+' '+Math.round(q.width)+'x'+Math.round(q.height)+' '+(b.getAttribute('aria-pressed')||'');});" +
-    "return {l:Math.round(r.left),r:Math.round(r.right),w:Math.round(r.width),h:Math.round(r.height),acts:acts,name:(e.querySelector('.bfp-name')||{}).textContent||'',photos:e.querySelectorAll('.bfp-photo').length,follow:!!e.querySelector('.bfp-follow'),dots:!!e.querySelector('.bfp-menu .bf-safety-dots'),like:(e.querySelector('[data-count=like]')||{}).textContent||'',talk:(e.querySelector('[data-count=talk]')||{}).textContent||''};})()");
+    "var acts=[].filter.call(e.querySelectorAll('.bfp-act'),function(b){return getComputedStyle(b).visibility!=='hidden';}).map(function(b){var q=b.getBoundingClientRect();return b.getAttribute('data-act')+' '+Math.round(q.width)+'x'+Math.round(q.height)+' '+(b.getAttribute('aria-pressed')||'');});" +
+    "return {l:Math.round(r.left),r:Math.round(r.right),w:Math.round(r.width),h:Math.round(r.height),acts:acts,name:(e.querySelector('.bfp-name')||{}).textContent||'',photos:e.querySelectorAll('.bfp-photo').length,follow:!!e.querySelector('.bfp-follow'),dots:!!e.querySelector('.bfp-menu .bf-safety-dots')&&e.querySelector('.bfp-menu .bf-safety-dots').getBoundingClientRect().width>0,like:(e.querySelector('[data-count=like]')||{}).textContent||'',talk:(e.querySelector('[data-count=talk]')||{}).textContent||''};})()");
   const scrollTo = id => ev("(function(){var e=document.querySelector('#feed [data-post=\"" + id + "\"]');if(e)e.scrollIntoView({block:'start'});return !!e;})()").then(() => sleep(500));
   const click = sel => ev("(function(){var e=document.querySelector(" + J(sel) + ");if(e)e.click();return !!e;})()");
   const big = s => s.split(" ")[1].split("x").every(n => Number(n) >= 44);
+  /* NAMED (Nov 20 2026, FX1): the feed against the approved design (scripts/designSpec.js), within DS.TOLERANCE px */
+  const DS = require("./designSpec");
+  const near = (a, b) => typeof a === "number" && Math.abs(a - b) <= DS.TOLERANCE;
+  const px = v => Number(String(v).replace("px", ""));
+  const rgb = hex => "rgb(" + [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", ") + ")";
+  const fx1Feed = async (w, id, badge) => {
+    const at = "FX1 feed at " + w + ": ", F = DS.FEED, m = await ev(FX1_FEED_MEASURE + "(" + J(id) + ")");
+    if (!m) { check(at + "the post is on the screen", false, "not found"); return null; }
+    const barTop = m.bar.t;
+    if (badge) {
+      check(at + "the follow badge: " + F.RAIL.BADGE + " px cyan, centred on the avatar's bottom edge, its tap area 44 x 44", !!m.badgeDot && near(m.badgeDot.w, F.RAIL.BADGE) && near(m.badgeDot.h, F.RAIL.BADGE) &&
+        near((m.badgeDot.t + m.badgeDot.b) / 2, m.av.b) && near((m.badgeDot.l + m.badgeDot.r) / 2, (m.av.l + m.av.r) / 2) && m.dotBg === rgb(DS.COLOR.ACCENT) && m.badge.w >= 44 && m.badge.h >= 44, J([m.badgeDot, m.av, m.dotBg, m.badge]));
+      return m;
+    }
+    check(at + "the top row " + F.TOP.ROW_TOP + " px down: Live " + F.TOP.BUTTON + " px at " + F.TOP.LIVE_LEFT + ", Search " + F.TOP.BUTTON + " px " + F.TOP.SEARCH_RIGHT + " px from the right",
+      near(m.live.t, F.TOP.ROW_TOP) && near(m.live.w, F.TOP.BUTTON) && near(m.live.h, F.TOP.BUTTON) && near(m.live.l, F.TOP.LIVE_LEFT) &&
+      near(m.search.t, F.TOP.ROW_TOP) && near(m.search.w, F.TOP.BUTTON) && near(m.search.r, w - F.TOP.SEARCH_RIGHT), J([m.live, m.search]));
+    check(at + "the tabs Local, Following, Market, For You in order, " + F.TOP.TAB_FONT + " px " + F.TOP.TAB_WEIGHT + ", " + F.TOP.TAB_HEIGHT + " px tall, between Live and Search; Following white, the rest " + DS.COLOR.TAB_INACTIVE,
+      J(m.tabs.map(t => t.text)) === J(F.TOP.TABS) && m.tabs.every(t => px(t.font) === F.TOP.TAB_FONT && Number(t.weight) === F.TOP.TAB_WEIGHT && near(t.box.h, F.TOP.TAB_HEIGHT) && near(t.box.t, F.TOP.ROW_TOP) &&
+        t.box.l >= m.live.r - 1 && t.box.r <= m.search.l + 1 && t.color === (t.sel === "true" ? rgb(DS.COLOR.WHITE) : rgb(DS.COLOR.TAB_INACTIVE))) && m.tabs[1].sel === "true", J(m.tabs));
+    check(at + "the active tab's underline " + F.TOP.UNDERLINE + " px cyan at its bottom; Market's dot " + F.TOP.DOT + " px cyan, " + F.TOP.DOT_TOP + " px from the tab's top",
+      px(m.under.h) === F.TOP.UNDERLINE && m.under.bg === rgb(DS.COLOR.ACCENT) && px(m.under.bottom) < 2 && px(m.dot.w) === F.TOP.DOT && px(m.dot.h) === F.TOP.DOT && px(m.dot.top) === F.TOP.DOT_TOP && m.dot.bg === rgb(DS.COLOR.ACCENT), J([m.under, m.dot]));
+    const kinds = m.items.map(i => i.kind);
+    check(at + "the rail: " + F.RAIL.ORDER.join(", ") + "; " + F.RAIL.WIDTH + " px wide, " + F.RAIL.RIGHT + " px from the right, its bottom " + F.RAIL.BOTTOM_ABOVE_BAR + " px above the bar",
+      J(kinds) === J(F.RAIL.ORDER) && near(m.rail.w, F.RAIL.WIDTH) && near(m.rail.r, w - F.RAIL.RIGHT) && near(m.items[m.items.length - 1].box.b, barTop - F.RAIL.BOTTOM_ABOVE_BAR), J([kinds, m.rail, barTop]));
+    const gaps = m.items.slice(1).map((it, i) => +(it.box.t - m.items[i].box.b).toFixed(1));
+    check(at + "the rail's items " + F.RAIL.GAP + " px apart; the avatar " + F.RAIL.AVATAR + " px, the gradient; each action " + F.RAIL.ITEM + " px tall with a " + F.RAIL.ICON + " px icon over a " + F.RAIL.LABEL_FONT + " px label",
+      gaps.every(g => near(g, F.RAIL.GAP)) && near(m.av.w, F.RAIL.AVATAR) && near(m.av.h, F.RAIL.AVATAR) && /linear-gradient/.test(m.avBg) &&
+      m.items.slice(1).every(i => near(i.box.h, F.RAIL.ITEM) && near(i.icon.w, F.RAIL.ICON) && near(i.icon.h, F.RAIL.ICON) && px(i.labelFont) === F.RAIL.LABEL_FONT), J([gaps, m.av, m.items]));
+    const tip = m.items.find(i => i.kind === "tip");
+    check(at + "Tip BFC's slot is kept, unseen (tipping arrives in P2-5, for paid members), its label gold", !!tip && tip.vis === "hidden" && tip.color === rgb(DS.COLOR.GOLD) && tip.label === "Tip BFC", J(tip));
+    check(at + "the bottom-left block " + F.META.LEFT + " px from the left, its right edge " + F.META.RIGHT + " px from the screen's, its bottom " + F.META.BOTTOM_ABOVE_BAR + " px above the bar; the name " + F.META.NAME_FONT + " px bold, the caption " + F.META.CAPTION_FONT + " px, " + F.META.GAP + " px between",
+      near(m.meta.l, F.META.LEFT) && near(m.meta.r, w - F.META.RIGHT) && near(m.meta.b, barTop - F.META.BOTTOM_ABOVE_BAR) && px(m.nameFont) === F.META.NAME_FONT && Number(m.nameWeight) === F.META.NAME_WEIGHT &&
+      !!m.text && px(m.textFont) === F.META.CAPTION_FONT && near(px(m.textLine), F.META.CAPTION_FONT * F.META.CAPTION_LINE) && near(m.text.t - m.name.b, F.META.GAP), J([m.meta, m.name, m.text, m.nameFont, m.textFont, m.textLine]));
+    check(at + "no handle and no three-dot menu on the screen (Share opens the menu)", !m.hidden.handle && !m.hidden.dots, J(m.hidden));
+    check(at + "the bar " + DS.BAR.HEIGHT + " px, " + DS.BAR.FEED_BG + " with a " + DS.BAR.FEED_BORDER + " line, Home white; the + " + DS.BAR.PLUS_W + " x " + DS.BAR.PLUS_H + ", radius " + DS.BAR.PLUS_RADIUS,
+      near(m.bar.h, DS.BAR.HEIGHT) && near(m.bar.b, m.H) && m.barBg === rgb(DS.BAR.FEED_BG) && m.barBorder === rgb(DS.BAR.FEED_BORDER) && m.homeColor === rgb(DS.COLOR.WHITE) &&
+      near(m.plus.w, DS.BAR.PLUS_W) && near(m.plus.h, DS.BAR.PLUS_H) && px(m.plusRadius) === DS.BAR.PLUS_RADIUS, J([m.bar, m.barBg, m.barBorder, m.homeColor, m.plus, m.plusRadius]));
+    return m;
+  };
+  /* NAMED (Nov 20 2026, FX1): the profile against the approved design (scripts/designSpec.js PROFILE), within DS.TOLERANCE px.
+     The buttons', tabs' and grid's tops follow a one-line bio and handle, so they are pinned at 390 only. */
+  const fx1Profile = async (w, owner) => {
+    const at = "FX1 profile " + (owner ? "(owner)" : "(visitor)") + " at " + w + ": ", P = DS.PROFILE, m = await ev(FX1_PROFILE_MEASURE);
+    if (!m || !m.bar) { check(at + "the phone header is on the screen", false, J(m)); return null; }
+    check(at + "the page's old header (its buttons, banner and picture) and the Guide's button are not on the screen", !m.oldHeader && !m.fab, J([m.oldHeader, m.fab]));
+    check(at + "the top row " + P.TOP.ROW_TOP + " px down: add friends and the menu " + P.TOP.BUTTON + " px, " + P.TOP.PAD_X + " px from each side, the name centred, " + P.TOP.NAME_FONT + " px bold",
+      near(m.bar.t, P.TOP.ROW_TOP) && near(m.invite.w, P.TOP.BUTTON) && near(m.invite.h, P.TOP.BUTTON) && near(m.invite.l, P.TOP.PAD_X) && near(m.menu.w, P.TOP.BUTTON) && near(m.menu.r, w - P.TOP.PAD_X) &&
+      near((m.title.l + m.title.r) / 2, w / 2) && px(m.titleFont) === P.TOP.NAME_FONT && Number(m.titleWeight) === P.TOP.NAME_WEIGHT && m.titleText === (owner ? "Rose" : "Lee Ceramics"), J([m.bar, m.invite, m.menu, m.title, m.titleText]));
+    check(at + "the picture " + P.AVATAR.SIZE + " px, centred, " + P.AVATAR.TOP + " px down, a " + P.AVATAR.RING + " px cyan-to-violet ring, the initials on " + P.AVATAR.INNER,
+      near(m.av.w, P.AVATAR.SIZE) && near(m.av.h, P.AVATAR.SIZE) && near(m.av.t, P.AVATAR.TOP) && near((m.av.l + m.av.r) / 2, w / 2) && px(m.avPad) === P.AVATAR.RING && /linear-gradient/.test(m.avBg) &&
+      m.avInner === rgb(P.AVATAR.INNER) && m.initials === (owner ? "R" : "LC"), J([m.av, m.avPad, m.avInner, m.initials]));
+    check(at + "the handle " + P.HANDLE.FONT + " px, " + P.HANDLE.GAP + " px under the picture, with BizForce member (a paid member's)",
+      near(m.handle.t, m.av.b + P.HANDLE.GAP) && px(m.handleFont) === P.HANDLE.FONT && m.handleText === (owner ? "@rose · BizForce member" : "@lee-ceramics · BizForce member"), J([m.handle, m.handleText]));
+    const labels = m.stats.map(x => x.label), want = owner ? P.STATS.LABELS : P.STATS.LABELS.filter(l => l !== "BizCash");
+    const colW = (w - 2 * P.STATS.PAD_X) / want.length;
+    check(at + "the counts " + want.join(", ") + " evenly across, " + P.STATS.NUM_FONT + " px numbers over " + P.STATS.LABEL_FONT + " px labels, " + P.STATS.GAP + " px under the handle" + (owner ? "; BizCash gold (the owner's, a paid member's)" : "; no BizCash for a visitor"),
+      J(labels) === J(want) && m.stats.every((x, i) => near((x.box.l + x.box.r) / 2, P.STATS.PAD_X + colW * (i + 0.5)) && px(x.numFont) === P.STATS.NUM_FONT && px(x.labFont) === P.STATS.LABEL_FONT) &&
+      near(m.stats[0].numBox.t, m.handle.b + P.STATS.GAP) && (!owner || m.stats[3].numColor === rgb(DS.COLOR.GOLD)), J(m.stats));
+    const B = P.BUTTONS, pair = m.btns.filter(b => !/is-wallet/.test(b.cls));
+    check(at + (owner ? "Edit profile and Share profile, equal, and the " + B.WALLET + " px gold wallet" : "Follow (Following) and Message, equal") + "; " + B.HEIGHT + " px tall, radius " + B.RADIUS + ", " + B.GAP + " px apart, " + B.PAD_X + " px from each side, " + B.FONT + " px semibold",
+      pair.length === 2 && J(pair.map(b => b.text)) === J(owner ? ["Edit profile", "Share profile"] : ["Following", "Message"]) && near(pair[0].box.w, pair[1].box.w) && m.btns.every(b => near(b.box.h, B.HEIGHT) && px(b.radius) === B.RADIUS) &&
+      near(m.btns[0].box.l, B.PAD_X) && near(m.btns[m.btns.length - 1].box.r, w - B.PAD_X) && m.btns.slice(1).every((b, i) => near(b.box.l - m.btns[i].box.r, B.GAP)) &&
+      pair.every(b => px(b.font) === B.FONT && Number(b.weight) === B.WEIGHT) &&
+      (owner ? m.btns.length === 3 && near(m.btns[2].box.w, B.WALLET) && m.btns[2].bg === rgb(B.WALLET_BG) && pair.every(b => b.bg === rgb(B.FILL)) : m.btns.length === 2) &&
+      (w !== 390 || !owner || near(m.btns[0].box.t, B.TOP)), J(m.btns));
+    check(at + "the bio " + P.BIO.FONT + " px, centred, " + P.BIO.GAP + " px under the buttons; Visit (my) storefront " + P.STORE.HEIGHT + " px, centred, under it",
+      !!m.bio && px(m.bioFont) === P.BIO.FONT && m.bioAlign === "center" && near(m.bio.t, m.btns[0].box.b + P.BIO.GAP) && /^Visit (my )?storefront$/.test(m.storeText) && m.store.h >= P.STORE.HEIGHT - 1 &&
+      near((m.store.l + m.store.r) / 2, w / 2) && near(m.store.t, m.bio.b + P.STORE.GAP), J([m.bio, m.bioFont, m.bioAlign, m.store, m.storeText]));
+    check(at + "the tabs " + P.TABS.ORDER.join(", ") + ", equal across the whole width, " + P.TABS.HEIGHT + " px; Posts white with a " + P.TABS.UNDERLINE + " px cyan underline; a " + P.TABS.DIVIDER + " px " + P.TABS.DIVIDER_COLOR + " divider" + (w === 390 && owner ? "; " + P.TABS.TOP + " px down" : ""),
+      J(m.tabs.map(t => t.text)) === J(P.TABS.ORDER) && m.tabs.every((t, i) => near(t.box.w, w / 4) && near(t.box.l, i * w / 4) && near(t.box.h, P.TABS.HEIGHT)) &&
+      m.tabs[0].sel === "true" && px(m.tabs[0].under) === P.TABS.UNDERLINE && m.tabs[0].underColor === rgb(DS.COLOR.ACCENT) && px(m.divider) === P.TABS.DIVIDER && m.dividerColor === rgb(P.TABS.DIVIDER_COLOR) &&
+      (w !== 390 || !owner || near(m.tabs[0].box.t, P.TABS.TOP)), J([m.tabs, m.divider, m.dividerColor]));
+    const G = P.GRID, cw = (w - 2 * G.INSET - (G.COLUMNS - 1) * G.GAP) / G.COLUMNS;
+    if (owner) check(at + "the grid " + G.COLUMNS + " across, " + G.GAP + " px apart, " + G.INSET + " px in; 3:4 tiles, each with its " + G.LABEL_FONT + " px label at the bottom left" + (w === 390 ? "; " + G.TOP + " px down" : ""),
+      m.cells.length >= 1 && m.cells.every((c, i) => near(c.box.l, G.INSET + (i % G.COLUMNS) * (cw + G.GAP)) && near(c.box.w, cw) && near(c.box.h, cw * G.ASPECT) &&
+        !!c.label && px(c.labelFont) === G.LABEL_FONT && near(c.labelBox.l, c.box.l + 6) && near(c.labelBox.b, c.box.b - 6)) && near(m.cells[0].box.t, m.tabsBox.b + G.INSET) &&
+      (w !== 390 || near(m.cells[0].box.t, G.TOP)), J(m.cells));
+    return m;
+  };
 
   for (const w of P23_WIDTHS) {
     const h = HT[w] || 844;
@@ -1434,8 +1582,10 @@ async function p23Run(cdp, origin) {
     check(at + "the posts of the people followed and the member's own, newest first; a member not followed is not in it",
       J(feed.ids) === J([P23_POST.text, P23_POST.photo, P23_POST.own, P23_POST.long]) && feed.full && !feed.empty && feed.tab === "true", J(feed));
     const first = await postBox(P23_POST.text);
-    check(at + "a post is the screen's width; Like, Talk, Save and Share, each 44 x 44 or more; the menu's three dots", !!first && Math.abs(first.w - w) <= 1 && first.acts.length === 4 &&
-      first.acts.every(big) && first.dots && first.name === "Pat's Pantry", J(first));
+    // NAMED (Nov 20 2026, FX1): BEFORE "...; the menu's three dots" (first.dots); AFTER no three dots on a phone's full-screen
+    // post (the approved design): Share opens the post's options (step 4). The unseen Tip BFC slot is not counted.
+    check(at + "a post is the screen's width; Like, Talk, Save and Share, each 44 x 44 or more; no three dots (Share opens the options)", !!first && Math.abs(first.w - w) <= 1 &&
+      J(first.acts.map(a => a.split(" ")[0])) === J(["like", "talk", "save", "share"]) && first.acts.every(big) && !first.dots && first.name === "Pat's Pantry", J(first));
     // nothing of the page shows through a full-screen post: the legal footer is at the feed's end, not over the first post
     const foot = await ev("(function(){var f=document.querySelector('.bf-legal-footer');if(!f)return null;var r=f.getBoundingClientRect();var hit=[].some.call(f.querySelectorAll('a'),function(a){var q=a.getBoundingClientRect();if(q.bottom<=0||q.top>=innerHeight)return false;var e=document.elementFromPoint(q.left+q.width/2,q.top+q.height/2);return !!e&&(e===a||a.contains(e));});return {inFeed:!!f.closest('#feed'),top:Math.round(r.top),seen:hit};})()");
     check(at + "the legal footer is at the feed's end, never painted over a post", !!foot && foot.inFeed && !foot.seen && foot.top >= h, J(foot));
@@ -1450,6 +1600,15 @@ async function p23Run(cdp, origin) {
     check(at + "a photo post: two photos, liked already (Like pressed), two likes and two comments counted", !!ph && ph.photos === 2 && /^like .* true$/.test(ph.acts[0]) && ph.talk === "2" && ph.like === "2", J(ph));
     await pageChecks(at + "photo post: ");
     await shot("home-photo-post");
+    if (w === 390) await fx1Shot("live-feed-" + FX1_TAG + ".png");
+    await fx1Feed(w, P23_POST.photo, false);
+    await click("#tabMarket"); await sleep(400);
+    const fsoon = await ev("(function(){var s=document.getElementById('bfp-soon');if(!s||s.hidden)return null;var r=s.getBoundingClientRect();return {key:s.getAttribute('data-soon'),b:Math.round(r.bottom),l:Math.round(r.left),r:Math.round(r.right),focus:document.activeElement&&document.activeElement.id};})()");
+    check("FX1 feed at " + w + ": Market opens the Coming soon sheet, a bottom sheet across the screen, Close focused", !!fsoon && fsoon.key === "market" && fsoon.b <= h + 1 && fsoon.l <= 1 && fsoon.r >= w - 1 && fsoon.focus === "bfpSoonClose", J(fsoon));
+    await pageChecks("FX1 feed Coming soon at " + w + ": ", { sheet: true });
+    await click("#bfpSoonClose"); await sleep(300);
+    const fshut = await ev("(function(){return {hidden:document.getElementById('bfp-soon').hidden,focus:document.activeElement&&document.activeElement.id};})()");
+    check("FX1 feed at " + w + ": Close shuts it and focus returns to Market", fshut.hidden && fshut.focus === "tabMarket", J(fshut));
 
     // 2. Like, through lib/posts.js
     await scrollTo(P23_POST.text);
@@ -1475,10 +1634,11 @@ async function p23Run(cdp, origin) {
 
     // 4. the member's own post: the menu has Edit and Delete
     await scrollTo(P23_POST.own);
-    await click('#feed [data-post="' + P23_POST.own + '"] .bfp-menu .bf-safety-dots'); await sleep(700);
+    // NAMED (Nov 20 2026, FX1): BEFORE the three dots; AFTER Share (the approved design has no three dots on a full-screen post)
+    await click('#feed [data-post="' + P23_POST.own + '"] .bfp-act[data-act=share]'); await sleep(700);
     at = "P23 own post menu at " + w + ": ";
     const menu = await ev("(function(){var s=document.getElementById('bf-safety');if(!s||s.hidden)return null;var r=s.getBoundingClientRect();return {items:[].map.call(s.querySelectorAll('.bf-safety-item'),function(n){var q=n.getBoundingClientRect();return n.textContent.replace(/\\s+/g,' ').trim()+' '+Math.round(q.height);}),b:Math.round(r.bottom),r:Math.round(r.right)};})()");
-    check(at + "Edit and Delete (no Report, Block or Mute of oneself), each 44 px or more, inside the screen", !!menu && menu.items.some(x => /^Edit /.test(x)) && menu.items.some(x => /^Delete /.test(x)) &&
+    check(at + "Share link, Edit and Delete (no Report, Block or Mute of oneself), each 44 px or more, inside the screen", !!menu && menu.items.some(x => /^Share link /.test(x)) && menu.items.some(x => /^Edit /.test(x)) && menu.items.some(x => /^Delete /.test(x)) &&
       !menu.items.some(x => /^(Block|Mute|Report)/.test(x)) && menu.items.every(x => Number(x.split(" ").pop()) >= 44) && menu.b <= h + 1 && menu.r <= w + 1, J(menu));
     await pageChecks(at, { sheet: true });
     await shot("own-post-menu");
@@ -1489,6 +1649,9 @@ async function p23Run(cdp, origin) {
     const linked = await ev("(function(){var f=document.querySelector('#feed .bfp-post');var t=document.getElementById('bfp-talk');return {first:f&&f.getAttribute('data-post'),talk:!!t&&!t.hidden};})()");
     check(at + "home.html?post=<id>&talk=1: that post first, with Talk open", linked.first === P23_POST.long && linked.talk, J(linked));
     await pageChecks(at, { sheet: true });
+    // NAMED (Nov 20 2026, FX1): a post by a member not followed (opened by its link): the rail's follow badge
+    await open(cdp, origin, "home.html?post=" + P23_POST.other, w, h, true);
+    await fx1Feed(w, P23_POST.other, true);
 
     // 6. compose.html: type, Post, back on Home with the post first
     await open(cdp, origin, "compose.html", w, h, true);
@@ -1510,17 +1673,38 @@ async function p23Run(cdp, origin) {
     // 7. the profile: Posts, Saved, the follower counts
     await open(cdp, origin, "profile.html", w, h, true);
     at = "P23 profile at " + w + ": ";
-    const pf = await ev("(function(){var tabs=[].map.call(document.querySelectorAll('.pfs-tab'),function(t){return t.textContent.trim();});var cells=document.querySelectorAll('#pfsPanel [data-post-tile]').length;" +
+    const pf = await ev("(function(){var tabs=[].filter.call(document.querySelectorAll('.pfs-tab'),function(t){return t.getBoundingClientRect().width>0;}).map(function(t){return t.textContent.trim();});var cells=document.querySelectorAll('#pfsPanel [data-post-tile]').length;" +
       "var stats=[].map.call(document.querySelectorAll('.pfs-stat'),function(s){return s.textContent.replace(/\\s+/g,' ').trim();});return {tabs:tabs,cells:cells,stats:stats};})()");
-    check(at + "Posts, Shop, Services and Saved; the member's two posts as tiles (the new one too); 1 follower, 2 following", J(pf.tabs) === J(["Posts", "Shop", "Services", "Saved"]) && pf.cells === 2 &&
+    // NAMED (Nov 20 2026, FX1): BEFORE the tabs Posts, Shop, Services and Saved; AFTER on a phone the approved design's Posts, Shop,
+    // Services and Reviews (Saved is in the menu); only the tabs on the screen are read
+    check(at + "Posts, Shop, Services and Reviews; the member's two posts as tiles (the new one too); 1 follower, 2 following", J(pf.tabs) === J(DS.PROFILE.TABS.ORDER) && pf.cells === 2 &&
       pf.stats.some(s => /^1\s*Followers?$/.test(s)) && pf.stats.some(s => /^2\s*Following$/.test(s)), J(pf));
     await pageChecks(at);
     await shot("profile-posts");
-    await click("#pfs-tab-saved"); await sleep(400);
+    if (w === 390) await fx1Shot("live-profile-" + FX1_TAG + ".png");
+    await fx1Profile(w, true);
+    // NAMED (Nov 20 2026, FX1): BEFORE the Saved tab; AFTER the menu's Saved posts (a phone has no Saved tab)
+    await click("#pfsMenu"); await sleep(400);
+    const mn = await ev("(function(){var m=document.getElementById('pfs-menu');if(!m||m.hidden)return null;var r=m.getBoundingClientRect();return {items:[].map.call(m.querySelectorAll('.pfs-menu-item'),function(n){return n.textContent.trim()+' '+Math.round(n.getBoundingClientRect().height);}),b:Math.round(r.bottom)};})()");
+    check(at + "the menu: Saved posts, Your data, Settings and Executive HQ, each 44 px or more, inside the screen", !!mn && ["Saved posts", "Your data", "Settings", "Executive HQ"].every(k => mn.items.some(x => x.indexOf(k + " ") === 0)) &&
+      mn.items.every(x => Number(x.split(" ").pop()) >= 44) && mn.b <= h + 1, J(mn));
+    await pageChecks(at + "menu: ", { sheet: true });
+    await click('#pfs-menu [data-pfs-go="saved"]'); await sleep(500);
     const sv = await ev("(function(){return {cells:[].map.call(document.querySelectorAll('#pfsPanel [data-post-tile]'),function(c){return c.getAttribute('data-post-tile');}),sel:document.getElementById('pfs-tab-saved').getAttribute('aria-selected')};})()");
     check(at + "Saved: the one saved post", sv.sel === "true" && J(sv.cells) === J([P23_POST.long]), J(sv));
     await pageChecks(at + "saved: ");
     await shot("profile-saved");
+    // NAMED (Nov 20 2026, FX1): a visitor's view of another member's profile
+    await open(cdp, origin, "profile.html?id=" + P21_PEER2, w, h, true);
+    await pageChecks("P23 profile (visitor) at " + w + ": ");
+    await fx1Profile(w, false);
+    await click("#pfs-tab-reviews"); await sleep(400);
+    const soon = await ev("(function(){var s=document.getElementById('bfp-soon');if(!s||s.hidden)return null;var r=s.getBoundingClientRect();var c=document.getElementById('bfpSoonClose').getBoundingClientRect();return {key:s.getAttribute('data-soon'),text:s.textContent,b:Math.round(r.bottom),close:Math.round(c.height),focus:document.activeElement&&document.activeElement.id};})()");
+    check("FX1 profile (visitor) at " + w + ": Reviews opens the Coming soon sheet (a bottom sheet, Close 44 px and focused)", !!soon && soon.key === "reviews" && /Coming soon/.test(soon.text) && soon.b <= h + 1 && soon.close >= 44 && soon.focus === "bfpSoonClose", J(soon));
+    await ev("(function(){var s=document.getElementById('bfp-soon');s.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;})()"); await sleep(300);
+    const shut = await ev("(function(){var s=document.getElementById('bfp-soon');return {hidden:!!s&&s.hidden,focus:document.activeElement&&document.activeElement.id};})()");
+    check("FX1 profile (visitor) at " + w + ": Escape closes it and focus returns to the Reviews tab", shut.hidden && shut.focus === "pfs-tab-reviews", J(shut));
+    if (w === 390) await fx1Shot("live-profile-visitor-" + FX1_TAG + ".png");
 
     // 8. a storefront's Follow (Rose follows Pat already)
     await open(cdp, origin, "@pat", w, h, true);
