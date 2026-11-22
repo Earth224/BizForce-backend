@@ -101,7 +101,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx2\";", "var SHELL_REV = \"\";"]],
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"p31b\";", "var SHELL_REV = \"\";"]],
   // bf-phone.css is not cached for offline (S)
   "sw-without-phone-css": [[SW, "  \"/css/bf-phone.css\",", ""]],
   // an emoji slips into the phone stylesheet (N)
@@ -267,7 +268,8 @@ const W = FILES[SW] || "";
 // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
 // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
 // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
-check("S1. the shell's cache version is bumped: SHELL_REV \"fx2\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"fx2\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+// NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
+check("S1. the shell's cache version is bumped: SHELL_REV \"p31b\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"p31b\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
 check("S2. css/bf-phone.css is cached with the shell, for a page opened offline", /\n  "\/css\/bf-phone\.css",/.test(W));
 
 /* ── N. no emoji ── */

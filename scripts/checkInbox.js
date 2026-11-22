@@ -25,6 +25,8 @@ const SERVER = "@server.js", INBOXLIB = "@lib/inbox.js";
 const PAGE = "inbox.html", MESSAGES = "messages.html", PROPOSALS = "proposals.html";
 
 const MUTATIONS = {
+  // NAMED (Nov 21 2026, P3-1B): a free account may start a conversation (M5b catches it)
+  "free-starts-conversation": [[SERVER, "      if (!startedByThem.data || !startedByThem.data.length) {\n        return res.status(403)", "      if (false) {\n        return res.status(403)"]],
   "unknown-receiver-written": [[SERVER, "    if (!receiver.data) {\n      return res.status(404).json({ error: IN.RECEIVER_MISSING, reason: \"unknown_receiver\" });\n    }\n", ""]],
   "bad-id-receiver-500": [[SERVER, "    if (!IN.isUuid(receiverId)) {\n      return res.status(404).json({ error: IN.RECEIVER_MISSING, reason: \"unknown_receiver\" });\n    }\n", ""]],
   "notice-no-link": [[INBOXLIB, "    link: \"/inbox.html?with=\" + senderId\n", "    link: null\n"]],
@@ -36,7 +38,8 @@ const MUTATIONS = {
   "list-oldest-first": [[SERVER, "      .order(\"created_at\", { ascending: false })\n      .limit(IN.NOTIFICATIONS_PAGE);", "      .order(\"created_at\", { ascending: true })\n      .limit(IN.NOTIFICATIONS_PAGE);"]],
   "thread-unpaged": [[INBOXLIB, "  const page = rows.slice(0, limit).reverse();", "  const page = rows.slice().reverse();"]],
   "groups-every-row": [[INBOXLIB, "    if (!other || seen.has(other)) return;", "    if (!other) return;"]],
-  "badge-adds-approvals": [[SERVER, "badge: n + m });", "badge: n + m + (approvals.count || 0) });"]],
+  // NAMED (Nov 21 2026, P3-1B): re-anchored; BEFORE "badge: n + m });", which P3-2's counts object (with the owner's reports) replaced
+  "badge-adds-approvals": [[SERVER, "approvals: approvals.count || 0, badge: n + m };", "approvals: approvals.count || 0, badge: n + m + (approvals.count || 0) };"]],
   "read-marks-everyone": [[SERVER, ".eq(\"user_id\", req.user.id).eq(\"type\", \"message\").eq(\"actor_id\", req.params.userId).eq(\"read\", false).select(\"id\");", ".eq(\"user_id\", req.user.id).eq(\"type\", \"message\").eq(\"read\", false).select(\"id\");"]],
   "support-no-link": [[SERVER, "            object_type: \"tip\",\n            link: \"/wallet.html\"\n", "            object_type: \"tip\"\n"]],
   "page-no-with": [[PAGE, "    openThread(withId);\n", ""]],
@@ -113,6 +116,32 @@ const run = (method, routePath, db, req) => {
   check("M4. a message to a member is written from the sender (201)", sent.status === 201 && msgRow.sender_id === ME && msgRow.receiver_id === OTHER && msgRow.content === "hello", J([sent.status, msgRow]));
   check("M5. its notice says who sent it and opens the conversation: actor_id, object_type message, object_id, /inbox.html?with=<sender>",
     noteRow.user_id === OTHER && noteRow.actor_id === ME && noteRow.object_type === "message" && noteRow.object_id === "m-9" && noteRow.link === "/inbox.html?with=" + ME, J(noteRow));
+  /* NAMED (Nov 21 2026, P3-1B, the owner's rule): REPLY-ONLY MESSAGING. A free account replies in a conversation a member
+     started with them, and cannot start one: with no message from the receiver to them, POST /api/messages is 403
+     members_only with the members panel and one sentence, and nothing is written. A member starts any conversation. */
+  const runAs = (plan, db, req) => {
+    const fn = H.route(SRC, "post", "/api/messages", { supabase: db.client, safeText: (v, n) => (v == null ? "" : String(v).slice(0, n)),
+      getUserPlan: async () => plan }, T.libRequire);
+    return fn ? fn(req) : Promise.resolve({ status: "no route" });
+  };
+  const FREE_PLAN = { active: false, plan: null, inactive_reason: "no_subscription" };
+  const theyWrote = H.fakeDb((table, q) => {
+    if (table === "users") return { data: H.filterVal(q, "eq", "id") === OTHER ? { id: OTHER } : null, error: null };
+    if (table === "messages" && q.op === "insert") return { data: Object.assign({ id: "m-10" }, q.payload), error: null };
+    if (table === "messages") return { data: H.filterVal(q, "eq", "sender_id") === OTHER && H.filterVal(q, "eq", "receiver_id") === ME ? [{ id: "m-1" }] : [], error: null };
+    return { data: null, error: null };
+  });
+  const dFree = msgDb(), dMember = msgDb();
+  const starts = await runAs(FREE_PLAN, dFree, { body: { receiver_id: OTHER, content: "hello" } });
+  const MEMB = T.libRequire("./lib/membership");
+  check("M5b. P3-1B: a free account starting a conversation: 403 members_only, the owner's sentence and the members panel, nothing written",
+    starts.status === 403 && starts.body.reason === "members_only" && starts.body.error === MEMB.FREE_RULES.start_conversation &&
+    J(starts.body.members_panel) === J(MEMB.membersPanelFromCode()) && writes(dFree).length === 0, J([starts.status, starts.body && starts.body.error, writes(dFree).length]));
+  const replies = await runAs(FREE_PLAN, theyWrote, { body: { receiver_id: OTHER, content: "thanks, yes please" } });
+  const replyRow = (theyWrote.log.find(q => q.op === "insert" && q.table === "messages") || {}).payload || {};
+  check("M5c. P3-1B: ...and replying where the member wrote first goes through (201)", replies.status === 201 && replyRow.sender_id === ME && replyRow.receiver_id === OTHER, J([replies.status, replyRow]));
+  const memberStarts = await runAs({ active: true, plan: "all_access", inactive_reason: null }, dMember, { body: { receiver_id: OTHER, content: "hello" } });
+  check("M5d. P3-1B: a member starts a conversation (201)", memberStarts.status === 201, J([memberStarts.status, memberStarts.body]));
   const many = Array.from({ length: 60 }, (_, i) => ({ id: i, created_at: new Date(Date.UTC(2026, 10, 19, 0, 60 - i)).toISOString() }));
   const d5 = msgDb({ rows: many });
   const page = await run("get", "/api/messages/:userId", d5, { params: { userId: OTHER }, query: { before: "2026-11-19T02:00:00.000Z" } });

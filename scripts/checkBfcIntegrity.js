@@ -407,6 +407,9 @@ function buildRoutes(client, env) {
     require: function (p) { return require(/^\.\//.test(p) ? path.join(REPO, p) : p); },
     requireAuth: 0, requireActiveSubscription: 0, bfcRecipientLookupLimiter: 0,
     getUserPlan: async function () { return { active: true, plan: "all_access", inactive_reason: null }; },
+    // NAMED (Nov 21 2026, P3-1B): the transfer refuses a free recipient (ownerIsMember); here every recipient is a member
+    // unless the env names it in FREE_RECIPIENTS (checkFreeAccount covers the refusal)
+    ownerIsMember: async function (id) { return ((env && env.FREE_RECIPIENTS) || []).indexOf(id) === -1; },
     BILLING_URL: "/billing.html",
     CERTIFICATION_PASS_MARK: CATALOG.CERTIFICATION_PASS_MARK,
     findCertification: CATALOG.findCertification,
@@ -626,6 +629,16 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
     check(tag + "and writes the debit and the credit under \"Transfer\"",
       db.wallet_transactions.filter(t => t.description === "Transfer").map(t => t.type + ":" + t.amount).join(",") === "debit:500,credit:500");
     invariant(db, tag + "a transfer");
+    // NAMED (Nov 21 2026, P3-1B): a free account never receives BizCash: the transfer to one is refused 409 recipient_free
+    // before anything moves (server.js ownerIsMember; lib/membership.js RECIPIENT_FREE.transfer)
+    {
+      const freeRoutes = buildRoutes(client, { FREE_RECIPIENTS: [bob.id] });
+      const before = JSON.stringify([db.user_wallets, db.wallet_transactions]), rpcBefore = client.rpcCalls.length;
+      const r = await call(freeRoutes["post /api/wallet/transfer"], alice, bodyFor(bob.id, 100));
+      check(tag + "P3-1B. a transfer to a free account is refused 409 recipient_free, saying nothing was sent, and nothing moves",
+        r.statusCode === 409 && r.body.reason === "recipient_free" && r.body.error === require(path.join(REPO, "lib/membership")).RECIPIENT_FREE.transfer &&
+        JSON.stringify([db.user_wallets, db.wallet_transactions]) === before && client.rpcCalls.length === rpcBefore, r.statusCode + " " + JSON.stringify(r.body));
+    }
 
     await refused(byName ? "to a username no member has" : "to an unknown account id", alice, ghost, 10, 404, "unknown_recipient");
     check(tag + "and no wallet was created for that id", !walletOf(db, ghost));

@@ -8675,6 +8675,18 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
     if (await require("./lib/safety").blockedEitherWay(supabase, req.user.id, receiverId)) {
       return res.status(404).json({ error: require("./lib/safety").MESSAGES.notAvailable, reason: "not_available" });
     }
+    /* NAMED (Nov 21 2026, P3-1B, the owner's rule): a free account replies only; it cannot start a conversation. Allowed
+       when the receiver has messaged the sender before; otherwise 403 with the members panel. Read fresh; a read error
+       refuses (500), nothing is sent. */
+    if (accessTier(await getUserPlan(req.user.id, req.user)) !== "member") {
+      const startedByThem = await supabase.from("messages").select("id")
+        .eq("sender_id", receiverId).eq("receiver_id", req.user.id).limit(1);
+      if (startedByThem.error) throw startedByThem.error;
+      if (!startedByThem.data || !startedByThem.data.length) {
+        return res.status(403).json({ error: require("./lib/membership").FREE_RULES.start_conversation, reason: "members_only",
+          members_panel: require("./lib/membership").membersPanelFromCode() });
+      }
+    }
     /* P3-1: messaging someone who does not follow you needs a confirmed email (lib/emailVerification.js). A reply to a
        follower never does. The follow is read fresh; a read error refuses (500), nothing is sent. */
     if (!require("./lib/emailVerification").isVerified(req.user)) {
@@ -9017,8 +9029,12 @@ app.post("/api/copyright/counter/:id", requireAuth, copyrightLimiter, async func
    plan, like the media library: a lapsed plan's posts would not be shown (ownerPagePublic). Reading, Talk, Like, Save,
    Share and Follow need a sign-in. GET /api/posts/by/:userId and GET /api/follows/:userId/counts also answer a visitor
    who is not signed in, as the profile page does (viewerIdFrom; a signed-in viewer's blocks still apply). */
+/* NAMED (Nov 21 2026, P3-1B): + tierOf (an account's tier, "member" or "free": the owner's free-account rules in lib/posts.js, the
+   indexable post page) and membersPanel (the body of a members-only refusal). */
 function postDeps() {
-  return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env };
+  return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env,
+    tierOf: async function (userId) { return accessTier(await getUserPlan(userId)); },
+    membersPanel: function () { return require("./lib/membership").membersPanelFromCode(); } };
 }
 function postRoute(run) {
   return async function (req, res, next) {
@@ -49207,6 +49223,10 @@ async function bfcSendWithinLimitsSteps(req, res, send) {
     if (!(await require("./lib/emailVerification").verifiedById(supabase, recipient.id))) {
       return res.status(409).json(require("./lib/emailVerification").recipientUnverifiedBody("receive_bizcash"));
     }
+    /* NAMED (Nov 21 2026, P3-1B): free accounts never receive BizCash (lib/membership.js RECIPIENT_FREE); refused before anything moves. */
+    if (!(await ownerIsMember(recipient.id))) {
+      return res.status(409).json(require("./lib/membership").recipientFreeBody(send.support ? "support" : "transfer"));
+    }
 
     const sent = await bfcSentLast24h(req.user.id);
     if (sent.error) {
@@ -50035,6 +50055,10 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
       if (!(await require("./lib/emailVerification").verifiedById(supabase, priced.seller_id))) {
         return res.status(409).json(require("./lib/emailVerification").recipientUnverifiedBody("receive_bizcash"));
       }
+      /* NAMED (Nov 21 2026, P3-1B): free accounts never receive BizCash (lib/membership.js RECIPIENT_FREE); refused before anything moves. */
+      if (!(await ownerIsMember(priced.seller_id))) {
+        return res.status(409).json(require("./lib/membership").recipientFreeBody("purchase"));
+      }
     }
 
     const { data, error } = await supabase.rpc("bfc_buy_listing", {
@@ -50525,6 +50549,38 @@ app.get("/p/:id", postPageLimiter, async function (req, res) {
   }
 });
 
+/* NAMED (Nov 21 2026, P3-1B): bizforceai.net/sitemap-posts.xml, proxied here by Netlify (_redirects): exactly the post pages
+   GET /p/:id serves as indexable (lib/posts.js indexablePost): published, public, Show in Google on, not hidden by moderation,
+   the author's pages public and the author a paid member. Cached ten minutes, like the other sitemaps. */
+let postSitemapCache = { xml: null, at: 0 };
+app.get("/api/sitemap/posts.xml", postPageLimiter, async function (req, res) {
+  try {
+    if (!postSitemapCache.xml || Date.now() - postSitemapCache.at > BLOG_SITEMAP_CACHE_MS) {
+      const rows = await supabase.from("posts").select("id, author_id, status, audience, search_visible, published_at")
+        .eq("status", "published").eq("audience", "public").eq("search_visible", true).order("published_at", { ascending: false }).limit(5000);
+      if (rows.error) throw rows.error;
+      const PP = require("./lib/postPage"), P = require("./lib/posts"), deps = postDeps();
+      const list = (rows.data || []).filter(function (r) { return PP.isPostId(r.id); });
+      const hidden = await require("./lib/safety").hiddenAmong(supabase, "post", list.map(function (r) { return r.id; }));
+      const visible = await publicOwnersAmong(list.map(function (r) { return r.author_id; }));
+      const kept = [];
+      for (const r of list) { if (!hidden.has(r.id) && visible.has(r.author_id) && await P.indexablePost(deps, r)) kept.push(r); }
+      postSitemapCache = {
+        xml: '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+          kept.map(function (r) { return "  <url><loc>" + supportLinks.escapeHtml(PP.postUrl(r.id)) + "</loc>" + (r.published_at ? "<lastmod>" + String(r.published_at).slice(0, 10) + "</lastmod>" : "") + "</url>\n"; }).join("") + "</urlset>\n",
+        at: Date.now()
+      };
+    }
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.set("Cache-Control", "public, max-age=600");
+    return res.status(200).send(postSitemapCache.xml);
+  } catch (err) {
+    console.error("[sitemap/posts] could not be built:", (err && err.message) || err);
+    res.set("Retry-After", "600");
+    return res.status(503).type("text/plain").send("The post sitemap could not be built just now.");
+  }
+});
+
 /* bizforceai.net/campaign/<share_id>, proxied here by Netlify so the page is
    served with the campaign's own title, image and preview tags. A malformed
    or unknown id, or an owner whose plan is not active, is "No campaign found"
@@ -50688,6 +50744,10 @@ app.post("/api/crowdfunding/campaigns/:id/donate", requireAuth, requireActiveSub
     /* P3-1: the campaign's owner receives the BizCash, which needs a confirmed email (lib/emailVerification.js). */
     if (!(await require("./lib/emailVerification").verifiedById(supabase, campaign.owner_id))) {
       return res.status(409).json(require("./lib/emailVerification").recipientUnverifiedBody("receive_bizcash"));
+    }
+    /* NAMED (Nov 21 2026, P3-1B): free accounts never receive BizCash (lib/membership.js RECIPIENT_FREE); refused before anything moves. */
+    if (!(await ownerIsMember(campaign.owner_id))) {
+      return res.status(409).json(require("./lib/membership").recipientFreeBody("donation"));
     }
 
     const sent = await bfcSentLast24h(req.user.id);

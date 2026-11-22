@@ -1166,8 +1166,13 @@ function compare(section, label, oldRun, newRun, expect) {
       "    if (!(await require(\"./lib/emailVerification\").verifiedById(supabase, recipient.id))) {\n" +
       "      return res.status(409).json(require(\"./lib/emailVerification\").recipientUnverifiedBody(\"receive_bizcash\"));\n" +
       "    }\n";
-    check("J6. bfcSendWithinLimitsSteps is " + B1_HEAD + "'s bfcSendWithinLimits, byte for byte, under a new name (P3-1's recipient check aside, present once)",
-      !!oldBody && newBody.split(P31_RECIPIENT).length === 2 && newBody.split(P31_RECIPIENT).join("").replace("async function bfcSendWithinLimitsSteps(", "async function bfcSendWithinLimits(") === oldBody);
+    // NAMED (Nov 21 2026, P3-1B): and P3-1B's one addition, free accounts never receive BizCash (set aside the same way, by its text).
+    const P31B_FREE = "    /* NAMED (Nov 21 2026, P3-1B): free accounts never receive BizCash (lib/membership.js RECIPIENT_FREE); refused before anything moves. */\n" +
+      "    if (!(await ownerIsMember(recipient.id))) {\n" +
+      "      return res.status(409).json(require(\"./lib/membership\").recipientFreeBody(send.support ? \"support\" : \"transfer\"));\n" +
+      "    }\n";
+    check("J6. bfcSendWithinLimitsSteps is " + B1_HEAD + "'s bfcSendWithinLimits, byte for byte, under a new name (P3-1's recipient check and P3-1B's free-recipient check aside, each present once)",
+      !!oldBody && newBody.split(P31_RECIPIENT).length === 2 && newBody.split(P31B_FREE).length === 2 && newBody.split(P31_RECIPIENT).join("").split(P31B_FREE).join("").replace("async function bfcSendWithinLimitsSteps(", "async function bfcSendWithinLimits(") === oldBody);
     const calls = s => (s.match(/bfcSendWithinLimits\(/g) || []).length;
     check("J6. every caller still calls bfcSendWithinLimits, as many as before", calls(B1_SRC) === calls(NEW), calls(B1_SRC) + " vs " + calls(NEW));
     const STEPS = [

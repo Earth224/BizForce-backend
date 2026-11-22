@@ -1458,7 +1458,8 @@ const SELLER_Q = "?spapi_oauth_code=" + CODE + "&state=" + "S".repeat(43) + "&se
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
   // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20" and "Last updated November 20, 2026" (P2-2). AFTER "2026-11-21", the version P3-1's free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule set.
   // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
-  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 21 2026 (P3-2; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-21b" && LEGAL.TERMS_UPDATED === "Last updated November 21, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
+  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 21 2026 (P3-1B; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-21c" && LEGAL.TERMS_UPDATED === "Last updated November 21, 2026", LEGAL.TERMS_VERSION);
   const amz = (FILES.readme.split("## Amazon app setup")[1] || "").split("\n## ")[0];
   check("G5. README: the four env var rows, and the Amazon app setup (registration, the draft app and its four roles, the LWA client id and secret and the app id on Railway, the redirect exactly, draft mode, the Data Protection Policy, the fees)",
     /\n\| `AMAZON_SPAPI_APP_ID` \| none \| /.test(FILES.readme) && /\n\| `AMAZON_LWA_CLIENT_ID` \| none \| /.test(FILES.readme) &&

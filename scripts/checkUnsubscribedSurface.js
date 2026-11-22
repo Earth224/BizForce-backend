@@ -103,6 +103,9 @@
                        and it becomes an unreviewed login-only writer.
    MUTATE=serve-open   removes the owner check from GET /api/bfp/seller/:handle
                        at compile time. Section 6 must go red.
+   MUTATE=free-selling NAMED (Nov 21 2026, P3-1B): removes requireActiveSubscription
+                       from the live stack of POST /api/marketplace/listings (the
+                       P3-1 free listing). The P3-1B section must go red.
    Section 6 reads two accounts' plans, so BIZFORCE_CHECK_USER_ID must be set.
    Starting server.js starts its intervals and crons as it always does; the run
    is over in seconds, nothing is requested over HTTP, and nothing here writes
@@ -118,7 +121,7 @@ const { resolveSubjectAccount, resolveEntitledAccount, OWNER_ACCOUNT_ID } = requ
 const REPO = path.join(__dirname, "..");
 const SERVER_PATH = path.join(REPO, "server.js");
 
-const MUTATIONS = ["add-public", "ungate", "serve-open"];
+const MUTATIONS = ["add-public", "ungate", "serve-open", "free-selling"];   // NAMED (Nov 21 2026, P3-1B): + free-selling
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -772,6 +775,12 @@ if (MUTATE === "ungate") {
     layer.route.stack.length + " handlers) — sections 2, 3 and 4 must fail.");
 }
 
+if (MUTATE === "free-selling") {   // NAMED (Nov 21 2026, P3-1B)
+  const layer = layerFor("post", "/api/marketplace/listings");
+  layer.route.stack = layer.route.stack.filter(function (x) { return x.handle.name !== "requireActiveSubscription"; });
+  console.log("\n!! MUTATION: requireActiveSubscription removed from POST /api/marketplace/listings — the P3-1B section must fail.");
+}
+
 /* ── walk it ────────────────────────────────────────────────────────────── */
 const ROUTES = [];
 app._router.stack.forEach(function (l) {
@@ -805,7 +814,15 @@ ROUTES.forEach(function (r) { BY_KEY[r.key] = r; });
 const byKeyOf = function (k) { return BY_KEY[k]; };
 const GROUP_NAME = { P: "public", F: "free", M: "members only", A: "owner or admin" };
 /* The three routes P3-1 took out of EXPECTED_GATED on purpose (posting, post photos, a new listing): free now. */
-const FREED_BY_P31 = ["post /api/posts", "post /api/posts/photos", "post /api/marketplace/listings"];
+// NAMED (Nov 21 2026, P3-1B): BEFORE P3-1 freed three (posting, post photos, a new listing). AFTER the owner's final rules put the
+// new listing back with the members (MOVED_BY_P31B), so P3-1 freed two that stay free.
+const FREED_BY_P31 = ["post /api/posts", "post /api/posts/photos"];
+/* NAMED (Nov 21 2026, P3-1B, the owner's final rules): selling, campaigns and BizCash in every form are members only. These
+   moved from F to M in lib/routeAccess.js; each is M and gated (requireActiveSubscription in its live stack). */
+const MOVED_BY_P31B = ["post /api/marketplace/listings", "put /api/marketplace/listings/:id", "post /api/marketplace/upload-digital",
+  "post /api/bfp/pproducts", "put /api/bfp/pproducts/:id", "get /api/crowdfunding/campaigns", "get /api/crowdfunding/campaigns/by-share/:shareId",
+  "get /api/crowdfunding/my-campaigns", "get /api/crowdfunding/donations", "get /api/crowdfunding/donations/:id", "get /api/support/me",
+  "put /api/support/me", "get /api/wallet"];
 
 console.log("\n══ 1. every route, classified from the live router, and assigned a group ══");
 ["unauthenticated", "login-only", "gated", "admin"].forEach(function (c) { console.log("    " + c.padEnd(16) + of(c).length); });
@@ -840,7 +857,11 @@ sameSet("2. the requireAdmin routes are exactly the " + EXPECTED_ADMIN.length + 
 const lostGate = EXPECTED_GATED.filter(function (k) { return FREED_BY_P31.indexOf(k) === -1 && groupOf(k) !== "M"; });
 check("2. every route reviewed as gated before P3-1 is still members only, but the three P3-1 freed", lostGate.length === 0, lostGate.join(", "));
 const freedOk = FREED_BY_P31.every(function (k) { return groupOf(k) === "F" && byKeyOf(k) && byKeyOf(k).cls === "login-only"; });
-check("2. posting, post photos and a new listing are free (F, sign-in only)", freedOk, FREED_BY_P31.map(function (k) { return k + " " + groupOf(k); }).join(", "));
+check("2. posting and post photos are free (F, sign-in only)", freedOk, FREED_BY_P31.map(function (k) { return k + " " + groupOf(k); }).join(", "));   // NAMED (Nov 21 2026, P3-1B): BEFORE "posting, post photos and a new listing"
+const movedBad = MOVED_BY_P31B.filter(function (k) { return groupOf(k) !== "M" || !byKeyOf(k) || byKeyOf(k).cls !== "gated"; });
+check("2. P3-1B: the " + MOVED_BY_P31B.length + " selling, campaign and BizCash routes the owner's rules moved are members only (M, gated)", movedBad.length === 0,
+  movedBad.map(function (k) { return k + " " + groupOf(k) + " " + (byKeyOf(k) ? byKeyOf(k).cls : "missing"); }).join(", "));
+check("2. P3-1B: the posts sitemap is public (P, no sign-in)", groupOf("get /api/sitemap/posts.xml") === "P" && !!byKeyOf("get /api/sitemap/posts.xml") && byKeyOf("get /api/sitemap/posts.xml").cls === "unauthenticated");
 const disconnects = ROUTES.filter(function (r) { return /\/disconnect$/.test(r.key); });
 check("2. every disconnect stays free (" + disconnects.length + ")", disconnects.length > 5 && disconnects.every(function (r) { return groupOf(r.key) === "F" && r.cls === "login-only"; }),
   disconnects.filter(function (r) { return groupOf(r.key) !== "F"; }).map(function (r) { return r.key; }).join(", "));

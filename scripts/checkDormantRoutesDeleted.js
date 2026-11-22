@@ -437,7 +437,9 @@ const ADDED = [
   // NAMED (Nov 21 2026, P3-2, migration 199): BEFORE 545 routes; AFTER 547, the owner's Verified sellers list and un-verify
   // (checkVerifiedBadge, checkUnsubscribedSurface EXPECTED_ADMIN)
   ["get", "/api/admin/verified"],                            // admin only: the seller and official badges, and ?handle= to find one (545 -> 546)
-  ["post", "/api/admin/unverify/:userId"]                     // admin only: removes the seller or official badge; a paid member keeps "member" (546 -> 547)
+  ["post", "/api/admin/unverify/:userId"],                    // admin only: removes the seller or official badge; a paid member keeps "member" (546 -> 547)
+  // NAMED (Nov 21 2026, P3-1B): BEFORE 547 routes; AFTER 548, the posts sitemap (checkPublicPostPage, routeAccess PUBLIC)
+  ["get", "/api/sitemap/posts.xml"]                           // PUBLIC: members' public posts with Show in Google on, cached ten minutes (547 -> 548)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

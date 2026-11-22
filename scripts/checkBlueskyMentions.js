@@ -1054,7 +1054,8 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
   // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20" and "Last updated November 20, 2026" (P2-2). AFTER "2026-11-21", the version P3-1's free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule set.
   // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
-  check("K6. the terms version is the latest change's, Nov 21 2026 (P3-2; this change set Nov 3)", LEGAL.TERMS_VERSION === "2026-11-21b" && LEGAL.TERMS_UPDATED === "Last updated November 21, 2026");
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
+  check("K6. the terms version is the latest change's, Nov 21 2026 (P3-1B; this change set Nov 3)", LEGAL.TERMS_VERSION === "2026-11-21c" && LEGAL.TERMS_UPDATED === "Last updated November 21, 2026");
   check("K7. the model message matches the privacy sentence: post text, own post text, business details and guidance; never the author's name, handle or account id",
     prompt.indexOf("kids classes") !== -1 && ownPrompt.indexOf("Saturday wheel class") !== -1 && prompt.indexOf(BUSINESS) !== -1 && prompt.indexOf(GUIDANCE) !== -1 &&
     [CAROL.displayName, CAROL.handle, CAROL.did].every(v => prompt.indexOf(v) === -1));

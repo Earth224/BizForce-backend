@@ -387,6 +387,9 @@ function bfcRoutes(db, env) {
     console: { log() {}, warn(m) { logs.push(String(m)); }, error(m) { logs.push(String(m)); } },
     requireAuth: 0, requireActiveSubscription: 0, bfcDonateLimiter: 0,
     bfcTransferLimits: LIMITS.bfcTransferLimits, bfcCountsTowardDailyCap: LIMITS.bfcCountsTowardDailyCap,
+    // NAMED (Nov 21 2026, P3-1B): the donation and transfer refuse a free recipient (ownerIsMember reads getUserPlan, a stub
+    // in BFC_STUBS); every account here is a member, so these sections keep their meaning (checkFreeAccount runs the refusal)
+    getUserPlan: async function () { return { active: true, plan: "all_access", inactive_reason: null }; },
     app: { post(p) { handlers[p] = arguments[arguments.length - 1]; }, get() {} }
   };
   vm.createContext(ctx);

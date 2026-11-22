@@ -23,7 +23,7 @@
         the wallet, the bio, the four tabs, the grid; BizCash, the wallet and
         "BizForce member" only for a paid member; Reviews opens Coming soon;
         the page's old header hidden on a phone; desktop parts hidden.
-     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "fx2" (NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
+     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "p31b" (NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
      F. FX2 (Nov 21 2026): Tip BFC for a paid member; the product strip, built and linked (lib/posts.js
         sends a post's active listing, run here over the P2-3 test database); the tabs on one line; the
         Profile's banner (added, changed, removed in Edit profile) and its ring; the Agent Directory's
@@ -73,7 +73,7 @@ const MUTATIONS = {
   "grid-gap": [[SHELL, "\".pfs-grid{gap:2px}\",", "\".pfs-grid{gap:8px}\","]],
   "old-header": [[SHELL, "\"body:not(.edit-mode) .pf-nav,body:not(.edit-mode) .pf-banner,body:not(.edit-mode) .pf-header-wrap{display:none}\",\n", ""]],
   "no-soon-script": [[PROFILE, "<script src=\"/scripts/bf-feed.js\"></script>", ""]],
-  "shell-rev": [[SW, "var SHELL_REV = \"fx2\";", "var SHELL_REV = \"p32\";"]],   // NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
+  "shell-rev": [[SW, "var SHELL_REV = \"p31b\";", "var SHELL_REV = \"fx2\";"]],   // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
   "tip-for-free": [[FEED, "setMember(!!a && a.tier === \"member\");", "setMember(!!a);"]],
@@ -277,7 +277,8 @@ check("D31. a desktop shows none of the phone header's parts (hidden outside the
 console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32" (the Verified badge). The only edit P3-2 made here; no design figure changed.
 // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2" (the feed's Tip and strip, the Profile's banner, the Agent Directory's views, the Sun).
-check("E1. sw.js SHELL_REV is \"fx2\"", /\nvar SHELL_REV = "fx2";\n/.test(FILES[SW] || ""));
+// NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
+check("E1. sw.js SHELL_REV is \"p31b\"", /\nvar SHELL_REV = "p31b";\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {

@@ -85,6 +85,8 @@ const MUTATIONS = {
   "address-duplicated": [["app.html", "        <button id=\"registerBtn\" class=\"btn\" type=\"submit\">Create Account</button>",
     "        <p>" + LEGAL.POSTAL_ADDRESS + "</p>\n        <button id=\"registerBtn\" class=\"btn\" type=\"submit\">Create Account</button>"]],
   // the YouTube Terms of Service link removed from Privacy
+  // NAMED (Nov 21 2026, P3-1B): the published Terms lose the final free-account rules (P13, and A1's byte-for-byte build)
+  "terms-old-free-rules": [["terms.html", "On a free account: a share post needs at least one photo", "On a free account: a post"]],
   "youtube-link-removed": [["privacy.html", "<a href=\"https://www.youtube.com/t/terms\">YouTube Terms of Service</a>", "YouTube Terms of Service"]],
   // the server accepts a sign-up without the box
   "signup-without-consent": [["server.js", "    if (req.body.accept_terms !== true) {", "    if (false) {"]],
@@ -864,7 +866,14 @@ const fmt = n => Number(n).toLocaleString("en-US");
     // NAMED (Nov 20 2026, P3-1): BEFORE "P2-2's community rules moved TERMS_VERSION to" and "2026-11-20". AFTER P3-1 moved it to 2026-11-21
     // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
     // for free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule.
-    check("P12. W3's privacy-only clarification made no new version; P3-1 and then P3-2 moved TERMS_VERSION to " + LEGAL.TERMS_VERSION, LEGAL.TERMS_VERSION === "2026-11-21b");
+    // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
+    check("P12. W3's privacy-only clarification made no new version; P3-1, P3-2 and then P3-1B moved TERMS_VERSION to " + LEGAL.TERMS_VERSION, LEGAL.TERMS_VERSION === "2026-11-21c");
+    // NAMED (Nov 21 2026, P3-1B): the published pages carry the owner's final rules (checkLegalL1 A19 and A20 read them word for word)
+    const termsFe = FE["terms.html"] || "", privacyFe = FE["privacy.html"] || "";
+    check("P13. terms.html shows version 2026-11-21c and the final free-account rules; privacy.html says which posts search engines may index",
+      termsFe.indexOf("Version 2026-11-21c") !== -1 && termsFe.indexOf("On a free account: a share post needs at least one photo") !== -1 &&
+      termsFe.indexOf("A free account never holds, receives or sends BizCash") !== -1 &&
+      privacyFe.indexOf("Only a member&#39;s published public post with Show in Google on can be indexed by search engines") + privacyFe.indexOf("Only a member's published public post with Show in Google on can be indexed by search engines") !== -2);
   }
 
   check("no network was touched", NETWORK.length === 0, NETWORK.join(", "));

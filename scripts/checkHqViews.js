@@ -124,7 +124,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx2\";", "var SHELL_REV = \"ph1\";"]],
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"p31b\";", "var SHELL_REV = \"ph1\";"]],
   // (a crescent moon, built from its code point so this file holds none: checkNoEmoji N2)
   "emoji": [[VIEWS, "  var VIEW_KEY = \"bf_hq_view\"", "  /* " + String.fromCodePoint(0x1F319) + " */ var VIEW_KEY = \"bf_hq_view\""]]
 };
@@ -577,7 +578,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
-  check("W1. SHELL_REV \"fx2\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"fx2\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
+  check("W1. SHELL_REV \"p31b\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p31b\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

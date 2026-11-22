@@ -1373,7 +1373,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
   // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20" and "Last updated November 20, 2026" (P2-2). AFTER "2026-11-21", the version P3-1's free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule set.
   // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
-  check("L6. TERMS_VERSION is the latest change's, 2026-11-21b (P3-2; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-21b", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
+  check("L6. TERMS_VERSION is the latest change's, 2026-11-21c (P3-1B; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-21c", LEGAL.TERMS_VERSION);
 
   /* ── G. the guide tip ───────────────────────────────────────────────────── */
   console.log("\n══ G. the guide ══");

@@ -83,7 +83,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
-  "sw-old-rev": [[SW, "var SHELL_REV = \"fx2\";", "var SHELL_REV = \"hq1\";"]],
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
+  "sw-old-rev": [[SW, "var SHELL_REV = \"p31b\";", "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
   "sw-no-pages": [[SW, "  \"home.html\", \"inbox.html\",   //", "  //"]],
@@ -238,7 +239,8 @@ async function page(pathname, opts) {
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
-  check("W1. SHELL_REV \"fx2\" in the cache's name", has(sw, "var SHELL_REV = \"fx2\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
+  check("W1. SHELL_REV \"p31b\" in the cache's name", has(sw, "var SHELL_REV = \"p31b\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));

@@ -229,7 +229,10 @@ const MUTATIONS = {
   // #12: a public page left out of the sitemap
   "page-missing-from-sitemap": [["FE:sitemap-pages.xml", "<loc>https://bizforceai.net/privacy</loc>", "<loc>https://bizforceai.net/privacy-old</loc>"]],
   // #12: robots.txt blocks everything
-  "robots-disallow-all": [["FE:robots.txt", "Allow: /", "Disallow: /"]],
+  // NAMED (Nov 21 2026, P3-1B): BEFORE the anchor was "Allow: /"; AFTER "Allow: /\n", since "Allow: /p/" follows it
+  "robots-disallow-all": [["FE:robots.txt", "Allow: /\n", "Disallow: /\n"]],
+  // NAMED (Nov 21 2026, P3-1B): robots.txt stops allowing /p/, and stops naming the posts sitemap (the named exception)
+  "robots-no-post-pages": [["FE:robots.txt", "Allow: /p/\nSitemap: https://bizforceai.net/sitemap.xml\nSitemap: https://bizforceai.net/sitemap-posts.xml\n", "Sitemap: https://bizforceai.net/sitemap.xml\n"]],
   // #13: an env var missing from the README
   "env-var-missing-from-readme": [["README", /SHUTDOWN_TIMEOUT_MS/g, "SHUTDOWN_TIMEOUT"]],
   // #13: a cron schedule missing from the README
@@ -1005,6 +1008,21 @@ function fakeDb(tables, fail) {
     const robots = FE["robots.txt"] || "";
     check("12. robots.txt lets every crawler in and names the sitemap index",
       /^User-agent: \*$/m.test(robots) && !/^Disallow:\s*\/\s*$/m.test(robots) && /^Sitemap: https:\/\/bizforceai\.net\/sitemap\.xml$/m.test(robots), robots);
+    /* NAMED (Nov 21 2026, P3-1B): THE ONE NAMED EXCEPTION to "every other page is noindex": a post page, /p/<id> (lib/postPage.js,
+       served by the backend), is "index, follow" only for a paid member's published public post with Show in Google on
+       (lib/posts.js indexablePost sets post.seo); every other post page, every free account's included, is noindex. Those posts
+       alone are in /sitemap-posts.xml, which robots.txt names, with /p/ allowed. checkPublicPostPage section G runs it in full. */
+    {
+      const PG = require(path.join(REPO, "lib/postPage.js"));
+      const base = { id: "aaaaaaaa-0000-4000-8000-000000000001", body: "Fresh bread", author: { name: "Rose", username: "rose" }, photos: [], published_at: "2026-11-19T10:00:00.000Z" };
+      const plain = PG.renderPostPage(base), seo = PG.renderPostPage(Object.assign({ seo: { title: null, description: null } }, base)), none = PG.renderPostPage(null);
+      const robotsOf = t => String(metaContent(t, "name", "robots") || "");
+      check("12. the named exception: a post page is noindex unless it is a member's post with Show in Google on (post.seo), then \"index, follow\"",
+        robotsOf(plain) === "noindex" && robotsOf(none) === "noindex" && robotsOf(seo) === "index, follow" && SRC.indexOf("PP.renderPostPage(post)") !== -1,
+        JSON.stringify([robotsOf(plain), robotsOf(seo), robotsOf(none)]));
+      check("12. ...robots.txt allows /p/ and names the posts sitemap",
+        /^Allow: \/p\/$/m.test(robots) && /^Sitemap: https:\/\/bizforceai\.net\/sitemap-posts\.xml$/m.test(robots), robots);
+    }
     const idx = FE["sitemap.xml"] || "";
     check("12. the sitemap index lists the pages and the blog sitemaps, and Netlify serves the blog one from the API",
       /<loc>https:\/\/bizforceai\.net\/sitemap-pages\.xml<\/loc>/.test(idx) && /<loc>https:\/\/bizforceai\.net\/sitemap-blog\.xml<\/loc>/.test(idx) &&

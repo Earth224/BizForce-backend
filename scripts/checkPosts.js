@@ -37,6 +37,14 @@
         an author's own delete is not undone by a later "kept".
      I. THE ROUTES: every P2-3 posts route is in server.js with its sign-in,
         and making a post or a photo needs an active plan.
+     J. NAMED (Nov 21 2026, P3-1B, the owner's final rules): a free account's
+        share post needs a photo (403 photo_required with the members panel,
+        nothing saved); a Need may be text; linking a listing, an offer post
+        and the search fields are members only; a free account's post is
+        stored with search_visible false; a member's is on by default, with
+        their search title (70) and description (160); a member links only
+        their own active listing; Edit post changes the search fields for a
+        member only; only the author is shown them.
 
    MUTATE=<name> applies one mutation in memory; MUTATE=all runs each.
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -58,9 +66,11 @@ const MUTATIONS = {
   "posts-unlimited": [[POSTS, ">= POSTS_PER_DAY)", ">= 1e9)"]],
   "cursor-skips-ties": [[POSTS, '  return q.or(col + ".lt." + quoted(c.at) + ",and(" + col + ".eq." + quoted(c.at) + ",id.lt." + c.id + ")");', '  return q.lt(col, c.at);']],
   "body-bytes-not-chars": [[POSTS, "  if (chars(body) > BODY_MAX)", "  if (Buffer.byteLength(body) > BODY_MAX)"]],
-  "edit-unscreened": [[POSTS, "  if (!screened.ok) return { status: 400, body: CP.refusalBody(screened) };\n  var findings = screened.review ? screened.review.findings : null;\n  var patch = { body: text };",
-    "  var findings = null;\n  var patch = { body: text };"]],
-  "edit-anyones": [[POSTS, "  if (!post || post.author_id !== userId || post.status === \"removed\") return notAvailable();\n  var text = body && body.body;", "  if (!post) return notAvailable();\n  var text = body && body.body;"]],
+  // NAMED (Nov 21 2026, P3-1B): edit-unscreened and edit-anyones re-anchored on editPost as P3-1B left it (the search fields
+  // sit between the owner test and the text; the patch carries them); the mutations are the same
+  "edit-unscreened": [[POSTS, "  if (!screened.ok) return { status: 400, body: CP.refusalBody(screened) };\n  var findings = screened.review ? screened.review.findings : null;\n  var patch = Object.assign({ body: text }, search.fields);",
+    "  var findings = null;\n  var patch = Object.assign({ body: text }, search.fields);"]],
+  "edit-anyones": [[POSTS, "  if (!post || post.author_id !== userId || post.status === \"removed\") return notAvailable();\n  // NAMED (Nov 21 2026, P3-1B): Edit post may change", "  if (!post) return notAvailable();\n  // NAMED (Nov 21 2026, P3-1B): Edit post may change"]],
   "reply-nests": [[POSTS, "    if (parent.parent_id) {", "    if (false) {"]],
   "tombstone-deletes": [[POSTS, '  var u = await deps.sb.from("post_comments").update({ status: "deleted", body: DELETED_BODY }).eq("id", commentId).eq("author_id", viewerId);',
     '  var u = await deps.sb.from("post_comments").delete().eq("id", commentId).eq("author_id", viewerId);']],
@@ -70,7 +80,14 @@ const MUTATIONS = {
   "self-like-notice": [[POSTS, "  if (post.author_id === likerId) return;\n", ""]],
   "kept-revives-deleted": [[POSTS, '    if (!p || (p.status === "removed" && state !== "removed")) return { changed: false };', "    if (!p) return { changed: false };"]],
   // NAMED (Nov 20 2026, P3-1): BEFORE post-without-plan took requireActiveSubscription off. AFTER posting is free, so the mutation puts it back (I1 catches it).
-  "post-needs-plan": [[SERVER, 'app.post("/api/posts", requireAuth, postRoute(', 'app.post("/api/posts", requireAuth, requireActiveSubscription, postRoute(']]
+  "post-needs-plan": [[SERVER, 'app.post("/api/posts", requireAuth, postRoute(', 'app.post("/api/posts", requireAuth, requireActiveSubscription, postRoute(']],
+  // NAMED (Nov 21 2026, P3-1B): the owner's final rules (section J)
+  "free-text-share": [[POSTS, "    if (v.intent === \"share\" && v.kind !== \"photo\") return membersOnly(deps, FR.share_photo, \"photo_required\");\n", ""]],
+  "free-links-listing": [[POSTS, "    if (v.listing_id) return membersOnly(deps, FR.listing_link, \"members_only\");\n", ""]],
+  "free-post-searchable": [[POSTS, "Object.assign({ search_visible: true }, v.search) : { search_visible: false });", "Object.assign({ search_visible: true }, v.search) : { search_visible: true });"]],
+  "member-search-off": [[POSTS, "tier === \"member\" ? Object.assign({ search_visible: true }, v.search)", "tier === \"member\" ? Object.assign({ search_visible: false }, v.search)"]],
+  "any-listing-linked": [[POSTS, "    if (!ls.data || ls.data.seller_id !== userId || ls.data.status !== \"active\") return", "    if (!ls.data) return"]],
+  "edit-search-free": [[POSTS, "  if (Object.keys(search.fields).length && (await tierOf(deps, userId)) !== \"member\") return membersOnly(deps, MESSAGES.searchMembers, \"members_only\");\n", ""]]
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, POSTS, "@lib/postMedia.js"]);
 const { FILES, check, J, has } = T;
@@ -309,11 +326,80 @@ const pid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
     ["delete", "/api/comments/:id", "requireAuth, postRoute("], ["post", "/api/comments/:id/hide", "requireAuth, postRoute("], ["get", "/api/feed/following", "requireAuth, postRoute("]];
   const missing = ROUTES.filter(([m, p, mw]) => !has(S, "app." + m + "(\"" + p + "\", " + mw));
   check("I1. each route is there with its sign-in; making a post and a post photo are free (sign-in only)", missing.length === 0 && !has(S, 'app.post("/api/posts", requireAuth, requireActiveSubscription') && !has(S, 'app.post("/api/posts/photos", requireAuth, requireActiveSubscription'), J(missing));
-  check("I2. the routes pass the server's own pieces: the claims screen, ownerPagePublic, Web Push",
-    has(S, "  return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env };"));
+  // NAMED (Nov 21 2026, P3-1B): BEFORE the pieces ended at env. AFTER the author's tier (accessTier of getUserPlan) and the members panel follow.
+  check("I2. the routes pass the server's own pieces: the claims screen, ownerPagePublic, Web Push, the tier and the members panel",
+    has(S, "  return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env,\n" +
+      "    tierOf: async function (userId) { return accessTier(await getUserPlan(userId)); },\n" +
+      "    membersPanel: function () { return require(\"./lib/membership\").membersPanelFromCode(); } };"));
   check("I3. a member's posts answer a visitor not signed in, with a signed-in viewer's blocks applied (viewerIdFrom)",
     has(S, 'app.get("/api/posts/by/:userId", postRoute(async function (req) {\n  return require("./lib/posts").postsByAuthor(postDeps(), await viewerIdFrom(req), req.params.userId, req.query.cursor);'));
   check("I4. no emoji in lib/posts.js or this check", !/\p{Extended_Pictographic}/u.test(FILES[POSTS] + require("fs").readFileSync(__filename, "utf8")));
 
+
+  /* ── J (NAMED, Nov 21 2026, P3-1B, the owner's final rules) ── */
+  console.log("\n══ J. a free account's posts, and a member's Show in Google ══");
+  {   // NAMED (Nov 21 2026, P3-1B): its own block, so its names stand apart from sections A to I
+  const FR = require("../lib/membership").FREE_RULES;
+  const PANEL = { title: "Members get this" };
+  const FREEB = new Set([NOBODY, FAN]);   // FAN is free; ME and THEM are members
+  function tiered(extra) {
+    const x = world(extra);
+    x.deps.tierOf = async id => (FREEB.has(id) ? "free" : "member");
+    x.deps.membersPanel = () => PANEL;
+    return x;
+  }
+  const LST = "bbbbbbbb-0000-4000-8000-000000000001", LST_THEIRS = "bbbbbbbb-0000-4000-8000-000000000002", LST_PAUSED = "bbbbbbbb-0000-4000-8000-000000000003";
+  const listings = () => [{ id: LST, seller_id: ME, status: "active" }, { id: LST_THEIRS, seller_id: THEM, status: "active" }, { id: LST_PAUSED, seller_id: ME, status: "paused" }];
+  w = tiered({ marketplace_listings: listings() });
+  r = await P.createPost(w.deps, FAN, { body: "Just words" });
+  check("J1. a free account's text-only share post: 403 photo_required, the owner's sentence and the members panel, nothing saved",
+    r.status === 403 && r.body.reason === "photo_required" && r.body.error === FR.share_photo && J(r.body.members_panel) === J(PANEL) && w.db.t.posts.length === 0, J(r));
+  r = await P.createPost(w.deps, FAN, { kind: "photo", media: [{ media_id: pid(9) }] });
+  check("J2. ...a free account's photo share is not stopped by the photo rule (it reaches the photo check)",
+    !(r.body && (r.body.reason === "photo_required" || r.body.reason === "members_only")), J(r));
+  r = await P.createPost(w.deps, FAN, { body: "Need a plumber in Leeds this week", intent: "need" });
+  const need = w.db.t.posts[0];
+  check("J3. ...a free account's Need may be text: published, intent need, search_visible false",
+    r.status === 201 && !!need && need.intent === "need" && need.search_visible === false && need.status === "published", J([r.status, need]));
+  const postsBefore = w.db.t.posts.length;
+  r = await P.createPost(w.deps, FAN, { kind: "photo", media: [{ media_id: pid(9) }], listing_id: LST });
+  const r2 = await P.createPost(w.deps, FAN, { body: "Selling bread", intent: "offer" });
+  const r3 = await P.createPost(w.deps, FAN, { body: "Need help", intent: "need", search_visible: true, seo_title: "Help" });
+  check("J4. ...linking a listing, an offer post and the search fields are members only (403 with the members panel), nothing saved",
+    r.status === 403 && r.body.error === FR.listing_link && r2.status === 403 && r2.body.error === P.MESSAGES.offerMembers &&
+    r3.status === 403 && r3.body.error === P.MESSAGES.searchMembers && J(r3.body.members_panel) === J(PANEL) && w.db.t.posts.length === postsBefore, J([r.body, r2.body, r3.body]));
+  w = tiered({ marketplace_listings: listings() });
+  r = await P.createPost(w.deps, ME, { body: "Fresh sourdough, baked this morning in Leeds." });
+  const m1 = w.db.t.posts[0];
+  check("J5. a member's text post is fine, and Show in Google is on by default (search_visible true, no title or description)",
+    r.status === 201 && m1 && m1.intent === "share" && m1.search_visible === true && !m1.seo_title && !m1.seo_description, J(m1));
+  r = await P.createPost(w.deps, ME, { body: "Rye loaves", seo_title: "  Rye   loaves in Leeds ", seo_description: "Baked daily.", search_visible: false });
+  const m2 = w.db.t.posts[1];
+  check("J6. ...their search title and description are stored tidied (spaces collapsed), and they can turn it off",
+    r.status === 201 && m2.seo_title === "Rye loaves in Leeds" && m2.seo_description === "Baked daily." && m2.search_visible === false, J(m2));
+  const long1 = await P.createPost(w.deps, ME, { body: "x", seo_title: "t".repeat(71) });
+  const long2 = await P.createPost(w.deps, ME, { body: "x", seo_description: "d".repeat(161) });
+  const okLen = await P.createPost(w.deps, ME, { body: "x", seo_title: "t".repeat(70), seo_description: "d".repeat(160) });
+  const badType = await P.createPost(w.deps, ME, { body: "x", search_visible: "yes" });
+  check("J7. ...70 characters for the title and 160 for the description, not more; Show in Google is true or false",
+    long1.status === 400 && long1.body.field === "seo_title" && long2.status === 400 && long2.body.field === "seo_description" && okLen.status === 201 &&
+    badType.status === 400 && badType.body.field === "search_visible" && P.SEO_TITLE_MAX === 70 && P.SEO_DESCRIPTION_MAX === 160, J([long1.body, long2.body, okLen.status, badType.body]));
+  const theirs = await P.createPost(w.deps, ME, { body: "Mine?", listing_id: LST_THEIRS });
+  const paused = await P.createPost(w.deps, ME, { body: "Paused one", listing_id: LST_PAUSED });
+  const own = await P.createPost(w.deps, ME, { body: "My loaf, in the Market", listing_id: LST });
+  const linked = w.db.t.posts.filter(p => p.listing_id).map(p => p.listing_id);
+  check("J8. a member links only their own active listing: someone else's or a paused one is 400 listing_id, nothing saved",
+    theirs.status === 400 && theirs.body.field === "listing_id" && paused.status === 400 && own.status === 201 && J(linked) === J([LST]), J([theirs.body, paused.body, own.status, linked]));
+  const mine = w.db.t.posts[0].id;
+  r = await P.editPost(w.deps, ME, mine, { body: "Fresh sourdough", seo_description: "The best in Leeds.", search_visible: true });
+  check("J9. Edit post changes a member's search fields", r.status === 200 && w.db.t.posts[0].seo_description === "The best in Leeds." && w.db.t.posts[0].search_visible === true, J([r.status, w.db.t.posts[0]]));
+  w.db.t.posts.push(post(pid(70), FAN, { search_visible: false }));
+  r = await P.editPost(w.deps, FAN, pid(70), { body: "Hello", search_visible: true });
+  check("J10. ...and refuses them for a free account (403 with the members panel), nothing changed",
+    r.status === 403 && r.body.error === P.MESSAGES.searchMembers && w.db.t.posts.find(p => p.id === pid(70)).search_visible === false, J(r));
+  const forMe = await P.getPost(w.deps, ME, mine), forThem = await P.getPost(w.deps, THEM, mine);
+  const sMe = forMe.body && forMe.body.post && forMe.body.post.search, sThem = forThem.body && forThem.body.post && forThem.body.post.search;
+  check("J11. only the author is shown a post's search fields", !!sMe && sMe.visible === true && sMe.description === "The best in Leeds." && sThem === undefined, J([sMe, sThem]));
+  }
   T.finish();
 })().catch(e => { check("the check ran to the end", false, e && (e.stack || e.message || JSON.stringify(e))); T.finish(); });

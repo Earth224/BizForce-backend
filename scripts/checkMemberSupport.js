@@ -165,7 +165,8 @@ const MUTATIONS = {
   // the mutation still winds it back before this check's change.
   // NAMED (Nov 20 2026, P3-1): BEFORE the anchor named "2026-11-20". AFTER "2026-11-21", P3-1's version.
   // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
-  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-21b\";", "const TERMS_VERSION = \"2026-10-26\";"]],
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
+  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-21c\";", "const TERMS_VERSION = \"2026-10-26\";"]],
   // support's ledger legs are described differently, so the shared total in SQL misses them
   "support-debit-not-transfer": [["mig", "v_balance := bfc_transfer(p_from, p_to, p_amount, 'Transfer');", "v_balance := bfc_transfer(p_from, p_to, p_amount, case when p_kind = 'support' then 'Support' else 'Transfer' end);"]]
 };

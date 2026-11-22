@@ -152,7 +152,9 @@ function context(db, extra) {
     // gate_decisions row; checkGates J2 proves no answer changes). Stubbed, so "nothing written" still means the listing.
     recordGateDecision: function () { return Promise.resolve(true); },
     ownerPagePublic: async function () { return true; },
-    ownerIsMember: async function () { return false; },
+    // NAMED (Nov 21 2026, P3-1B): BEFORE false for everyone (only the storefront's label read it). AFTER the buy route refuses
+    // a free seller too, so seller-1, this check's seller, is a member; anyone else is not (checkFreeAccount runs the refusal).
+    ownerIsMember: async function (id) { return id === "seller-1"; },
     // NAMED (Oct 28 2026, member support): BEFORE the storefront route's closure needed no require. AFTER it answers
     // support_links through publicSupportLinks, which lifts `const supportLinks = require("./lib/supportLinks")`.
     require: function (p) { return require(p.indexOf("./") === 0 ? path.join(__dirname, "..", p) : p); },

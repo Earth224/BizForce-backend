@@ -2732,7 +2732,8 @@ function pageAnswers(over) {
   // NAMED (Nov 20 2026, P2-2): BEFORE "2026-11-14". AFTER "2026-11-20", the version P2-2's community rules, reporting, blocking, moderation and copyright text set.
   // NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20" and "Last updated November 20, 2026" (P2-2). AFTER "2026-11-21", the version P3-1's free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule set.
   // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
-  check("G5. TERMS_VERSION is the latest change's, Nov 21 2026 (P3-2; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-21b", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
+  check("G5. TERMS_VERSION is the latest change's, Nov 21 2026 (P3-1B; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-21c", LEGAL.TERMS_VERSION);
   const YD = realRequire("./lib/yourData");
   const ttEntry = (YD.DATA || []).filter(function (e) { return e.table === "member_tiktok_connections"; })[0] ||
     (FILES.yourData.indexOf("{ table: \"member_tiktok_connections\", group: \"account\"") !== -1 ? { select: (/table: "member_tiktok_connections"[\s\S]*?select: "([^"]*)"/.exec(FILES.yourData) || [])[1], onDelete: "delete" } : null);

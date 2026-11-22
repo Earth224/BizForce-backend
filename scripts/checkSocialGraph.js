@@ -29,6 +29,11 @@
      F. THE MEMBER'S DATA: Your data lists and deletes them (a comment becomes
         a tombstone), the backup takes them (not the share tally), and
         GET /api/notifications leaves out a muted member's notices.
+     G. NAMED (Nov 21 2026, P3-1B, the owner's rule): COMMENTS. A free account
+        comments only on posts by other free accounts (and on its own); on a
+        paid member's post it is 403 with the members panel and one sentence,
+        and nothing is written; GET .../comments tells the app (can_comment,
+        comment_rule); a member comments anywhere they can see.
 
    MUTATE=<name> applies one mutation in memory; MUTATE=all runs each.
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -52,7 +57,11 @@ const MUTATIONS = {
   "migration-no-self-rule": [[MIG, "  CHECK (follower_id <> following_id);", "  CHECK (true);"]],
   "migration-rls-off": [[MIG, "ALTER TABLE public.post_saves ENABLE ROW LEVEL SECURITY;\n", ""]],
   "notices-show-muted": [[SERVER, "(blockedSet.has(n.actor_id) || mutedNoticeSet.has(n.actor_id))", "blockedSet.has(n.actor_id)"]],
-  "yourdata-no-follows": [[YD, '  { table: "follows", group: "profile",', '  { table: "follows_gone", group: "profile",']]
+  "yourdata-no-follows": [[YD, '  { table: "follows", group: "profile",', '  { table: "follows_gone", group: "profile",']],
+  // NAMED (Nov 21 2026, P3-1B): the comment rule (section G)
+  "free-comments-member-post": [[POSTS, "  if (rule) return membersOnly(deps, rule, \"members_only\");\n", ""]],
+  "free-blocked-on-free": [[POSTS, "  if ((await tierOf(deps, post.author_id)) !== \"member\") return null;\n", ""]]
+  // (no mutant for commentRule's own-post line: a free viewer's own post has a free author, so the next line answers the same)
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, POSTS, MIG, YD, BK]);
 const { FILES, check, J, has } = T;
@@ -211,5 +220,30 @@ const f = (a, b, at) => ({ follower_id: a, following_id: b, created_at: at || OL
   check("F4. GET /api/notifications leaves out notices from a member the viewer blocked or muted",
     has(notices, "(blockedSet.has(n.actor_id) || mutedNoticeSet.has(n.actor_id))") && has(notices, 'const mutedNoticeSet = await require("./lib/safety").mutedIds(supabase, req.user.id);'));
 
+
+  /* ── G (NAMED, Nov 21 2026, P3-1B, the owner's rule) ── */
+  console.log("\n══ G. comments: a free account comments on free accounts' posts only ══");
+  {
+    const RULE = require("../lib/membership").FREE_RULES.comment_member_post;
+    const PANEL = { title: "Members get this" };
+    const FREE_IDS = new Set([FAN, OTHER]);   // ME and THEM are paid members
+    const gw = world({ posts: [post(pid(81), ME), post(pid(82), OTHER), post(pid(83), FAN)] });
+    gw.deps.tierOf = async id => (FREE_IDS.has(id) ? "free" : "member");
+    gw.deps.membersPanel = () => PANEL;
+    let g = await P.addComment(gw.deps, FAN, pid(81), { body: "Lovely bread" });
+    check("G1. a free account on a paid member's post: 403 members_only, the owner's sentence and the members panel, nothing written",
+      g.status === 403 && g.body.reason === "members_only" && g.body.error === RULE && J(g.body.members_panel) === J(PANEL) && gw.db.t.post_comments.length === 0, J(g));
+    g = await P.addComment(gw.deps, FAN, pid(82), { body: "Same here" });
+    const g2 = await P.addComment(gw.deps, FAN, pid(83), { body: "My own post" });
+    check("G2. ...on another free account's post, and on its own, it comments", g.status === 201 && g2.status === 201 && gw.db.t.post_comments.length === 2, J([g.status, g2.status]));
+    g = await P.addComment(gw.deps, THEM, pid(81), { body: "Member to member" });
+    const g3 = await P.addComment(gw.deps, ME, pid(82), { body: "Member on a free post" });
+    check("G3. a member comments on a member's post and on a free account's", g.status === 201 && g3.status === 201, J([g.status, g3.status]));
+    const lf = await P.listComments(gw.deps, FAN, pid(81)), lm = await P.listComments(gw.deps, THEM, pid(81)), lo = await P.listComments(gw.deps, FAN, pid(82));
+    check("G4. the comments list tells the app: can_comment false and the sentence for a free account on a member's post; true otherwise",
+      lf.status === 200 && lf.body.can_comment === false && lf.body.comment_rule === RULE && lf.body.comments.length === 1 &&
+      lm.body.can_comment === true && lm.body.comment_rule === null && lo.body.can_comment === true, J([lf.body.can_comment, lf.body.comment_rule, lm.body.can_comment, lo.body.can_comment]));
+    check("G5. the sentence says what is allowed instead", /for members/.test(RULE) && /posts by other free accounts/.test(RULE) && /Nothing was posted\.$/.test(RULE), RULE);
+  }
   T.finish();
 })().catch(e => { check("the check ran to the end", false, e && (e.stack || e.message || JSON.stringify(e))); T.finish(); });

@@ -90,6 +90,10 @@ function route(src, method, routePath, stubs, libRequire) {
   const stmt = routeStatement(src, method, routePath);
   if (!stmt) return null;
   let handler = null;
+  /* NAMED (Nov 21 2026, P3-1B): a route that asks the tier (POST /api/messages: starting a conversation is for members;
+     postDeps().tierOf) reads getUserPlan, whose closure is the whole billing reader. Unless the check stubs it, every
+     account here is a member (active), so the older checks keep their meaning; checkInbox and checkFreeAccount stub a free one. */
+  if (!stubs || !Object.prototype.hasOwnProperty.call(stubs, "getUserPlan")) stubs = Object.assign({ getUserPlan: async function () { return { active: true, plan: "all_access", inactive_reason: null }; } }, stubs || {});
   const ctx = Object.assign({
     console: { log() {}, warn() {}, error() {} }, process: { env: {} }, Promise, Date, Math, JSON, Number, String, Object, Array, Set, Map, RegExp, Error,
     require: libRequire, nowIso: () => "2026-11-19T12:00:00.000Z", requireAuth: 0, requireActiveSubscription: 0, setTimeout, setImmediate

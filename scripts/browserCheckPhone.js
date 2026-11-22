@@ -138,6 +138,20 @@
                        listing, the Profile's banner and the Agent Directory's
                        views only on a phone, the Sun only under 760 px. The
                        proof is Downloads\phone1\fx2-desktop-proof.json.
+                       NAMED (Nov 21 2026, P3-1B): four pages changed on purpose and
+                       are re-recorded in desktop-baseline-pp31b-<page>.json (the
+                       name sorts after pfx2-privacy): compose.html (What is it,
+                       Share or Need, and a member's Show in Google box: 14 new,
+                       none gone), privacy.html (which posts search engines may
+                       index: 1 list item new, none gone), terms.html (the free
+                       account's photo rule, Show in Google, and BizCash for
+                       members: 3 new, the old BizCash sentence gone) and
+                       wallet.html (who may send and receive, one sentence
+                       reworded). Every other element is the same, moved down
+                       below the new text, or a container grown to hold it. The
+                       other pages are unchanged at 1440 (the members panel, the
+                       Buy sheet and the Members tags show only for a free
+                       account). The proof is Downloads\phone1\p31b-desktop-proof.json.
      PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
@@ -160,7 +174,12 @@
                            then confirmed (Home, the composer posting, the Profile, Market
                            create, the Inbox, the HQ tab's members panel, the dashboard and
                            an agent page behind it); at 360, 390 and 430; screenshots to
-                           Downloadsp31.
+                           Downloads\p31. NAMED (Nov 21 2026, P3-1B): the owner's final
+                           rules (a share post needs a photo, Market create and the
+                           Create sheet's members entries open the panel, Talk on a
+                           member's post, the wallet, the Buy sheet, reply-only Inbox),
+                           and at 390 a member's Show in Google and indexable /p/ page;
+                           the P3-1B screenshots go to Downloads\p31b.
 
      PHONE_P32=1           only P3-2's own screens (p32Run): the Verified badge on the
                            Following feed, Talk, the profile, a storefront and the public
@@ -474,7 +493,7 @@ function serve() {
     if (p === "/__hq1/tone.wav") { res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": TONE.length, "Cache-Control": "no-store" }); res.end(TONE); return; }   // HQ1
     if (p.endsWith("/")) p += "index.html";
     // NAMED (Nov 20 2026, P2-3): /p/<id> is the backend's page (lib/postPage.js over P23S.db), as _redirects proxies it
-    if ((P23 || P32) && /^\/p\/[^/]+$/.test(p)) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
+    if ((P23 || P32 || P31) && /^\/p\/[^/]+$/.test(p)) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 21 2026, P3-1B): and PHONE_P31
       p23PostPage(p.slice(3)).then(r => { res.writeHead(r.code, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(r.html); },
         e => { res.writeHead(500); res.end(String(e && e.message)); });
       return;
@@ -945,7 +964,10 @@ async function hq1Run(cdp, origin) {
           if (m.hscroll) bad.hscroll.push(p + " " + J(m.wide));
           if (m.clipped.length) bad.clipped.push(p + " " + J(m.clipped));
           if (m.smallCount) bad.small.push(p + " " + J(m.small));
-          const over = m.over.filter(x => !/^button#tmx-guide-fab /.test(x)); if (over.length) bad.fixed.push(p + " " + J(over));
+          // NAMED (Nov 21 2026, P3-1B): BEFORE only the Guide was set aside at rest, so the P2-1 bottom bar, fixed over the dashboard's
+          // lower content by design, failed 14 of these. AFTER the bar is set aside at rest the same way P2-1's checks do, and the end
+          // of the page is judged with the bar and the Guide included (below).
+          const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x)); if (over.length) bad.fixed.push(p + " " + J(over));
           if (view === "large") { if (L.rows.length || !q.cards) bad.links.push(p + " rows " + L.rows.length + ", cards shown " + q.cards); }
           else if (!L.cards.length || J(L.rows) !== J(L.cards) || L.rows.some(x => !x.href)) bad.links.push(p + " " + J({ cards: L.cards, rows: L.rows }).slice(0, 300));
           const pressed = q.btns.filter(b => b.pressed === "true").map(b => b.id).sort().join();
@@ -965,11 +987,18 @@ async function hq1Run(cdp, origin) {
             fs.writeFileSync(path.join(HQ1_OUT, "dashboard-390x844-" + p + "-" + view + "-orbit-" + orbit + ".png"), Buffer.from(shot.data, "base64"));
           }
         }
+        // NAMED (Nov 21 2026, P3-1B): the END of the dashboard, the bar and the Guide included: nothing fixed covers the last content
+        await ev("scrollTo(0,document.documentElement.scrollHeight),true");
+        await sleep(350);
+        const endM = await ev(MEASURE);
+        const endOver = endM.over.filter(x => !/ sticky over /.test(x));
+        await ev("scrollTo(0,0),true");
         const c = at + view + ", orbit " + orbit + ", all five portals: ";
         check(c + "no horizontal scroll", !bad.hscroll.length, J(bad.hscroll));
         check(c + "no text cut off", !bad.clipped.length, J(bad.clipped));
         check(c + "every tap target at least 44 x 44", !bad.small.length, J(bad.small));
-        check(c + "no fixed element over text or a control", !bad.fixed.length, J(bad.fixed));
+        check(c + "no fixed element over text or a control at rest (the bar and the Guide are judged at the end)", !bad.fixed.length, J(bad.fixed));
+        check(c + "at the end of the dashboard no fixed element covers anything (the bar and the Guide included)", endOver.length === 0, J(endM.over));
         check(c + (view === "large" ? "the PH1 cards shown, no list" : "one " + (view === "grid" ? "tile" : "row") + " per Large card, the same order and the same link"), !bad.links.length, J(bad.links));
         check(c + "the view row: the set's title, Large, Compact, Grid and the orbit button, 44 px, labelled, the pressed ones right", !bad.row.length, J(bad.row));
         check(c + (orbit === "hidden" ? "the orbit hidden, five 44 px chips in order, the open one highlighted" : "the orbit shown, no chips"), !bad.orbit.length, J(bad.orbit));
@@ -1741,8 +1770,9 @@ async function p23Run(cdp, origin) {
     // 6. compose.html: type, Post, back on Home with the post first
     await open(cdp, origin, "compose.html", w, h, true);
     at = "P23 compose at " + w + ": ";
+    // NAMED (Nov 21 2026, P3-1B): "who sees it" is the audience fieldset, not the first .bfc-aud (P3-1B put What is it first)
     const cp = await ev(P23_BOX + "('#composer','button,textarea,select')");
-    const cpInfo = await ev("(function(){var t=document.querySelector('.bfc-text');return {text:!!t,count:(document.querySelector('.bfc-count')||{}).textContent||'',post:!!document.querySelector('.bfc-post'),aud:(document.querySelector('.bfc-aud')||{}).textContent||'',soon:(document.querySelector('.bfc-soon')||{}).textContent||''};})()");
+    const cpInfo = await ev("(function(){var t=document.querySelector('.bfc-text');return {text:!!t,count:(document.querySelector('.bfc-count')||{}).textContent||'',post:!!document.querySelector('.bfc-post'),aud:(document.querySelector('.bfc-aud:not(#bfcIntent)')||{}).textContent||'',soon:(document.querySelector('.bfc-soon')||{}).textContent||''};})()");
     check(at + "the box, the count, photos, who sees it, and Post; every control inside the screen and 44 px or more", !!cp && cp.small.length === 0 && !cp.hscroll && cp.r <= w + 1 &&
       cpInfo.text && /^0 \/ 2,?200$/.test(cpInfo.count.trim()) && cpInfo.post && /Public/.test(cpInfo.aud) && /Followers/.test(cpInfo.aud), J([cp, cpInfo]));
     await ev("(function(){var t=document.querySelector('.bfc-text');t.focus();t.value='Cinnamon buns on Friday. Twelve only.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()"); await sleep(200);
@@ -2058,11 +2088,23 @@ async function p23Run(cdp, origin) {
 const P31 = process.env.PHONE_P31 === "1";
 const P31_WIDTHS = String(process.env.PHONE_P31_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
 const P31_OUT = process.env.PHONE_P31_OUT || path.join(os.homedir(), "Downloads", "p31");
-const P31S = { verified: false, resends: 0 };
+/* NAMED (Nov 21 2026, P3-1B, the owner's final rules): BEFORE the composer posted text, Market create opened the form, and the
+   Inbox was checked only for no panel. AFTER the composer needs a photo for a share post (a Need posts as text), Market create and
+   the Create sheet's members entries open the members panel (each tagged "Members"), Talk on a member's post shows the members
+   box, the wallet is behind the panel, Buy opens the card-checkout-coming sheet, and the Inbox lets Rose reply where Pat wrote
+   first but not start a conversation. lib/posts.js is handed the tier (Rose free, everyone else a member). At the end, at 390,
+   P31S.member makes Rose a member for the member's composer (Show in Google) and an indexable /p/ page; the seven P3-1B
+   screenshots go to PHONE_P31B_OUT (default Downloads\p31b). */
+const P31S = { verified: false, resends: 0, member: false };
+const P31B_OUT = process.env.PHONE_P31B_OUT || path.join(os.homedir(), "Downloads", "p31b");
+const P31_LISTING = { id: "cccccccc-0000-4000-8000-000000000001", slug: "plum-jam", seller_id: P21_PEER, title: "Plum jam", description: "A jar of plum jam.", price_bfc: 15,
+  status: "active", listing_kind: "product", category: "other", media: [] };
 function p31Api(method, p) {
   if (p === "/api/auth/me") return { user: Object.assign({}, ROSE, { role: "user", email_verified_at: P31S.verified ? ago(24) : null }),
-    access: { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: P31S.verified,
+    access: P31S.member ? { active: true, exempt: false, access_reason: "subscription", inactive_reason: null, tier: "member", email_verified: true, members_panel: require("../lib/membership").membersPanelFromCode() }
+      : { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: P31S.verified,
       members_panel: require("../lib/membership").membersPanelFromCode() }, subscription: null, profile: { username: "rose" } };
+  if (p === "/api/marketplace/listings" && method === "GET") return { listings: [P31_LISTING] };   // NAMED (Nov 21 2026, P3-1B): a member's listing, so Buy shows
   if (p === "/api/auth/resend-verification" && method === "POST") { P31S.resends++; return { message: "We sent a new link to rose@example.test. It works for one hour." }; }
   return undefined;
 }
@@ -2080,10 +2122,12 @@ async function p31Run(cdp, origin) {
     check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
     check(at + "no text cut off", m.clipped.length === 0, J(m.clipped));
     check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
-    const deco = m.deco.filter(x => !(opts && opts.panel && VEIL.test(x)));
-    check(at + "decoration is under the text" + (opts && opts.panel ? " (the panel's veil aside)" : ""), deco.length === 0, J(deco));
-    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.panel && VEIL.test(x)));
-    check(at + "no fixed element over text or a control at rest" + (opts && opts.panel ? " (the members panel is meant to cover the page)" : ""), over.length === 0, J(over));
+    // NAMED (Nov 21 2026, P3-1B): opts.sheet sets aside the open Talk sheet and its backdrop, as P2-3's checks do
+    const TALK = /^(div|section)#bfp-talk(-backdrop)? /;
+    const deco = m.deco.filter(x => !(opts && opts.panel && VEIL.test(x)) && !(opts && opts.sheet && TALK.test(x)));
+    check(at + "decoration is under the text" + (opts && opts.panel ? " (the panel's veil aside)" : opts && opts.sheet ? " (the open sheet's backdrop aside)" : ""), deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.panel && VEIL.test(x)) && !(opts && opts.sheet && TALK.test(x)));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.panel ? " (the members panel is meant to cover the page)" : opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
   };
   const panelBox = () => ev(P23_BOX + "('#bf-members-panel .bfa-panel', 'a,button')");
   const panelText = () => ev("(function(){var p=document.querySelector('#bf-members-panel .bfa-panel');if(!p)return null;var j=p.querySelector('.bfa-join'),h=p.querySelector('.bfa-home');" +
@@ -2100,6 +2144,11 @@ async function p31Run(cdp, origin) {
     const shot = async name => { if (w === 390) await viewShot(name + "-390x844.png"); };
     Object.assign(P23S, await p23World(false));
     const roseRow = P23S.db.t.users.find(u => u.id === ROSE.id);
+    // NAMED (Nov 21 2026, P3-1B): the tier, as postDeps hands it (Rose free unless P31S.member; everyone else a member)
+    P31S.member = false;
+    P23S.deps.tierOf = async id => (id === ROSE.id && !P31S.member ? "free" : "member");
+    P23S.deps.membersPanel = () => require("../lib/membership").membersPanelFromCode();
+    const shotB = async name => { if (w === 390) { fs.mkdirSync(P31B_OUT, { recursive: true }); const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P31B_OUT, name + "-390x844.png"), Buffer.from(r.data, "base64")); } };
 
     // 1. Home, the email not confirmed: the banner and Resend email
     P31S.verified = false; P31S.resends = 0; roseRow.email_verified_at = null;
@@ -2108,7 +2157,8 @@ async function p31Run(cdp, origin) {
     const ban = await ev("(function(){var b=document.getElementById('bf-verify-banner');if(!b)return null;var r=b.getBoundingClientRect(),btn=b.querySelector('button'),q=btn&&btn.getBoundingClientRect();" +
       "return {text:(b.querySelector('p')||{}).textContent,btn:btn&&btn.textContent,bw:q&&Math.round(q.width),bh:q&&Math.round(q.height),l:Math.round(r.left),r:Math.round(r.right),t:Math.round(r.top)};})()");
     check(at + "the banner says what a confirmed email is needed for, with \"Resend email\" (44 px), across the top of the screen",
-      !!ban && /post publicly, list in the Market, message people who do not follow you, and receive BizCash/.test(ban.text) && ban.btn === "Resend email" && ban.bh >= 44 && ban.bw >= 44 &&
+      // NAMED (Nov 21 2026, P3-1B): BEFORE "post publicly, list in the Market, message people who do not follow you, and receive BizCash"
+      !!ban && /post publicly and to message people who do not follow you/.test(ban.text) && !/BizCash|list in the Market/.test(ban.text) && ban.btn === "Resend email" && ban.bh >= 44 && ban.bw >= 44 &&
       ban.l >= -1 && ban.r <= w + 1 && ban.t <= 1, J(ban));
     const fb = await ev("(function(){var b=document.getElementById('bf-verify-banner'),t=document.querySelector('.feed-top');if(!b||!t)return null;var r=b.getBoundingClientRect(),q=t.getBoundingClientRect();return {bannerBottom:Math.round(r.bottom),rowTop:Math.round(q.top)};})()");
     check(at + "on the full-screen feed the top row (Live, the tabs, Search) sits below the banner, never under it", !!fb && fb.rowTop >= fb.bannerBottom - 1, J(fb));
@@ -2123,6 +2173,8 @@ async function p31Run(cdp, origin) {
     at = "P31 composer (email not confirmed) at " + w + ": ";
     const before = P23S.db.t.posts.length;
     await ev("(function(){var t=document.querySelector('.bfc-text');if(!t)return false;t.value='Open on Saturday, all welcome.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    // NAMED (Nov 21 2026, P3-1B): as a Need (text is allowed), so the server's email rule is what refuses it
+    await ev("(function(){var r=document.querySelector('input[name=bfcIntent][value=need]');if(r){r.click();}return !!r;})()");
     await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()");
     await sleep(900);
     const refused = await ev("document.body.innerText.indexOf('Confirm your email first') !== -1");
@@ -2138,18 +2190,29 @@ async function p31Run(cdp, origin) {
     await pageChecks(at);
     await shot("home-free");
 
-    // 3. the composer posts
+    // 3. the composer. NAMED (Nov 21 2026, P3-1B): BEFORE a free account's text post went up. AFTER a share post needs a photo (the
+    // note says why, Post sends nothing); a Need posts as text, at once; no Show in Google box for a free account.
     await open(cdp, origin, "compose.html", w, h, true);
     at = "P31 composer at " + w + ": ";
     const n0 = P23S.db.t.posts.length;
     await ev("(function(){var t=document.querySelector('.bfc-text');if(!t)return false;t.value='Open on Saturday, all welcome.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    const FREE_NOTE = "A free account's share post needs at least one photo. Text-only posts are for members; a Need can be text.";
+    const note0 = await ev("(function(){var n=document.getElementById('bfcFreeNote'),s=document.getElementById('bfcSeo');return {note:n&&!n.hidden?n.textContent:null,seo:!!s&&!s.hidden,intent:!!document.getElementById('bfcIntent')};})()");
+    check(at + "a free account's share post: the note says a photo is needed and why, and there is no Show in Google box", !!note0 && note0.note === FREE_NOTE && !note0.seo && note0.intent, J(note0));
     await pageChecks(at);
     await shot("compose-free");
     await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()");
+    await sleep(1200);
+    const err0 = await ev("(function(){var e=document.getElementById('bfcErr');return e?e.textContent:null;})()");
+    check(at + "Post without a photo says why and sends nothing", err0 === FREE_NOTE && P23S.db.t.posts.length === n0, J([err0, P23S.db.t.posts.length, n0]));
+    await shotB("free-composer-photo-required");
+    await ev("(function(){var r=document.querySelector('input[name=bfcIntent][value=need]');if(r)r.click();return !!r;})()"); await sleep(200);
+    const noteNeed = await ev("(function(){var n=document.getElementById('bfcFreeNote');return !!n&&n.hidden;})()");
+    await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()");
     await sleep(3000);
     const mine = P23S.db.t.posts.filter(x => x.author_id === ROSE.id && x.body === "Open on Saturday, all welcome.");
-    check(at + "a free account posts: published at once (no hold), no members panel", P23S.db.t.posts.length === n0 + 1 && mine.length === 1 && mine[0].status === "published" &&
-      (await ev("!document.getElementById('bf-members-panel')")) === true, J(mine.map(x => x.status)));
+    check(at + "a free account's Need posts as text: published at once (no hold), intent need, not in Google, no members panel", noteNeed && P23S.db.t.posts.length === n0 + 1 && mine.length === 1 &&
+      mine[0].status === "published" && mine[0].intent === "need" && mine[0].search_visible === false && (await ev("!document.getElementById('bf-members-panel')")) === true, J(mine.map(x => [x.status, x.intent, x.search_visible])));
 
     // 4. the Profile: no "BizForce member", no BizCash, no gold wallet
     await open(cdp, origin, "profile.html", w, h, true);
@@ -2160,13 +2223,55 @@ async function p31Run(cdp, origin) {
     await pageChecks(at);
     await shot("profile-free");
 
-    // 5. Market create: the listing form opens, no paywall notice, no members panel
+    // 5. Market create. NAMED (Nov 21 2026, P3-1B): BEFORE the listing form opened for a free account. AFTER selling is for
+    // members: the ?create= link opens the members panel over the page.
     await open(cdp, origin, "marketplace.html?create=product", w, h, true);
     at = "P31 Market create at " + w + ": ";
-    const mk = await ev("(function(){var m=[].find.call(document.querySelectorAll('#listingModal'),function(x){var r=x.getBoundingClientRect();return r.width>0&&r.height>0&&getComputedStyle(x).display!=='none'&&getComputedStyle(x).visibility!=='hidden';});" +
-      "return {open:!!m,id:m&&(m.id||m.className),title:!!document.getElementById('fTitle')&&document.getElementById('fTitle').getBoundingClientRect().width>0,paywall:!!document.querySelector('.bf-paywall'),panel:!!document.getElementById('bf-members-panel')};})()");
-    check(at + "the listing form opens for a free account, no paywall notice, no members panel", !!mk && mk.open && mk.title && !mk.paywall && !mk.panel, J(mk));
-    await shot("market-create-free");
+    check(at + "the Create sheet's Product listing link opens the members panel (selling is for members)", (await ev("!!document.getElementById('bf-members-panel')")) === true);
+    await panelOk(at, w, h, "Not now");
+    await shot("market-create-panel");
+    // Buy on a member's listing: the card-checkout-coming sheet, nothing bought
+    await open(cdp, origin, "marketplace.html", w, h, true);
+    at = "P31 Market Buy at " + w + ": ";
+    const hasBuy = await ev("(function(){var b=document.querySelector('#listingsGrid .btn-buy');if(!b)return false;b.scrollIntoView({block:'center'});return true;})()");
+    await sleep(200);
+    await ev("(function(){var b=document.querySelector('#listingsGrid .btn-buy');if(b)b.click();return !!b;})()"); await sleep(500);
+    const buy = await ev(P23_BOX + "('#bf-buy-sheet .bfa-panel','a,button')");
+    const buyText = await ev("(function(){var s=document.querySelector('#bf-buy-sheet .bfa-panel');return s?s.innerText:null;})()");
+    check(at + "Buy on a member's listing opens \"Card checkout is coming\" inside the screen, Close 44 px, no confirm, nothing bought",
+      hasBuy && !!buy && /Card checkout is coming/.test(buyText || "") && /never pays in BizCash/.test(buyText || "") && buy.small.length === 0 && buy.l >= -1 && buy.r <= w + 1 && buy.b <= h + 1, J([hasBuy, buy, buyText]));
+    await shotB("buy-sheet");
+    await ev("(function(){var a=document.querySelector('#bf-buy-sheet .bfa-join');if(a)a.click();return !!a;})()"); await sleep(250);
+    check(at + "Close shuts the sheet", (await ev("!document.getElementById('bf-buy-sheet')")) === true);
+    // the Create sheet: the members entries tagged "Members", and Product listing opens the panel
+    await open(cdp, origin, "home.html", w, h, true);
+    at = "P31 Create sheet at " + w + ": ";
+    await ev("(function(){var b=document.querySelector('#bf-tabbar [data-tab=create]');if(b)b.click();return !!b;})()"); await sleep(500);
+    const cs = await ev("(function(){var s=document.getElementById('bf-create');if(!s||s.hidden)return null;return [].map.call(s.querySelectorAll('.bf-create-opt'),function(o){var t=o.querySelector('.bf-create-members'),q=t&&t.getBoundingClientRect(),r=o.getBoundingClientRect();" +
+      "return [o.getAttribute('data-create'),!!t&&t.textContent,q?(q.right<=r.right+1&&q.bottom<=r.bottom+1):null];});})()");
+    const tagged = (cs || []).filter(x => x[1] === "Members").map(x => x[0]);
+    check(at + "Product listing, Service, Ask an agent, Campaign, Garage sale item and Business card carry a \"Members\" tag inside their tiles; Post and Video do not",
+      J(tagged.slice().sort()) === J(["agent", "campaign", "card", "garage", "product", "service"]) && (cs || []).every(x => x[1] !== "Members" || x[2] === true), J(cs));
+    await shotB("create-sheet-free");
+    await ev("(function(){var a=document.querySelector('#bf-create a[data-create=product]');if(a)a.click();return !!a;})()"); await sleep(500);
+    check(at + "tapping Product listing opens the members panel and stays on Home", (await ev("location.pathname")) === "/home.html" && (await ev("!!document.getElementById('bf-members-panel')")) === true);
+    // Talk on a paid member's post: the members box with Join, no comment box
+    await open(cdp, origin, "home.html", w, h, true);
+    at = "P31 Talk on a member's post at " + w + ": ";
+    await ev("(function(){var p=document.querySelector('#feed [data-post=\"" + P23_POST.photo + "\"]');if(p)p.scrollIntoView({block:'center'});return !!p;})()"); await sleep(300);
+    await ev("(function(){var b=document.querySelector('#feed [data-post=\"" + P23_POST.photo + "\"] .bfp-act[data-act=talk]');if(b)b.click();return !!b;})()"); await sleep(1200);
+    const tk = await ev("(function(){var b=document.getElementById('bfpTalkMembers'),f=document.getElementById('bfpTalkForm');if(!b)return null;var j=b.querySelector('a'),q=j&&j.getBoundingClientRect();" +
+      "return {shown:!b.hidden,form:!!f&&!f.hidden&&f.getBoundingClientRect().height>0,head:(b.querySelector('.bfp-tm-h')||{}).textContent,rule:(b.querySelector('.bfp-tm-s')||{}).textContent,join:j&&j.getAttribute('href'),jw:q&&Math.round(q.width),jh:q&&Math.round(q.height),list:document.querySelectorAll('#bfpTalkList > li').length};})()");
+    check(at + "\"Comments on members' posts are for members\" with Join (44 px, to billing.html), the server's sentence, the comments still shown, no comment box",
+      !!tk && tk.shown && !tk.form && tk.head === "Comments on members' posts are for members" && tk.rule === require("../lib/membership").FREE_RULES.comment_member_post &&
+      tk.join === "/billing.html" && tk.jh >= 44 && tk.jw >= 44 && tk.list >= 1, J(tk));
+    await pageChecks(at, { panel: false, sheet: true });
+    await shotB("talk-member-post-free");
+    // the wallet: behind the members panel
+    await open(cdp, origin, "wallet.html", w, h, true);
+    at = "P31 wallet at " + w + ": ";
+    await panelOk(at, w, h, "Go to Home");
+    await shotB("wallet-panel");
 
     // 6. the Inbox
     await open(cdp, origin, "inbox.html", w, h, true);
@@ -2174,6 +2279,14 @@ async function p31Run(cdp, origin) {
     check(at + "the Inbox opens for a free account, no members panel", (await ev("!document.getElementById('bf-members-panel') && !!document.getElementById('bf-tabbar')")) === true);
     await pageChecks(at);
     await shot("inbox-free");
+    // NAMED (Nov 21 2026, P3-1B): reply-only. Pat wrote first, so Rose replies; a member who never wrote: the members panel, no compose box
+    await open(cdp, origin, "inbox.html?with=" + P21_PEER, w, h, true);
+    const rp = await ev("(function(){var c=document.getElementById('compose'),o=document.getElementById('replyOnly');return {compose:!!c&&!c.hidden,only:!!o&&!o.hidden,panel:!!document.getElementById('bf-members-panel')};})()");
+    check(at + "in Pat's conversation (Pat wrote first) Rose can reply: the compose box, no members panel", rp.compose && !rp.only && !rp.panel, J(rp));
+    await open(cdp, origin, "inbox.html?with=" + uid(4), w, h, true);
+    const st = await ev("(function(){var c=document.getElementById('compose'),o=document.getElementById('replyOnly');return {compose:!!c&&!c.hidden,only:!!o&&!o.hidden?o.textContent:null,panel:!!document.getElementById('bf-members-panel')};})()");
+    check(at + "starting a conversation with a member who never wrote: no compose box, the reply-only line with Join, and the members panel",
+      !st.compose && /^Starting a conversation is for members\. You can reply when a member messages you first\. Join$/.test((st.only || "").trim()) && st.panel, J(st));
 
     // 7. the bottom bar's HQ tab opens the members panel (not the dashboard)
     await open(cdp, origin, "home.html", w, h, true);
@@ -2194,6 +2307,41 @@ async function p31Run(cdp, origin) {
       await pageChecks(at, { panel: true });
       await shot(pg.replace(/\//g, "-").replace(/\.html$/, "") + "-panel");
     }
+
+    // 9. NAMED (Nov 21 2026, P3-1B): Rose as a member, at 390: the composer's Show in Google, and the /p/ page Google may index
+    if (w !== 390) continue;
+    P31S.member = true;
+    await open(cdp, origin, "compose.html", w, h, true);
+    at = "P31B member composer at " + w + ": ";
+    const BODY = "Fresh sourdough every morning on Maple Street, from 7. Rye on Saturdays.";
+    await ev("(function(){var t=document.querySelector('.bfc-text');if(!t)return false;t.value=" + J(BODY) + ";t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()"); await sleep(250);
+    const sg = await ev("(function(){var b=document.getElementById('bfcSeo'),c=document.getElementById('bfcSearch'),t=document.getElementById('bfcSeoTitle'),d=document.getElementById('bfcSeoDesc'),n=document.getElementById('bfcFreeNote');" +
+      "return {shown:!!b&&!b.hidden,on:!!c&&c.checked,title:t&&t.value,tmax:t&&t.maxLength,desc:d&&d.value,dmax:d&&d.maxLength,note:!!n&&!n.hidden};})()");
+    check(at + "a member gets Show in Google, on by default, with a search title (70) and description (160) filled from the post's first words; no photo note",
+      sg.shown && sg.on && sg.tmax === 70 && sg.dmax === 160 && !!sg.title && sg.title.length <= 70 && BODY.indexOf(sg.title.replace(/\.\.\.$/, "")) === 0 && sg.desc === BODY && !sg.note, J(sg));
+    await ev("(function(){var t=document.getElementById('bfcSeoTitle');t.value='Sourdough on Maple Street';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    await ev("(function(){var b=document.getElementById('bfcSeo');if(b)b.scrollIntoView({block:'center'});return true;})()"); await sleep(250);
+    await pageChecks(at);
+    await shotB("member-composer-show-in-google");
+    await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()"); await sleep(3000);
+    const mp = P23S.db.t.posts.find(x => x.author_id === ROSE.id && x.body === BODY);
+    check(at + "posted as text, public, Show in Google on, with the search title and description stored", !!mp && mp.kind === "text" && mp.search_visible === true &&
+      mp.seo_title === "Sourdough on Maple Street" && mp.seo_description === BODY, J(mp));
+    at = "P31B member /p/ page at " + w + ": ";
+    let src = null;
+    if (mp) {
+      await open(cdp, origin, "p/" + mp.id, w, h, true);
+      src = await ev("fetch(location.href).then(function(r){return r.text();})");
+      await ev("(function(s){s=s.slice(0,s.indexOf('</head>')+7).replace(/>\\s*</g,'>\\n<');document.open();document.write('<!doctype html><meta name=viewport content=\"width=device-width\"><title>view-source</title><pre id=src style=\"white-space:pre-wrap;word-break:break-all;font:11px/1.45 monospace;margin:8px;color:#111;background:#fff\"></pre>');document.close();" +
+        "document.getElementById('src').textContent='view-source:'+location.href+'\\n\\n'+s;return true;})(" + J(src || "") + ")");
+      await sleep(300);
+    }
+    const url = mp ? "https://bizforceai.net/p/" + mp.id : "";
+    check(at + "the page source: robots \"index, follow\", the canonical URL, the search title in <title> and Open Graph, SocialMediaPosting",
+      !!src && src.indexOf('<meta name="robots" content="index, follow"/>') !== -1 && src.indexOf('<link rel="canonical" href="' + url + '"/>') !== -1 &&
+      src.indexOf("<title>Sourdough on Maple Street</title>") !== -1 && src.indexOf('<meta property="og:title" content="Sourdough on Maple Street"/>') !== -1 && /"@type":"SocialMediaPosting"/.test(src), (src || "").slice(0, 300));
+    await shotB("member-post-page-source");
+    P31S.member = false;
   }
 }
 

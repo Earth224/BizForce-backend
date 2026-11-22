@@ -324,7 +324,12 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       // NAMED (Nov 21 2026, P3-2): BEFORE 19 readers; AFTER 20. verifiedDeps hands lib/verified.js the plan for the Verified
       // badge only; paidMember counts .active === true with access_reason "subscription", so the owner's pass and an admin
       // never get the "member" badge from it, and a lookup that fails leaves the badge as it is (checkVerifiedBadge).
-      "getUserPlan in verifiedDeps"];
+      "getUserPlan in verifiedDeps",
+      // NAMED (Nov 21 2026, P3-1B): BEFORE 21 readers; AFTER 23. POST /api/messages asks whether the sender is a member (a free
+      // account may only reply where a member wrote first; checkInbox), and postDeps().tierOf hands lib/posts.js the tier for
+      // the photo, listing-link, comment and Show in Google rules (checkPosts, checkSocialGraph, checkPublicPostPage). Both read
+      // .active through accessTier, so the owner's pass and an admin count as members, and neither grants anything on its own.
+      "getUserPlan in /api/messages", "getUserPlan in postDeps"];
     const extra = callers.filter(c => KNOWN.indexOf(c) === -1), missing = KNOWN.filter(c => callers.indexOf(c) === -1);
     check("A. the entitlement readers are exactly the " + KNOWN.length + " listed (a new one must be added here and reviewed)",
       extra.length === 0 && missing.length === 0, "new: " + extra.join(", ") + "; gone: " + missing.join(", "));
