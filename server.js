@@ -3446,7 +3446,7 @@ function isExemptRole(user) {
    him out of every subscriber, revenue and MRR count.
 
    WHAT IT DOES NOT. It is not a subscription going active, so no welcome
-   bonus: grantWelcomeBonusOnce is reached only from checkout.session.completed.
+   welcome: grantMemberWelcome is never called for the owner (P3-1C).
    scripts/checkOwnerPass.js proves all of this. */
 var OWNER_PASS_PLAN = "all_access";
 
@@ -3779,6 +3779,8 @@ async function getUserPlan(userId, user) {
       "without an active subscription. subscription row: " +
       (subscription ? "present, status \"" + subscription.status + "\"" : "none") +
       ". This is users.role, not a subscription, and no webhook can revoke it.");
+    // NAMED (P3-1C): an admin is a member; the welcome is asked for once per process, never awaited.
+    if (typeof grantMemberWelcomeForAdminOnce === "function") grantMemberWelcomeForAdminOnce(userId);
 
     return {
       plan: ADMIN_EXEMPT_PLAN,
@@ -4699,20 +4701,10 @@ async function handleStripeEvent(event) {
         throw profileError;
       }
 
-      /* The welcome bonus, now that the subscription row says active. Once per
-         account: grantWelcomeBonusOnce reads the ledger first, so a redelivery
-         of this event, a second checkout, or a resubscription grants nothing.
-         Logged, never thrown — see grantWelcomeBonusOnce. */
-      try {
-        const bonus = await grantWelcomeBonusOnce(userId);
-        console.log("[welcome-bonus] user " + userId + " — " +
-          (bonus.granted ? "granted " + bonus.amount + " BFC" : "not granted (" + bonus.reason + ")") +
-          ", event " + event.id + ".");
-      } catch (bonusErr) {
-        console.error("[welcome-bonus] NOT GRANTED for user " + userId + " — " +
-          ((bonusErr && bonusErr.message) || String(bonusErr)) + ", event " + event.id +
-          ". The subscription landed; the bonus can be granted by hand.");
-      }
+      /* The member welcome, now that the subscription row says active (P3-1C). Once
+         per account: a redelivery of this event, a second checkout, or a
+         resubscription grants nothing. Logged, never thrown. */
+      await grantMemberWelcomeLogged(userId, "checkout.session.completed, event " + event.id);
 
       /* L1 (Nov 14 2026, California's Automatic Renewal Law): the confirmation email, once per Stripe subscription
          (lib/renewalEmails.js sendConfirmation; a redelivery finds it in the email_sends ledger and sends nothing).
@@ -4907,6 +4899,12 @@ if (userError) {
       if (subscriptionProfileError) {
         console.error("SUBSCRIPTION_EVENT profiles update failed: " +
           (subscriptionProfileError.message || subscriptionProfileError));
+      }
+
+      /* NAMED (P3-1C): a subscription that starts outside Checkout (created or made active in
+         Stripe) is a membership start too. Once per account, so a renewal grants nothing. */
+      if (statusEntitles && !subscriptionUpsertError) {
+        await grantMemberWelcomeLogged(existing.user_id, event.type + ", event " + event.id);
       }
     }
   }
@@ -5475,7 +5473,7 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
        here, to every signup, before anyone could have paid — free BFC that a
        free account could spend on BFC-priced listings or donate. It is now
        granted once, on the first subscription activation
-       (grantWelcomeBonusOnce, from checkout.session.completed). Registration
+       (grantMemberWelcome, P3-1C: on becoming a member). Registration
        still creates the wallet so a new account has a balance to look at; it
        writes no transaction, because nothing was credited.
 
@@ -48829,60 +48827,52 @@ async function creditWallet(userId, amount, description) {
   }
 }
 
-/* ── The welcome bonus: once per account, on the first subscription ─────────
-   It used to be granted at registration, to every signup. It is now granted
-   when a subscription first activates (checkout.session.completed), and never
-   again — not on a webhook redelivery, not on a second checkout, not when a
-   lapsed subscriber resubscribes.
+/* ── The member welcome: once per account, when it becomes a member ─────────
+   NAMED (Nov 21 2026, P3-1C, the owner's final rule). BEFORE grantWelcomeBonusOnce
+   paid 1,000 BFC described "Welcome bonus" from checkout.session.completed only.
+   AFTER grantMemberWelcome (lib/memberWelcome.js) pays 1,000 BFC with the reason
+   member_welcome, once per account ever (a member_welcome row counts, and so does an old
+   signup "Welcome bonus" row that was not cleared; P3-1D), guarded by migration 201a's
+   unique index on member_welcome, and it is
+   called from EVERY way an account becomes a member:
+     1. checkout.session.completed (the subscription row says active);
+     2. customer.subscription.created / updated when the status entitles
+        (active or trialing) and the row was written;
+     3. the admin-role exemption in getUserPlan (role admin is set by hand in the
+        database; no route sets it), once per process.
+   Never from registration: a free account holds 0. The owner pass is not a
+   membership start and the owner's account is never paid (the lib refuses it).
 
-   ONCE PER ACCOUNT, BY THE LEDGER. The test is whether the account already has
-   a reward row described "Welcome bonus" — the description registration has
-   always written — so every account that got the bonus at signup is already
-   counted and gets nothing more. The same description is written here, so old
-   and new grants are one population.
-
-   TWO LAYERS AGAINST A DOUBLE GRANT.
-     1. The read below: a redelivered or repeated activation finds the row and
-        returns without writing.
-     2. Migration 129, a unique partial index on wallet_transactions (user_id)
-        where type = 'reward' and description = 'Welcome bonus'. bfc_credit
-        writes the balance and the ledger row in one transaction, so a second
-        concurrent grant fails on the index and its balance increment rolls
-        back with it. Until 129 is applied, two deliveries landing in the same
-        instant could both pass the read; the read is what holds in the
-        meantime, and that window is stated, not hidden.
-   A 23505 from the index is "already granted", not a failure.
-
-   NEVER FAILS THE WEBHOOK. The caller logs and continues: a billing webhook
-   that returned 500 over a bonus would make Stripe retry an activation whose
-   entitlement already landed. */
+   NEVER FAILS THE CALLER. A billing webhook that returned 500 over a grant would
+   make Stripe retry an activation whose entitlement already landed, so every call
+   goes through grantMemberWelcomeLogged, which logs and returns. */
+// NAMED (P3-1C): kept under its old name; lib/legalPages.js reads this number for the Terms.
 const WELCOME_BONUS_BFC = 1000;
-const WELCOME_BONUS_DESCRIPTION = "Welcome bonus";
 
-async function grantWelcomeBonusOnce(userId) {
-  if (!userId) return { granted: false, reason: "no_user" };
+async function grantMemberWelcome(userId) {
+  return require("./lib/memberWelcome").grantMemberWelcome(supabase, userId);
+}
 
-  const prior = await supabase
-    .from("wallet_transactions")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("type", "reward")
-    .eq("description", WELCOME_BONUS_DESCRIPTION)
-    .limit(1);
-  if (prior.error) {
-    throw new Error("could not read whether user " + userId + " already has the welcome bonus: " + prior.error.message);
-  }
-  if (prior.data && prior.data.length) {
-    return { granted: false, reason: "already_granted" };
-  }
-
+async function grantMemberWelcomeLogged(userId, where) {
   try {
-    await creditWallet(userId, WELCOME_BONUS_BFC, WELCOME_BONUS_DESCRIPTION);
-  } catch (creditErr) {
-    if (creditErr && creditErr.code === "23505") return { granted: false, reason: "already_granted" };
-    throw creditErr;
+    const welcome = await grantMemberWelcome(userId);
+    console.log("[member-welcome] user " + userId + " (" + where + ") — " +
+      (welcome.granted ? "granted " + welcome.amount + " BFC" : "not granted (" + welcome.reason + ")") + ".");
+    return welcome;
+  } catch (welcomeErr) {
+    console.error("[member-welcome] NOT GRANTED for user " + userId + " (" + where + ") — " +
+      ((welcomeErr && welcomeErr.message) || String(welcomeErr)) +
+      ". The membership stands; the welcome can be granted by hand.");
+    return { granted: false, reason: "error" };
   }
-  return { granted: true, amount: WELCOME_BONUS_BFC };
+}
+
+// The admin exemption has no moment of joining in code, so getUserPlan asks once per process per account.
+const memberWelcomeAskedForAdmin = new Set();
+function grantMemberWelcomeForAdminOnce(userId) {
+  if (!userId || memberWelcomeAskedForAdmin.has(userId)) return;
+  memberWelcomeAskedForAdmin.add(userId);
+  grantMemberWelcomeLogged(userId, "admin exemption");
 }
 
 /* WHAT BFC IS, in one sentence that every wallet answer carries as
@@ -62718,10 +62708,8 @@ module.exports = {
   __routineMaxSteps: routineMaxSteps,
   __dispatchPerMinuteLimit: dispatchPerMinuteLimit,
 
-  /* For scripts/checkWelcomeBonus.js, which grants the bonus to the seed
-     account twice and reads the ledger, and for
-     scripts/checkUnsubscribedSurface.js, which asks whose pages are public. */
-  __grantWelcomeBonusOnce: grantWelcomeBonusOnce,
+  /* For scripts/checkUnsubscribedSurface.js, which asks whose pages are public. NAMED (P3-1D): BEFORE this also exported
+     __grantWelcomeBonusOnce for scripts/checkWelcomeBonus.js, retired; checkMemberWelcome lifts the grant from source. */
   __ownerPagePublic: ownerPagePublic,
   __subscriptionRequiredBody: subscriptionRequiredBody
 };

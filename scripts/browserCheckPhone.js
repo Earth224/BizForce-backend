@@ -152,6 +152,15 @@
                        other pages are unchanged at 1440 (the members panel, the
                        Buy sheet and the Members tags show only for a free
                        account). The proof is Downloads\phone1\p31b-desktop-proof.json.
+                       NAMED (Nov 21 2026, P3-1C): two pages changed on purpose and
+                       are re-recorded in desktop-baseline-pp31c-<page>.json (the
+                       name sorts after pp31b-wallet): terms.html (members start
+                       with 1,000 BizCash: 1 list item new, none gone, the BizCash
+                       item one line taller) and wallet.html (who may send and
+                       receive, the sentence one line longer: none new, none gone).
+                       Every other element is the same or moved down below the new
+                       text. privacy, refund and contact are unchanged at 1440. The
+                       proof is Downloads\phone1\p31c-desktop-proof.json.
      PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,

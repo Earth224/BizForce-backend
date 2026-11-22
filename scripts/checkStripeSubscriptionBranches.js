@@ -122,8 +122,11 @@ function build(fake, logs) {
     getPlanFromPriceId: (id) => (id === "price_ok" ? "all_access" : null),
     subscriptionPeriodIso: () => ({ periodStart: "PS", periodEnd: "PE" }),
     stripe: {}, stripeTest: {}, recordRevenueEvent: async () => {},
-    normalizeEmail: (e) => e, escapeLikePattern: (e) => e
+    normalizeEmail: (e) => e, escapeLikePattern: (e) => e,
+    // NAMED (Nov 21 2026, P3-1C): a subscription that starts outside Checkout asks for the member welcome; recorded, never paid here.
+    grantMemberWelcomeLogged: async (id) => { fake.welcomes.push(id); return { granted: true, amount: 1000 }; }
   };
+  fake.welcomes = [];
   vm.createContext(ctx);
   vm.runInContext(fnSrc + "\nthis.handleStripeEvent = handleStripeEvent;", ctx);
   return ctx.handleStripeEvent;
@@ -149,7 +152,7 @@ async function run(name, event, plan, check) {
   let threw = null;
   try { await fn(event); } catch (e) { threw = e; }
   try {
-    check({ writes: JSON.parse(JSON.stringify(fake.writes)), selects: JSON.parse(JSON.stringify(fake.selects)), logs, threw });
+    check({ writes: JSON.parse(JSON.stringify(fake.writes)), selects: JSON.parse(JSON.stringify(fake.selects)), logs, threw, welcomes: fake.welcomes.slice() });
     console.log("    pass  " + name);
   } catch (e) { failures++; console.log("    FAIL  " + name + "  [" + e.message + "]"); }
 }
@@ -175,11 +178,12 @@ function expectedProfile(status, userId) {
 
   console.log("\n══ created/updated branch (fake database) ══");
 
-  await run("a) updated, stored id equals event id: written as today",
+  await run("a) updated, stored id equals event id: written as today; past_due asks for no member welcome (P3-1C)",
     subEvent(UPD, "past_due"),
     { lookups: { stripe_customer_id: { data: { user_id: "u1", stripe_subscription_id: "sub_EVT" } } } },
-    ({ writes, threw, logs }) => {
+    ({ writes, threw, logs, welcomes }) => {
       assert.strictEqual(threw, null);
+      assert.deepStrictEqual(welcomes, []);
       assert.deepStrictEqual(writes, [expectedUpsert("past_due", "u1"), expectedProfile("past_due", "u1")]);
       assert.deepStrictEqual(logs, []);
     });
@@ -194,40 +198,44 @@ function expectedProfile(status, userId) {
       assert.deepStrictEqual(logs, []);
     });
 
-  await run("c) created, stored id is a different non-null id: written, one log naming both ids",
+  await run("c) created, stored id is a different non-null id: written, one log naming both ids; incomplete asks for no member welcome (P3-1C)",
     subEvent(CRE, "incomplete"),
     { lookups: { stripe_customer_id: { data: { user_id: "u1", stripe_subscription_id: "sub_OLD" } } } },
-    ({ writes, threw, logs }) => {
+    ({ writes, threw, logs, welcomes }) => {
       assert.strictEqual(threw, null);
+      assert.deepStrictEqual(welcomes, []);
       assert.deepStrictEqual(writes, [expectedUpsert("incomplete", "u1"), expectedProfile("incomplete", "u1")]);
       assert.strictEqual(logs.length, 1, JSON.stringify(logs));
       assert(/sub_OLD/.test(logs[0][1]) && /sub_EVT/.test(logs[0][1]) && /evt_1/.test(logs[0][1]), logs[0][1]);
     });
 
-  await run("d) updated, stored id different, status canceled: zero writes, one log naming both ids and the status",
+  await run("d) updated, stored id different, status canceled: zero writes, one log naming both ids and the status; no member welcome (P3-1C)",
     subEvent(UPD, "canceled"),
     { lookups: { stripe_customer_id: { data: { user_id: "u1", stripe_subscription_id: "sub_OLD" } } } },
-    ({ writes, threw, logs }) => {
+    ({ writes, threw, logs, welcomes }) => {
       assert.strictEqual(threw, null);
+      assert.deepStrictEqual(welcomes, []);
       assert.deepStrictEqual(writes, []);
       assert.strictEqual(logs.length, 1, JSON.stringify(logs));
       assert(/sub_OLD/.test(logs[0][1]) && /sub_EVT/.test(logs[0][1]) && /"canceled"/.test(logs[0][1]) && /evt_1/.test(logs[0][1]), logs[0][1]);
     });
 
-  await run("e) updated, stored id different, status active: written",
+  await run("e) updated, stored id different, status active: written, and the member welcome is asked for once, for that user (P3-1C)",
     subEvent(UPD, "active"),
     { lookups: { stripe_customer_id: { data: { user_id: "u1", stripe_subscription_id: "sub_OLD" } } } },
-    ({ writes, threw, logs }) => {
+    ({ writes, threw, logs, welcomes }) => {
       assert.strictEqual(threw, null);
+      assert.deepStrictEqual(welcomes, ["u1"]);
       assert.deepStrictEqual(writes, [expectedUpsert("active", "u1"), expectedProfile("active", "u1")]);
       assert.deepStrictEqual(logs, []);
     });
 
-  await run("e2) updated, stored id different, status trialing: written",
+  await run("e2) updated, stored id different, status trialing: written, and the member welcome is asked for once (P3-1C)",
     subEvent(UPD, "trialing"),
     { lookups: { stripe_customer_id: { data: { user_id: "u1", stripe_subscription_id: "sub_OLD" } } } },
-    ({ writes, threw }) => {
+    ({ writes, threw, welcomes }) => {
       assert.strictEqual(threw, null);
+      assert.deepStrictEqual(welcomes, ["u1"]);
       assert.deepStrictEqual(writes.map(w => w.table), ["subscriptions", "profiles"]);
     });
 

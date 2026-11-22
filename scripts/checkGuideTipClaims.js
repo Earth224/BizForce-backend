@@ -996,11 +996,16 @@ const RECORDS_LIB = fs.readFileSync(path.join(REPO, "lib/termaximusRecords.js"),
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
 // bfc_credit RPC inside it. Transfers, purchases and donations move BFC between members; nothing else mints it.
 const CERT_CREDIT = /if \(becameEarned\) \{[\s\S]{0,400}?if \(creditPlan && creditPlan\.active === true\) \{\s*try \{\s*await creditWallet\(req\.user\.id, 100, "Certification earned: " \+ certId\);/;
-const WELCOME = () => /\nconst WELCOME_BONUS_BFC = 1000;/.test(SV) && /\.eq\("description", WELCOME_BONUS_DESCRIPTION\)/.test(SV) &&
-  /await creditWallet\(userId, WELCOME_BONUS_BFC, WELCOME_BONUS_DESCRIPTION\);/.test(SV) &&
-  /The welcome bonus, now that the subscription row says active\.[\s\S]{0,400}?await grantWelcomeBonusOnce\(userId\);/.test(SV);
-const ONLY_TWO_CREDITS = () => (SV.match(/creditWallet\(/g) || []).length === 3 && (SV.match(/async function creditWallet\(/g) || []).length === 1 &&
-  (SV.match(/rpc\("bfc_credit"/g) || []).length === 1;
+// NAMED (Nov 21 2026, P3-1C): BEFORE the welcome was creditWallet(userId, WELCOME_BONUS_BFC, WELCOME_BONUS_DESCRIPTION) inside
+// grantWelcomeBonusOnce, and creditWallet( appeared 3 times. AFTER the member welcome is lib/memberWelcome.js's one bfc_credit
+// (1,000, reason member_welcome, once per account) asked for when the subscription row says active; creditWallet( appears twice
+// (its definition and the certification), and server.js still holds exactly one bfc_credit RPC (inside creditWallet).
+const MW_LIB = fs.readFileSync(path.join(REPO, "lib/memberWelcome.js"), "utf8").replace(/\r\n/g, "\n");
+const WELCOME = () => /\nconst WELCOME_BONUS_BFC = 1000;/.test(SV) && /\nconst MEMBER_WELCOME_BFC = 1000;/.test(MW_LIB) &&
+  /\.in\("description", WELCOME_DESCRIPTIONS\)/.test(MW_LIB) && /p_amount: MEMBER_WELCOME_BFC,/.test(MW_LIB) &&
+  /The member welcome, now that the subscription row says active \(P3-1C\)\.[\s\S]{0,300}?await grantMemberWelcomeLogged\(userId, "checkout\.session\.completed/.test(SV);
+const ONLY_TWO_CREDITS = () => (SV.match(/creditWallet\(/g) || []).length === 2 && (SV.match(/async function creditWallet\(/g) || []).length === 1 &&
+  (SV.match(/rpc\("bfc_credit"/g) || []).length === 1 && (MW_LIB.match(/rpc\("bfc_credit"/g) || []).length === 1;
 const HISTORY_50 = () => /\.from\("wallet_transactions"\)\s*\.select\("id, type, amount, description, created_at"\)\s*\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: false \}\)\s*\.limit\(50\);/.test(SV) &&
   /var txns = data\.transactions \|\| \[\];[\s\S]{0,200}?txns\.forEach\(function\(t\) \{\s*if \(t\.type === "credit" \|\| t\.type === "reward"\) earned \+= t\.amount;\s*else if \(t\.type === "debit"\) spent \+= t\.amount;/.test(FILES[WALLET]);
 const SEND_BFC = () => /<button type="button" id="send-btn" class="send-btn">Send BFC<\/button>/.test(FILES[WALLET]) &&

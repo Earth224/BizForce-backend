@@ -90,7 +90,8 @@ const MUTATIONS = {
   "selfreview-test-only": [["lib/selfReview.js", "      testAccount = isUncountedAccount((accountRead && accountRead.data) || { id: userId });\n",
     "      testAccount = require(\"./testAccounts\").isTestAccount((accountRead && accountRead.data) || { id: userId });\n"]],
   // a welcome bonus on the pass
-  "bonus-on-pass": [["server.js", "    var ownerRow = null;\n", "    await grantWelcomeBonusOnce(userId);\n    var ownerRow = null;\n"]],
+  // NAMED (Nov 21 2026, P3-1C): BEFORE the mutant called grantWelcomeBonusOnce; AFTER grantMemberWelcomeLogged, the one entry every caller uses.
+  "bonus-on-pass": [["server.js", "    var ownerRow = null;\n", "    await grantMemberWelcomeLogged(userId, \"owner\");\n    var ownerRow = null;\n"]],
   // Billing shows no owner notice
   "billing-no-owner-notice": [["billing.html", "      document.getElementById(\"ownerNotice\").style.display = owner ? \"block\" : \"none\";\n", ""]],
   // Billing hides the owner's Stripe row, so he cannot cancel it
@@ -208,6 +209,9 @@ function buildServer(src, opts) {
     getActiveSubscription: rowFor,
     getActiveSubscriptions: async (id) => { const r = await rowFor(id); return r ? [r] : []; },
     grantWelcomeBonusOnce: async (id) => { bonus.push("grantWelcomeBonusOnce:" + id); return { granted: true, amount: 1000 }; },
+    // NAMED (Nov 21 2026, P3-1C): the member welcome's entries, recorded like the old bonus.
+    grantMemberWelcomeLogged: async (id) => { bonus.push("grantMemberWelcomeLogged:" + id); return { granted: true, amount: 1000 }; },
+    grantMemberWelcomeForAdminOnce: (id) => { bonus.push("grantMemberWelcomeForAdminOnce:" + id); },
     creditWallet: async (id, amt) => { bonus.push("creditWallet:" + id + ":" + amt); },
     supabase: { from: (t) => chain(t) },
     stripe: { checkout: { sessions: { create: async (p) => { stripeCalls.push(p); return { url: "https://checkout.stripe.test/s1" }; } } } },
@@ -528,13 +532,19 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
     await b.api.getUserPlan(OWNER);
     check("E. the pass credits nothing and writes nothing (no bonus, no wallet, no database write)",
       b.bonus.length === 0 && b.dbCalls.length === 0, b.bonus.join(",") + " / " + b.dbCalls.join(","));
-    const calls = [];
-    const re = /grantWelcomeBonusOnce\(/g;
-    let m;
-    while ((m = re.exec(SERVER))) if (!/async function $/.test(SERVER.slice(0, m.index))) calls.push(m.index);
-    const blockSig = '  if (event.type === "checkout.session.completed") {';
-    const a = SERVER.indexOf(blockSig), z = a < 0 ? -1 : s.braceMatch(SERVER, a + blockSig.length - 1);
-    check("E. grantWelcomeBonusOnce has one caller, inside checkout.session.completed", calls.length === 1 && a > 0 && calls[0] > a && calls[0] < z, calls.length);
+    /* NAMED (Nov 21 2026, P3-1C): BEFORE "grantWelcomeBonusOnce has one caller, inside checkout.session.completed". AFTER the
+       member welcome has three entries (checkout, a subscription that starts outside Checkout, the admin exemption), none in the
+       owner's branch of getUserPlan, and lib/memberWelcome.js refuses the owner before it reads or writes anything. */
+    const ownerSig = "  if (isOwnerAccount(userId)) {";
+    const gp = SERVER.indexOf("async function getUserPlan(userId, user) {");
+    const oa = gp < 0 ? -1 : SERVER.indexOf(ownerSig, gp), oz = oa < 0 ? -1 : s.braceMatch(SERVER, oa + ownerSig.length - 1);
+    const ownerBranch = oa > 0 && oz > oa ? SERVER.slice(oa, oz) : "";
+    check("E. the owner's branch of getUserPlan never asks for the member welcome", ownerBranch.length > 0 && !/grantMemberWelcome|grantWelcomeBonusOnce|creditWallet|bfc_credit/.test(ownerBranch), ownerBranch.length);
+    const MW = require(require("path").join(__dirname, "..", "lib", "memberWelcome.js"));
+    const touched = [];
+    const fakeDb = { from: (t) => { touched.push("from:" + t); throw new Error("no read expected"); }, rpc: (n) => { touched.push("rpc:" + n); throw new Error("no write expected"); } };
+    const ownerAnswer = await MW.grantMemberWelcome(fakeDb, OWNER);
+    check("E. lib/memberWelcome.js refuses the owner before any read or write", ownerAnswer.granted === false && ownerAnswer.reason === "owner" && touched.length === 0, JSON.stringify(ownerAnswer) + " " + touched.join(","));
   }
 
   /* ── F ─────────────────────────────────────────────────────────────────── */

@@ -133,7 +133,7 @@ const FREE_ROUTES = {
 const MEMBER_ROUTES = {
   "selling: offer posts, Market listings, garage sales and services, and linking a product or service to a post": ["post /api/marketplace/listings", "put /api/marketplace/listings/:id",
     "post /api/marketplace/upload-digital", "post /api/bfp/pproducts", "put /api/bfp/pproducts/:id"],
-  "BizCash in every form: receiving tips, donations, support and sales, sending it, and the wallet": ["get /api/wallet", "post /api/wallet/transfer", "post /api/wallet/support",
+  "BizCash in every form, starting with 1,000 BizCash: receiving tips, donations, support and sales, sending it, and the wallet" /* NAMED (Nov 21 2026, P3-1C): BEFORE "BizCash in every form: receiving tips, ..." */: ["get /api/wallet", "post /api/wallet/transfer", "post /api/wallet/support",
     "post /api/crowdfunding/campaigns/:id/donate", "post /api/marketplace/listings/:id/buy", "get /api/wallet/recipient", "get /api/support/me", "put /api/support/me", "get /api/crowdfunding/donations"],
   "text-only posts, commenting on members' posts and starting conversations": [],
   "showing your posts in Google, with your own search title and description": [],

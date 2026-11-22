@@ -23,7 +23,8 @@
         the wallet, the bio, the four tabs, the grid; BizCash, the wallet and
         "BizForce member" only for a paid member; Reviews opens Coming soon;
         the page's old header hidden on a phone; desktop parts hidden.
-     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "p31b" (NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
+     // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
+     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "p31c" (NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
      F. FX2 (Nov 21 2026): Tip BFC for a paid member; the product strip, built and linked (lib/posts.js
         sends a post's active listing, run here over the P2-3 test database); the tabs on one line; the
         Profile's banner (added, changed, removed in Edit profile) and its ring; the Agent Directory's
@@ -278,7 +279,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32" (the Verified badge). The only edit P3-2 made here; no design figure changed.
 // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2" (the feed's Tip and strip, the Profile's banner, the Agent Directory's views, the Sun).
 // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
-check("E1. sw.js SHELL_REV is \"p31b\"", /\nvar SHELL_REV = "p31b";\n/.test(FILES[SW] || ""));
+// NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
+check("E1. sw.js SHELL_REV is \"p31c\"", /\nvar SHELL_REV = "p31c";\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
