@@ -7354,6 +7354,9 @@ var AGENT_CARD_ORDERS = ["importance", "alphabetical"];
    hq_orbit, each NULL or one of these, held by CHECK constraints as well). */
 var HQ_CARD_VIEWS = ["large", "compact", "grid"];
 var HQ_ORBIT_CHOICES = ["shown", "hidden"];
+/* NAMED (Nov 21 2026, FX2, migration 200e): the phone Agent Directory's view (ai-agents.html; user_preferences.agents_card_view,
+   NULL or one of the same three, held by user_preferences_agents_card_view_check as well). */
+var AGENTS_CARD_VIEWS = ["large", "compact", "grid"];
 
 /* NAMED (Nov 11 2026, polish): THE DASHBOARD CARD ORDER IS RETIRED. The dashboard's 26-card grid and its
    ordering (scripts/bf-dashboard-order.js, settings.html's control, localStorage bf_dashboard_order and
@@ -7672,7 +7675,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
     const { data: row, error } = await supabase
       .from("user_preferences")
       // NAMED (Nov 11 2026, orbit stage 2): and the weekly goal (migration 183).
-      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit")
+      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view")   // NAMED (Nov 21 2026, FX2): + agents_card_view (migration 200e)
       .eq("user_id", req.user.id)
       .maybeSingle();
 
@@ -7706,6 +7709,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
         weekly_goal: null,
         hq_card_view: null,
         hq_orbit: null,
+        agents_card_view: null,   // NAMED (Nov 21 2026, FX2)
         available_languages: LANGUAGE_NAMES
       });
     }
@@ -7720,6 +7724,8 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
       // HQ1 (Nov 19 2026, migration 188): the phone dashboard's card view and orbit choice; null is "never chosen".
       hq_card_view: HQ_CARD_VIEWS.indexOf(row.hq_card_view) !== -1 ? row.hq_card_view : null,
       hq_orbit: HQ_ORBIT_CHOICES.indexOf(row.hq_orbit) !== -1 ? row.hq_orbit : null,
+      // NAMED (Nov 21 2026, FX2, migration 200e): the phone Agent Directory's view; null is "never chosen" (the page reads compact).
+      agents_card_view: AGENTS_CARD_VIEWS.indexOf(row.agents_card_view) !== -1 ? row.agents_card_view : null,
       available_languages: LANGUAGE_NAMES
     });
   } catch (error) {
@@ -7870,6 +7876,13 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
         return res.status(400).json({ error: "hq_orbit must be null, shown or hidden.", valid_hq_orbit: HQ_ORBIT_CHOICES });
       }
       updates.hq_orbit = req.body.hq_orbit;
+    }
+    // NAMED (Nov 21 2026, FX2, migration 200e): the phone Agent Directory's view, the same three cases as hq_card_view.
+    if (req.body.agents_card_view !== undefined) {
+      if (req.body.agents_card_view !== null && AGENTS_CARD_VIEWS.indexOf(req.body.agents_card_view) === -1) {
+        return res.status(400).json({ error: "agents_card_view must be null or one of large, compact, grid.", valid_agents_card_views: AGENTS_CARD_VIEWS });
+      }
+      updates.agents_card_view = req.body.agents_card_view;
     }
 
     const { error } = await supabase

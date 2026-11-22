@@ -23,6 +23,24 @@
    rail slot is kept, invisible, so nothing moves when it arrives), the Buy
    strip (only on a post that carries a listing) and the Reviews tab (Coming
    soon).
+
+   NAMED (Nov 21 2026, FX2): THE SECOND PASS. The owner's updated pictures are
+   in Downloads at 2x ("Home the feed@2x.png", "A Need post in the feed@2x.png",
+   "New post Share, Offer or Need@2x.png", "Profile with an optional
+   banner@2x.png"; halved for these figures), and FX2's brief states the
+   figures that changed:
+     the rail's bottom 16 px above the bar's top (100 above the pictured
+       phone's bottom), level with the bottom-left block; BEFORE 126;
+     Tip BFC built: shown, gold, for a paid member; for a free viewer the
+       slot stays as it was (unseen, so nothing moves);
+     the product strip built: on every post that carries an active linked
+       listing, one link that opens it;
+     every feed tab on one line ("For You" never wraps);
+     the Profile's top row 12 px below the safe area, the safe area counted
+       once (css/bf-phone.css pads the page by it already); its ring at
+       135 degrees; the optional banner (PROFILE.BANNER);
+     the Agent Directory's three views (AGENTS), the Oracle's Sun (HQ.SUN)
+       and the orbit's first settle (ORBIT).
    ══════════════════════════════════════════════════════════════════════════ */
 
 const TOLERANCE = 2;
@@ -47,6 +65,7 @@ const FEED = {
     LIVE_LEFT: 9,           // Live's left edge
     SEARCH_RIGHT: 2,        // Search's right edge, from the screen's
     TABS: ["Local", "Following", "Market", "For You"],
+    TAB_NOWRAP: true,       // NAMED (Nov 21 2026, FX2): each tab on one line
     TAB_FONT: 16,
     TAB_WEIGHT: 600,
     TAB_HEIGHT: 44,
@@ -59,7 +78,7 @@ const FEED = {
   RAIL: {
     RIGHT: 10,              // from the screen's right edge
     WIDTH: 60,
-    BOTTOM_ABOVE_BAR: 126,  // 210 above the pictured phone's bottom
+    BOTTOM_ABOVE_BAR: 16,   // NAMED (Nov 21 2026, FX2): BEFORE 126 (210 above the pictured phone's bottom). AFTER 16: 100 above it, level with META
     GAP: 18,
     ORDER: ["avatar", "like", "talk", "tip", "save", "share"],
     AVATAR: 52,
@@ -80,7 +99,11 @@ const FEED = {
     CAPTION_FONT: 15,
     CAPTION_LINE: 1.4
   },
-  STRIP: {                  // the product strip: only on a post that carries a listing (a later block)
+  // NAMED (Nov 21 2026, FX2): BEFORE "(a later block)". AFTER built: lib/posts.js sends an active linked listing as post.listing, and the
+  // strip is one link to it (LINK); a post without one, or whose listing is no longer active, shows none.
+  TIP: { MEMBER_ONLY: true },
+  STRIP: {                  // the product strip: only on a post that carries an active listing
+    LINK: "/listing/",      // + the listing's slug (or its id)
     RADIUS: 14,
     BORDER: "#2b3a6b",
     PAD: 8,
@@ -117,9 +140,14 @@ const PROFILE = {
     TOP: 66,                // 10 below the top row
     SIZE: 92,
     RING: 3,
+    RING_ANGLE: 135,        // NAMED (Nov 21 2026, FX2): BEFORE 180 (top to bottom). AFTER teal at the top left to purple at the bottom right
     INNER: "#121a36",
     INITIALS_FONT: 28
   },
+  // NAMED (Nov 21 2026, FX2): the optional banner ("Profile with an optional banner"): from the screen's top (the safe area too) to the
+  // picture's bottom edge (AVATAR.TOP + AVATAR.SIZE), cover-cropped, opaque to FADE_FROM of its height and gone at its bottom; a shade
+  // SHADE px tall at its top keeps the top row readable. None by default.
+  BANNER: { BOTTOM: 158, FADE_FROM: 0.5, SHADE: 72 },
   HANDLE: { FONT: 15, LINE: 20, GAP: 8 },
   STATS: {
     ORDER: ["following", "followers", "sales", "bizcash"],
@@ -163,4 +191,18 @@ const PROFILE = {
   }
 };
 
-module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE };
+// NAMED (Nov 21 2026, FX2): the Agent Directory (ai-agents.html) on a phone
+const AGENTS = {
+  VIEWS: ["large", "compact", "grid"],
+  DEFAULT: "compact",
+  BUTTON: 44,               // each view button
+  ROW: 60,                  // a Compact row: the icon tile, the name, one line, the chevron
+  TILE: 40,                 // the icon tile
+  GRID_COLUMNS: 2,
+  KEY: "bf_agents_view"     // the device copy; the member's choice is user_preferences.agents_card_view
+};
+// NAMED (Nov 21 2026, FX2): the HQ orbit's centre while ORACLE is open, and its first settle
+const HQ = { SUN: { FILE: "brand/sun-sdo-hmi-20261121.webp", MAX_BYTES: 120 * 1024, SHIMMER_S: 16 } };
+const ORBIT = { SETTLE_MS: 1300, SETTLE_MIN_MS: 1000, SETTLE_MAX_MS: 1500 };
+
+module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT };   // NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT

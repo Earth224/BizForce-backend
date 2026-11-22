@@ -382,8 +382,9 @@ const goalCols = g => ({ goal_metric: g.metric, goal_weekly_target: g.target, go
   // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): 193_posts.sql (posts, post_media) and 194_social_graph.sql (follows, likes, saves, comments, share days, the count triggers) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
   // NAMED (Nov 20 2026, P3-1, migrations 195 to 198): 195_users_email_canonical.sql (users.email_canonical, one account per inbox), 196_storage_account_tables.sql, 197_storage_account_functions.sql and 198_storage_account_backfill.sql (per-account storage totals; written in P3-1A as 196a/196b/196c and renamed) are allowed above the earlier highest too, by name; "the highest" (198) is checkBuyListingDigital R1's.
   // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
-  check("R1. 183_weekly_goal_and_order_status.sql is the only 183, and only 184_shopify_webhook_requests.sql is above it (checkShopifyWebhooks R1)", highest === 199 &&
-    migFiles.filter(x => /^183_/.test(x)).join() === "183_weekly_goal_and_order_status.sql" && migFiles.filter(x => Number(x.slice(0, 3)) > 183).join() === "184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql", highest);
+  // NAMED (Nov 21 2026, FX2, migration 200): 200_categories_and_intent.sql (the shared categories table, post category, intent, need_place and need_when, marketplace_listings.category_slug, and 200e's agents_card_view, search_visible and the SEO fields; applied by hand Nov 21 2026) is allowed above too, by name; "the highest" (200) is checkBuyListingDigital R1's.
+  check("R1. 183_weekly_goal_and_order_status.sql is the only 183, and only 184_shopify_webhook_requests.sql is above it (checkShopifyWebhooks R1)", highest === 200 &&
+    migFiles.filter(x => /^183_/.test(x)).join() === "183_weekly_goal_and_order_status.sql" && migFiles.filter(x => Number(x.slice(0, 3)) > 183).join() === "184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql", highest);
   const capOf = metric => { const m = new RegExp("goal_metric = '" + metric + "'[^\\n]*?BETWEEN 1 AND (\\d+)").exec(M) || new RegExp("goal_metric = '" + metric + "'[^\\n]*?<= (\\d+)").exec(M); return m ? Number(m[1]) : null; };
   check("R2. the goal caps are migration 183's (counts 100000, marketplace 10000, sales 100000000)",
     S2.GOAL_METRIC_KEYS.every(k => S2.GOAL_METRICS[k].cap === capOf(k)) && S2.GOAL_METRICS.store_sales.cap === 100000000 && S2.GOAL_METRICS.marketplace_orders.cap === 10000,
@@ -703,8 +704,11 @@ const goalCols = g => ({ goal_metric: g.metric, goal_weekly_target: g.target, go
   // Sparks.
   const NOWE = () => new Date(Date.now() + 5000).toISOString();
   P = page({ top: TOP() }); await settle();
+  // NAMED (Nov 21 2026, FX2): the first portal now opens with a settle (bf-orbit.js SETTLE_MS, the drift eased to rest),
+  // which is a turn, and sparks never fly during a turn (F18), so the clock runs past it first. BEFORE it opened with no turn.
+  P.run(P.O.SETTLE_MS + 100);
   await P.O.pulse(); await settle();
-  const old = { type: "card_lead", agent: null, portal_from: "core", portal_to: "connect", at: new Date(Date.now() - 3600000).toISOString() };
+  const old ={ type: "card_lead", agent: null, portal_from: "core", portal_to: "connect", at: new Date(Date.now() - 3600000).toISOString() };
   P.O.sparkFor(old);
   check("F15. an event from before the page loaded sends no spark", P.d.querySelectorAll(".orbit-link-spark").length === 0);
   P.O.sparkFor({ type: "proposal_executed", agent: "seo", portal_from: "grow", portal_to: "connect", at: NOWE() });

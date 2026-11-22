@@ -120,16 +120,18 @@ function analyze(list) { return B.analyzeMigrations(list.map(([name, sql]) => ({
      it changes nothing.
      NAMED (Nov 20 2026, P3-1): three → five. 195 fills users.email_canonical for every existing account (UPDATE ... WHERE
      email_canonical IS DISTINCT FROM email_canonical(email)), and 198 counts every stored file for an account (INSERT ... SELECT
-     from storage.objects). Both read production rows on purpose; on a scratch database each changes nothing. */
-  check("S2. five PRODUCTION DATA statements: 040's username backfill, 145's transfer backfill, 153's description clear, 195's email_canonical fill and 198's storage count",
-    prod.length === 5 &&
+     from storage.objects). Both read production rows on purpose; on a scratch database each changes nothing.
+     NAMED (Nov 21 2026, FX2): five → six. 200 fills marketplace_listings.category_slug for every existing listing from an explicit
+     mapping (UPDATE ... FROM (VALUES ...)); it reads production rows on purpose; on a scratch database it changes nothing. */
+  check("S2. six PRODUCTION DATA statements: 040's username backfill, 145's transfer backfill, 153's description clear, 195's email_canonical fill, 198's storage count and 200's category_slug fill",
+    prod.length === 6 && prod[5].file === "200_categories_and_intent.sql" && /^changes existing rows/.test(prod[5].text) &&
     prod[3].file === "195_users_email_canonical.sql" && /^changes existing rows/.test(prod[3].text) &&
     prod[4].file === "198_storage_account_backfill.sql" && /^INSERT \.\.\. SELECT copies existing rows/.test(prod[4].text) && prod[0].file === "040_bf_profiles_username.sql" && /^changes existing rows/.test(prod[0].text) &&
     prod[1].file === "145_bfc_transfers.sql" && /^INSERT \.\.\. SELECT copies existing rows/.test(prod[1].text) &&
     prod[2].file === "153_agent_descriptions_cleared.sql" && /^changes existing rows/.test(prod[2].text),
     prod.map(f => f.file + ":" + f.line + " " + f.text).join(", "));
   check("S2. nothing needed fixing", fixed.length === 0, fixed.map(f => f.file + " " + f.text).join(" | "));
-  check("S2. the header lists the findings", /-- Findings: BLOCKING 0, PRODUCTION DATA 5, NOT IDEMPOTENT \d+, FIXED 0\./.test(text) && /--   PRODUCTION DATA  040_bf_profiles_username\.sql:\d+/.test(text) &&
+  check("S2. the header lists the findings", /-- Findings: BLOCKING 0, PRODUCTION DATA 6, NOT IDEMPOTENT \d+, FIXED 0\./.test(text) && /--   PRODUCTION DATA  200_categories_and_intent\.sql:\d+/.test(text) &&   /* NAMED (Nov 21 2026, FX2): 5 → 6 */ /--   PRODUCTION DATA  040_bf_profiles_username\.sql:\d+/.test(text) &&
     /--   PRODUCTION DATA  145_bfc_transfers\.sql:\d+/.test(text) && /--   PRODUCTION DATA  153_agent_descriptions_cleared\.sql:\d+/.test(text) &&
     /--   PRODUCTION DATA  195_users_email_canonical\.sql:\d+/.test(text) && /--   PRODUCTION DATA  198_storage_account_backfill\.sql:\d+/.test(text));   // NAMED (Nov 20 2026, P3-1)
 

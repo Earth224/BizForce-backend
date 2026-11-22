@@ -18,7 +18,11 @@
      W  sw.js: SHELL_REV "p21" (P2-2 made it "p22"), the new scripts and pages in the offline shell
      U  what P2-1 must not change: the Oracle pages, the music player, the
         Layered Stack logo, HQ1's dashboard views, the phone stylesheet, every
-        font (as at the frontend's 1803344)
+        font (as at the frontend's 1803344); NAMED (Nov 21 2026, FX2): bf-hq-views.js
+        (the Sun), bf-orbit.js (the first settle) and dashboard.html (the Sun's
+        look) differ by FX2's own hunks alone, listed in checkAppShell.fx2.json
+        ([file, now, before]); with each undone, exactly once, each is still the
+        old file byte for byte
 
    It also prints the show and hide list as built (SHOWN / HIDDEN lines).
 
@@ -31,6 +35,8 @@ const { execFileSync } = require("child_process");
 const H = require("./_p21Harness");
 
 const P20_COMMIT = "1803344";   // the frontend before P2-1
+// NAMED (Nov 21 2026, FX2): FX2's hunks in three of the unchanged files, [file, now, before] (U1)
+const FX2_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx2.json"), "utf8"));
 // NAMED (Nov 20 2026, P2-2): the only lines P2-2 added to dashboard.html (see U1).
 const P22_DASH_LINES = [
   "<!-- P2-2: the owner alone sees the moderation queue's waiting count here, only when above 0 (scripts/bf-safety.js ownerCount) -->",
@@ -76,7 +82,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
-  "sw-old-rev": [[SW, "var SHELL_REV = \"p32\";", "var SHELL_REV = \"hq1\";"]],
+  // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
+  "sw-old-rev": [[SW, "var SHELL_REV = \"fx2\";", "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
   "sw-no-pages": [[SW, "  \"home.html\", \"inbox.html\",   //", "  //"]],
@@ -230,7 +237,8 @@ async function page(pathname, opts) {
   // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
-  check("W1. SHELL_REV \"p32\" in the cache's name", has(sw, "var SHELL_REV = \"p32\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+  // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
+  check("W1. SHELL_REV \"fx2\" in the cache's name", has(sw, "var SHELL_REV = \"fx2\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
@@ -244,6 +252,8 @@ async function page(pathname, opts) {
     // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
     let now = FILES[f];
     if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    // NAMED (Nov 21 2026, FX2): FX2's hunks undone (each must be found exactly once), then the same byte-for-byte equality
+    FX2_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + "\u0000fx2 hunk missing"; });
     return old !== now;
   });
   check("U1. the Oracle pages, the music player (its button icon), the Layered Stack logo (bf-marks.js), HQ1's dashboard views, the phone and UI stylesheets and the Guide are byte for byte as at " + P20_COMMIT,

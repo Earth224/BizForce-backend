@@ -32,8 +32,12 @@
         (no /api/user/preferences, no /api/moon) and the orbit label stays as
         it was;
      M  the moon: scripts/bf-oracle-moon.js holds oracle.html's moon block and
-        MOON_IMG_URL EXACTLY; it draws the ORACLE node, the ORACLE chip and the
-        centre, with the live phase from GET /api/moon, each with its own ids;
+        MOON_IMG_URL EXACTLY; it draws the ORACLE node and the ORACLE chip, with
+        the live phase from GET /api/moon, each with its own ids; the centre,
+        while ORACLE is open, is the Sun (NAMED, Nov 21 2026, FX2: BEFORE a
+        third moon there): NASA SDO's photograph, saved locally under 120 KB,
+        its source and credit in the code, a glow, and a shimmer that stops
+        under reduced motion; the gold ring round it as it was;
      G  the gold: the chat box's (#tmx-chat::before in
         scripts/termaximus-presence.js), every stop, the size, the animation
         and its keyframes equal; still under reduced motion; on the rings, the
@@ -69,9 +73,11 @@ const MUTATIONS = {
   "migration-not-rerunnable": [[MIG, "ADD COLUMN IF NOT EXISTS hq_card_view text,", "ADD COLUMN hq_card_view text,"]],
   "route-put-no-400": [[SERVER, "if (req.body.hq_card_view !== null && HQ_CARD_VIEWS.indexOf(req.body.hq_card_view) === -1) {", "if (false) {"]],
   "route-null-not-stored": [[SERVER, "      updates.hq_orbit = req.body.hq_orbit;", "      if (req.body.hq_orbit !== null) updates.hq_orbit = req.body.hq_orbit;"]],
-  "route-get-drops-orbit": [[SERVER, "goal_time_zone, goal_set_at, hq_card_view, hq_orbit\")", "goal_time_zone, goal_set_at, hq_card_view\")"]],
+  // NAMED (Nov 21 2026, FX2): BEFORE anchored on the select's end, hq_orbit"); AFTER the select ends in agents_card_view (migration 200e), so on "hq_orbit, agents_card_view".
+  "route-get-drops-orbit": [[SERVER, "goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view\")", "goal_time_zone, goal_set_at, hq_card_view, agents_card_view\")"]],
   "route-get-unchecked": [[SERVER, "hq_card_view: HQ_CARD_VIEWS.indexOf(row.hq_card_view) !== -1 ? row.hq_card_view : null,", "hq_card_view: row.hq_card_view,"]],
-  "yourdata-no-columns": [[YOURDATA, "goal_set_at, hq_card_view, hq_orbit, updated_at", "goal_set_at, updated_at"]],
+  // NAMED (Nov 21 2026, FX2): BEFORE "..., hq_orbit, updated_at"; AFTER agents_card_view sits between them
+  "yourdata-no-columns": [[YOURDATA, "goal_set_at, hq_card_view, hq_orbit, agents_card_view, updated_at", "goal_set_at, agents_card_view, updated_at"]],
   "view-row-no-orbit-button": [[VIEWS, "  btns.appendChild(orbitBtn);\n", ""]],
   "title-wrong": [[VIEWS, "agents: \"AGENT TOOLS\"", "agents: \"AGENTS TOOLS\""]],
   "view-no-aria-pressed": [[VIEWS, "viewBtn[v].setAttribute(\"aria-pressed\", state.view === v ? \"true\" : \"false\");", ""]],
@@ -88,7 +94,15 @@ const MUTATIONS = {
   "no-server-save": [[VIEWS, "apply(); return save({ hq_card_view: value }); }", "apply(); return null; }"]],
   "server-does-not-win": [[VIEWS, "        if (v) { state.view = v; writeLocal(VIEW_KEY, v); }", "        if (false) { state.view = v; writeLocal(VIEW_KEY, v); }"]],
   "desktop-asks-server": [[VIEWS, "    if (!phone() || state.server || typeof fetch !== \"function\")", "    if (state.server || typeof fetch !== \"function\")"]],
-  "phone-rule-leaks": [[DASH, "  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-gold-ring{display:none}\n", "  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-gold-ring{display:none}\n  .hq-view-row{display:flex}\n"]],
+  // NAMED (Nov 21 2026, FX2): the hide list gained .hq-core-sun (its line carries a NAMED comment after the rule)
+  "phone-rule-leaks": [[DASH, "  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-sun,.hq-gold-ring{display:none}", "  .hq-view-row{display:flex}\n  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-sun,.hq-gold-ring{display:none}"]],
+  // NAMED (Nov 21 2026, FX2): the Sun in the centre
+  "sun-back-to-moon": [[VIEWS, "      var c = el(\"span\", \"hq-core-sun\");\n", "      var c = el(\"span\", \"hq-core-moon\"); c.setAttribute(\"data-hq-moon\", \"core\");\n"]],
+  "sun-wrong-image": [[VIEWS, "      sun.src = \"/brand/sun-sdo-hmi-20261121.webp\";\n", "      sun.src = \"https://sdo.gsfc.nasa.gov/assets/img/latest/latest_1024_HMIIC.jpg\";\n"]],
+  "sun-no-credit": [[VIEWS, "Credit: Courtesy of NASA/SDO and the\n     HMI science team.", "Credit: NASA."]],
+  "sun-shimmers-when-reduced": [[DASH, "    @media (prefers-reduced-motion: reduce){ .hq-core-sun-shimmer{animation:none} }\n", ""]],
+  "sun-no-glow": [[DASH, "      box-shadow:0 0 8px 1px rgba(255,196,110,.55),0 0 26px 6px rgba(255,150,50,.30),0 0 56px 16px rgba(255,120,30,.14)}\n", "      box-shadow:none}\n"]],
+  "sun-always-shown": [[DASH, "    #orbitTop[data-hq-open=\"oracle\"] .hq-core-sun{display:block;", "    #orbitTop .hq-core-sun{display:block;"]],
   "moon-copy-drift": [[MOON, "    var SYNODIC_MONTH = 29.53058867;", "    var SYNODIC_MONTH = 29.53058868;"]],
   "moon-not-live": [[MOON, "      if (result) b.setReal(result);\n", ""]],
   "moon-shared-ids": [[MOON, "    return html.replace(/id=\"([^\"]+)\"/g", "    return html; return html.replace(/id=\"([^\"]+)\"/g"]],
@@ -109,7 +123,8 @@ const MUTATIONS = {
   // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"p32\";", "var SHELL_REV = \"ph1\";"]],
+  // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx2\";", "var SHELL_REV = \"ph1\";"]],
   // (a crescent moon, built from its code point so this file holds none: checkNoEmoji N2)
   "emoji": [[VIEWS, "  var VIEW_KEY = \"bf_hq_view\"", "  /* " + String.fromCodePoint(0x1F319) + " */ var VIEW_KEY = \"bf_hq_view\""]]
 };
@@ -172,8 +187,9 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // name; "the highest" is checkBuyListingDigital R1's.
   check("R1. 188_user_preferences_hq_view.sql is the only 188, and only 189_handles_and_place.sql, 190_notifications_links.sql, 191_safety.sql and 192_buy_listing_digital.sql are above it (checkBuyListingDigital R1)",
     // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
-    top === 199 && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
-    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql", J([top]));
+    // NAMED (Nov 21 2026, FX2, migration 200): 200_categories_and_intent.sql (the shared categories table, post category, intent, need_place and need_when, marketplace_listings.category_slug, and 200e's agents_card_view, search_visible and the SEO fields; applied by hand Nov 21 2026) is allowed above too, by name; "the highest" (200) is checkBuyListingDigital R1's.
+    top === 200 && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
+    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql", J([top]));
   check("R2. it adds hq_card_view and hq_orbit as text, only if they do not exist (safe to re-run)",
     has(mig, "ADD COLUMN IF NOT EXISTS hq_card_view text,") && has(mig, "ADD COLUMN IF NOT EXISTS hq_orbit     text;"));
   check("R3. the named CHECKs as live: user_preferences_hq_card_view_check (NULL or large, compact, grid) and user_preferences_hq_orbit_check (NULL or shown, hidden), each dropped if it exists first",
@@ -213,6 +229,7 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
     const st = db(row);
     const ctx = { supabase: st.client, nowIso: () => "2026-11-19T17:00:00.000Z", LANGUAGE_NAMES: { en: "English" }, MIST_POSITIONS: ["top-right"],
       AGENT_CARD_ORDERS: ["importance", "alphabetical"], HQ_CARD_VIEWS: HQV, HQ_ORBIT_CHOICES: HQO, dashboardTopCache: new Map(),
+      AGENTS_CARD_VIEWS: ["large", "compact", "grid"],   // NAMED (Nov 21 2026, FX2): the Agent Directory's view (checkAgentViews holds the route's rules for it)
       require: m => require(m.indexOf("./") === 0 ? path.join(REPO, m) : m) };
     vm.createContext(ctx);
     const handler = vm.runInContext("(" + fn + ")", ctx);
@@ -246,8 +263,9 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   const YD = FILES[YOURDATA] || "";
   const prefLine = (YD.match(/\{ table: "user_preferences"[\s\S]*?onDelete: "delete" \}/) || [""])[0];
   check("Y1. lib/yourData.js exports hq_card_view and hq_orbit with the member's settings row", /select: "[^"]*"\s*\+\s*"[^"]*\bhq_card_view, hq_orbit\b/.test(prefLine), prefLine.slice(-200));
-  const SENT = "and on a phone your dashboard's card view (large, compact or grid) and whether its orbit is shown.";
-  check("Y2. its description names them, and the built privacy page carries it", has(prefLine, SENT) && has(FILES[PRIVACY], "card view (large, compact or grid) and whether its orbit is shown"));
+  // NAMED (Nov 21 2026, FX2): BEFORE "card view (large, compact or grid) and whether its orbit is shown."; AFTER "card view (large, compact or grid), whether its orbit is shown, and your Agent Directory's view."
+  const SENT = "and on a phone your dashboard's card view (large, compact or grid), whether its orbit is shown, and your Agent Directory's view.";
+  check("Y2. its description names them, and the built privacy page carries it", has(prefLine, SENT) && has(FILES[PRIVACY], "card view (large, compact or grid), whether its orbit is shown, and your Agent Directory&#39;s view."));
 
   /* ══ the page, in jsdom ══ */
   const a0 = FILES[DASH].indexOf("<style id=\"orbitStyle\">"), b0 = FILES[DASH].indexOf("</template>") + "</template>".length;
@@ -427,8 +445,9 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   [media, reduced, keys].filter(Boolean).sort((a, b) => b.start - a.start).forEach(b => { outside = outside.slice(0, b.start) + outside.slice(b.end); });
   const outRules = outside.split("}").map(x => x.trim()).filter(Boolean).map(x => x.split("{")[0].trim());
   check("P1. outside @media (max-width: 760px) the block only hides HQ1's elements and defines the gold, its keyframes and its still version",
-    !!media && J(outRules) === J([".hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-gold-ring", ".hq-gold,.hq-gold-ring", ".hq-gold-ring", ".hq-gold-glyph"]) &&
-    /\.hq-chips,\.hq-view-row,\.hq-list,\.hq-moon,\.hq-core-moon,\.hq-gold-ring\{display:none\}/.test(outside) &&
+    // NAMED (Nov 21 2026, FX2): the hide list gained .hq-core-sun (the centre's Sun); the comment after it is no rule
+    !!media && J(outRules.map(r => r.replace(/^\/\*[\s\S]*?\*\/\s*/, ""))) === J([".hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-sun,.hq-gold-ring", ".hq-gold,.hq-gold-ring", ".hq-gold-ring", ".hq-gold-glyph"]) &&
+    /\.hq-chips,\.hq-view-row,\.hq-list,\.hq-moon,\.hq-core-moon,\.hq-core-sun,\.hq-gold-ring\{display:none\}/.test(outside) &&
     // the only shown display outside: the gold glyph's block, which lives inside .hq-list (hidden above 760 px)
     !/display:(?!none)/.test(outside.replace(".hq-gold-glyph{display:block;", ".hq-gold-glyph{")), J(outRules));
   {
@@ -455,18 +474,37 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   check("M3. and MOON_IMG_URL, as oracle.html has it", oraImg.length === 1 && IMG === oraImg[0], J([IMG, oraImg]));
   let PM = await page({ session: { bf_orbit_portal: "oracle" } });
   PM.d.getElementById("hqOrbitBtn").click(); await settle(60);
-  const moons = ["node", "chip", "core"].map(k => PM.d.querySelector('[data-hq-moon="' + k + '"]'));
-  const inPlace = !!moons[0] && !!moons[0].closest('.orbit-portal[data-portal="oracle"]') && !!moons[1] && !!moons[1].closest('.hq-chip[data-portal="oracle"]') && !!moons[2] && moons[2].parentNode === PM.d.getElementById("orbitCore");
-  check("M4. the moon is drawn on the ORACLE node, the ORACLE chip and the orbit's centre, each the Oracle's realistic moon (its photo through the lit mask)",
+  // NAMED (Nov 21 2026, FX2): BEFORE three moons (the node, the chip, the centre). AFTER two: the centre is the Sun (M7 to M10).
+  const moons = ["node", "chip"].map(k => PM.d.querySelector('[data-hq-moon="' + k + '"]'));
+  const inPlace = !!moons[0] && !!moons[0].closest('.orbit-portal[data-portal="oracle"]') && !!moons[1] && !!moons[1].closest('.hq-chip[data-portal="oracle"]') && !PM.d.querySelector('#orbitCore [data-hq-moon]');
+  check("M4. the moon is drawn on the ORACLE node and the ORACLE chip (none in the centre), each the Oracle's realistic moon (its photo through the lit mask)",
     inPlace && moons.every(m => m.querySelector("svg image") && m.querySelector("svg image").getAttribute("href") === (IMG || "").replace(/^.*"(https[^"]+)".*$/, "$1") && m.querySelector("mask path")), J(moons.map(m => m && m.innerHTML.length)));
   const asked = PM.calls.filter(c => /\/api\/moon$/.test(c.u)).length;
   check("M5. with the live phase from GET /api/moon (the Oracle's answer, its phase angle 101.5)", asked >= 1 && moons.every(m => m && m.getAttribute("data-moon-angle") === "101.5" && m.getAttribute("data-moon-live") === "true"),
     J([asked, moons.map(m => m && m.getAttribute("data-moon-angle"))]));
   const ids = q(PM.d, "[data-hq-moon] [id]").map(n => n.id);
   check("M6. every moon has its own SVG ids (no two masks share one), and every url(#) points inside its own moon",
-    ids.length >= 27 && new Set(ids).size === ids.length && moons.every(m => (m.innerHTML.match(/url\(#([^)]+)\)/g) || []).every(u => !!m.querySelector("#" + u.slice(5, -1)))), J(ids.length));
+    ids.length >= 18 && new Set(ids).size === ids.length   /* NAMED (Nov 21 2026, FX2): BEFORE >= 27 (three moons); AFTER two */ && moons.every(m => (m.innerHTML.match(/url\(#([^)]+)\)/g) || []).every(u => !!m.querySelector("#" + u.slice(5, -1)))), J(ids.length));
   const cent = PM.d.getElementById("orbitTop").getAttribute("data-hq-open");
-  check("M7. the centre's moon shows only while ORACLE is open (the rule)", cent === "oracle" && has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .hq-core-moon{display:block;"));
+  // NAMED (Nov 21 2026, FX2): BEFORE "M7. the centre's moon shows only while ORACLE is open". AFTER the Sun, M7 to M10.
+  const core = PM.d.getElementById("orbitCore"), sunEl = core && core.querySelector(".hq-core-sun"), sunImg = sunEl && sunEl.querySelector("img.hq-core-sun-img");
+  check("M7. the centre's Sun shows only while ORACLE is open (the rule), first in the centre, under its words, with the gold ring after them",
+    cent === "oracle" && !!sunEl && core.firstChild === sunEl && !!core.lastChild && core.lastChild.className === "hq-gold-ring" &&
+    has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .hq-core-sun{display:block;position:absolute;inset:0;border-radius:50%;overflow:hidden;pointer-events:none;z-index:0;") &&
+    has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .orbit-core > :not(.hq-core-moon):not(.hq-core-sun):not(.hq-gold-ring){position:relative;z-index:1;"));
+  const SUN_FILE = path.join(FRONTEND, "brand", "sun-sdo-hmi-20261121.webp");
+  const sunBytes = fs.existsSync(SUN_FILE) ? fs.readFileSync(SUN_FILE) : null;
+  check("M8. it is the local photograph (/brand/sun-sdo-hmi-20261121.webp, a WebP under 120 KB), decorative (alt empty, aria-hidden), hidden if it cannot load",
+    !!sunImg && sunImg.getAttribute("src") === "/brand/sun-sdo-hmi-20261121.webp" && sunImg.getAttribute("alt") === "" && sunImg.getAttribute("aria-hidden") === "true" &&
+    !!sunBytes && sunBytes.length < 120 * 1024 && sunBytes.slice(0, 4).toString("latin1") === "RIFF" && sunBytes.slice(8, 12).toString("latin1") === "WEBP" &&
+    has(FILES[VIEWS], "sun.addEventListener(\"error\", function () { c.hidden = true; });"), J([sunImg && sunImg.getAttribute("src"), sunBytes && sunBytes.length]));
+  check("M9. its source and credit are in the code: NASA SDO's HMI image, the file it came from, and \"Courtesy of NASA/SDO and the HMI science team\"",
+    has(FILES[VIEWS], "https://sdo.gsfc.nasa.gov/assets/img/latest/latest_1024_HMIIC.jpg") && has(FILES[VIEWS], "Credit: Courtesy of NASA/SDO and the\n     HMI science team.") && has(FILES[VIEWS], "public-domain"));
+  check("M10. a soft warm glow round it, and a slow shimmer (16 s each way) that stops under reduced motion",
+    has(HQ_STYLE, "box-shadow:0 0 8px 1px rgba(255,196,110,.55),0 0 26px 6px rgba(255,150,50,.30),0 0 56px 16px rgba(255,120,30,.14)}") &&
+    has(HQ_STYLE, "animation:hq-sun-shimmer 16s ease-in-out infinite alternate}") && has(HQ_STYLE, "@keyframes hq-sun-shimmer{") &&
+    has(HQ_STYLE, "@media (prefers-reduced-motion: reduce){ .hq-core-sun-shimmer{animation:none} }") &&
+    HQ_STYLE.indexOf("@media (prefers-reduced-motion: reduce){ .hq-core-sun-shimmer{animation:none} }") > HQ_STYLE.indexOf("animation:hq-sun-shimmer 16s"));
 
   /* ══ G. the gold ══ */
   console.log("\n══ G. the gold ══");
@@ -538,7 +576,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
   // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
-  check("W1. SHELL_REV \"p32\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p32\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
+  check("W1. SHELL_REV \"fx2\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"fx2\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

@@ -127,6 +127,17 @@
                        badge draws only for an account the server says is
                        verified, and the fixtures say none). The proof is
                        Downloads\phone1\p32-desktop-proof.json.
+                       NAMED (Nov 21 2026, FX2): privacy.html changed on purpose
+                       (Your data's settings line names the Agent Directory's
+                       view, one line longer: that item and its four ancestors
+                       grew 26.4 px, 343 elements moved down, 54 are where they
+                       were, none new, none gone) and is re-recorded in
+                       desktop-baseline-pfx2-privacy.json (the name sorts after
+                       p32-privacy and pfx1-compose). The other pages are
+                       unchanged at 1440: the strip shows only for a post with a
+                       listing, the Profile's banner and the Agent Directory's
+                       views only on a phone, the Sun only under 760 px. The
+                       proof is Downloads\phone1\fx2-desktop-proof.json.
      PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
@@ -398,6 +409,7 @@ const TONE = (() => { const n = 160000, b = Buffer.alloc(44 + n * 2); b.write("R
   b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(16000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write("data", 36); b.writeUInt32LE(n * 2, 40); return b; })();
 function api(method, u, request) {
   const p = u.pathname;
+  if (P23 && FX2S.on && !FX2S.inner) { const a = fx2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, FX2)
   // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
   if (P31) { const a = p31Api(method, p); if (a !== undefined) return a; }
   // NAMED (Nov 21 2026, P3-2): with PHONE_P32=1, the profile and the storefront carry the server's verified field (p32Api)
@@ -1005,7 +1017,9 @@ async function hq1Run(cdp, origin) {
     await fresh(w);
     await ev("window.BFOrbit.open('oracle'),true"); await sleep(900);
     const dm = await ev("(function(){var out={};['node','core'].forEach(function(k){var n=document.querySelector('[data-hq-moon='+k+']');var b=n?n.getBoundingClientRect():{width:0};" +
-      "out[k]=n?{phase:n.getAttribute('data-moon-phase'),angle:n.getAttribute('data-moon-angle'),live:n.getAttribute('data-moon-live'),hidden:n.hidden,w:Math.round(b.width),paths:[].map.call(n.querySelectorAll('path'),function(p){return p.getAttribute('d');}),img:!!n.querySelector('image')}:null;});return out;})()");
+      "out[k]=n?{phase:n.getAttribute('data-moon-phase'),angle:n.getAttribute('data-moon-angle'),live:n.getAttribute('data-moon-live'),hidden:n.hidden,w:Math.round(b.width),paths:[].map.call(n.querySelectorAll('path'),function(p){return p.getAttribute('d');}),img:!!n.querySelector('image')}:null;});" +
+      // NAMED (Nov 21 2026, FX2): the centre's Sun
+      "var s=document.querySelector('#orbitCore .hq-core-sun'),i=s&&s.querySelector('img'),q=s?s.getBoundingClientRect():{width:0};out.sun=s?{shown:getComputedStyle(s).display!=='none',w:Math.round(q.width),src:i&&i.getAttribute('src'),loaded:!!i&&i.complete&&i.naturalWidth>0}:null;return out;})()");
     const gold = await ev("(function(){var t=document.getElementById('hqSetTitle');var cs=getComputedStyle(t);" +
       "return {title:t.classList.contains('hq-gold'),anim:cs.animationName,size:cs.backgroundSize,img:cs.backgroundImage.slice(0,40),icons:document.querySelectorAll('#hqList .hq-gold-glyph').length,rings:[].filter.call(document.querySelectorAll('.hq-gold-ring'),function(n){return getComputedStyle(n).display!=='none';}).length};})()");
     await shotPage(cdp, path.join(HQ1_OUT, "oracle-set-moon-and-gold-390.png"), 390).catch(() => null);
@@ -1014,7 +1028,9 @@ async function hq1Run(cdp, origin) {
     check(at + "oracle.html shows the live phase (" + om.phase + ")", om.phase === MOON.phaseName && om.paths.length > 0, J(om).slice(0, 300));
     check(at + "the ORACLE node's moon: the same live phase and the same drawing (every path) as oracle.html's, drawn on the disc",
       !!dm.node && dm.node.phase === om.phase && dm.node.angle === String(MOON.phaseAngle) && dm.node.live === "true" && !dm.node.hidden && dm.node.w >= 44 && dm.node.img && J(dm.node.paths) === J(om.paths), J(dm.node).slice(0, 400));
-    check(at + "the centre's moon while ORACLE is open: the same", !!dm.core && dm.core.phase === om.phase && !dm.core.hidden && dm.core.w >= 60 && J(dm.core.paths) === J(om.paths), J(dm.core).slice(0, 300));
+    // NAMED (Nov 21 2026, FX2): BEFORE "the centre's moon while ORACLE is open: the same". AFTER the centre is the Sun (a NASA SDO
+    // image, brand/sun-sdo-hmi-20261121.webp) in the same gold ring; the node and the chip keep the moon.
+    check(at + "the centre while ORACLE is open: the Sun (loaded, 60 px or more), no moon", !dm.core && !!dm.sun && dm.sun.shown && dm.sun.loaded && dm.sun.w >= 60 && dm.sun.src === "/brand/sun-sdo-hmi-20261121.webp", J([dm.core, dm.sun]).slice(0, 300));
     check(at + "the ORACLE chip's moon (orbit hidden): the same", !!cm && cm.phase === om.phase && !cm.hidden && cm.w >= 20 && J(cm.paths) === J(om.paths), J(cm).slice(0, 300));
     check(at + "the gold with ORACLE open: the title's shine is tmx-gold-shimmer at 260% 260%, the rings on the node and the centre, the four Oracle tools' icons gold",
       gold.title && gold.anim === "tmx-gold-shimmer" && gold.size === "260% 260%" && /linear-gradient/.test(gold.img) && gold.icons === 4 && gold.rings >= 2, J(gold));
@@ -1369,6 +1385,25 @@ async function p22Run(cdp, origin) {
 const P23_STORAGE = "https://p23-storage.test";
 const P23S = { db: null, deps: null };
 const P23_POST = { text: uid(8001), photo: uid(8002), own: uid(8003), long: uid(8004), other: uid(8005) };
+/* NAMED (Nov 21 2026, FX2): while p23Run's FX2 block runs (FX2S.on), a free viewer's /api/auth/me (tier "free"), the agents with the
+   display_name and page_url GET /api/agents sends, the Agent Directory's saved view, and the profile's banner (a PUT recorded).
+   Off (every other screen, every other run) nothing here answers, so the baselines are unchanged. */
+const FX2S = { on: false, inner: false, free: false, banner: null, agView: null, puts: [], profilePuts: [] };
+const FX2_LISTING = "5f000000-0000-4000-8000-000000000001";
+function fx2Api(method, u, request) {
+  const p = u.pathname;
+  const body = () => { try { return JSON.parse((request && request.postData) || "{}"); } catch (e) { return {}; } };
+  const base = () => { FX2S.inner = true; try { return api(method, u, request); } finally { FX2S.inner = false; } };
+  if (p === "/api/auth/me" && FX2S.free) return Promise.resolve(base()).then(a => Object.assign({}, a, { access: Object.assign({}, a.access, { active: false, reason: null, tier: "free" }) }));
+  if (p === "/api/agents") return { agents: AGENTS.map(x => Object.assign({}, x, { display_name: x.name, page_url: "/" + x.agent_type + "-agent.html" })) };
+  if (p === "/api/user/preferences") {
+    if (method === "PUT") { const b = body(); FX2S.puts.push(b); if ("agents_card_view" in b) FX2S.agView = b.agents_card_view; return { saved: true }; }
+    return { ok: true, preferences: {}, termaximus_active: true, agents_card_view: FX2S.agView };
+  }
+  if (p === "/api/bfp/profile/me" && method === "PUT") { FX2S.profilePuts.push(body()); return { ok: true }; }
+  if (p === "/api/bfp/profile/me" && method === "GET" && FX2S.banner) return Promise.resolve(base()).then(a => { const c = JSON.parse(J(a)); c.profile = Object.assign({}, c.profile, { banner_url: FX2S.banner }); return c; });
+  return undefined;
+}
 async function p23World(empty) {
   const { memDb } = require("./_p23Db");
   const P = require("../lib/posts");
@@ -1505,6 +1540,8 @@ async function p23Run(cdp, origin) {
   console.log("browserCheckPhone P2-3 (the Following feed, Like, Talk, the post menu, compose, the profile's posts, Follow, the public post page, few follows) at " + P23_WIDTHS.join(", "));
   // a token whose payload names Rose (the profile shell reads the id from it), except while signed out
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  // NAMED (Nov 21 2026, FX2): the orbit's turn, frame by frame ([time, base, open]), only while sessionStorage fx2_frames is set (the FX2 block)
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(sessionStorage.getItem('fx2_frames')){window.__fr=[];var fx2f=function(ts){var O=window.BFOrbit;if(O&&O.state)window.__fr.push([ts,O.state.base,!!O.state.open]);if(window.__fr.length<600)requestAnimationFrame(fx2f);};requestAnimationFrame(fx2f);}}catch(e){}" });
   const ev = x => evaluate(cdp, x);
   const HT = { 360: 780, 390: 844, 430: 932 };
   const viewShot = async file => { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P23_OUT, file), Buffer.from(r.data, "base64")); };
@@ -1564,7 +1601,9 @@ async function p23Run(cdp, origin) {
       gaps.every(g => near(g, F.RAIL.GAP)) && near(m.av.w, F.RAIL.AVATAR) && near(m.av.h, F.RAIL.AVATAR) && /linear-gradient/.test(m.avBg) &&
       m.items.slice(1).every(i => near(i.box.h, F.RAIL.ITEM) && near(i.icon.w, F.RAIL.ICON) && near(i.icon.h, F.RAIL.ICON) && px(i.labelFont) === F.RAIL.LABEL_FONT), J([gaps, m.av, m.items]));
     const tip = m.items.find(i => i.kind === "tip");
-    check(at + "Tip BFC's slot is kept, unseen (tipping arrives in P2-5, for paid members), its label gold", !!tip && tip.vis === "hidden" && tip.color === rgb(DS.COLOR.GOLD) && tip.label === "Tip BFC", J(tip));
+    // NAMED (Nov 21 2026, FX2): BEFORE "Tip BFC's slot is kept, unseen" for everyone. AFTER Rose (a paid member) sees it, gold;
+    // a free viewer's stays unseen, in the same place (the FX2 block below).
+    check(at + "Tip BFC shown for a paid member, its label gold", !!tip && tip.vis === "visible" && tip.color === rgb(DS.COLOR.GOLD) && tip.label === "Tip BFC", J(tip));
     check(at + "the bottom-left block " + F.META.LEFT + " px from the left, its right edge " + F.META.RIGHT + " px from the screen's, its bottom " + F.META.BOTTOM_ABOVE_BAR + " px above the bar; the name " + F.META.NAME_FONT + " px bold, the caption " + F.META.CAPTION_FONT + " px, " + F.META.GAP + " px between",
       near(m.meta.l, F.META.LEFT) && near(m.meta.r, w - F.META.RIGHT) && near(m.meta.b, barTop - F.META.BOTTOM_ABOVE_BAR) && px(m.nameFont) === F.META.NAME_FONT && Number(m.nameWeight) === F.META.NAME_WEIGHT &&
       !!m.text && px(m.textFont) === F.META.CAPTION_FONT && near(px(m.textLine), F.META.CAPTION_FONT * F.META.CAPTION_LINE) && near(m.text.t - m.name.b, F.META.GAP), J([m.meta, m.name, m.text, m.nameFont, m.textFont, m.textLine]));
@@ -1629,8 +1668,9 @@ async function p23Run(cdp, origin) {
     const first = await postBox(P23_POST.text);
     // NAMED (Nov 20 2026, FX1): BEFORE "...; the menu's three dots" (first.dots); AFTER no three dots on a phone's full-screen
     // post (the approved design): Share opens the post's options (step 4). The unseen Tip BFC slot is not counted.
-    check(at + "a post is the screen's width; Like, Talk, Save and Share, each 44 x 44 or more; no three dots (Share opens the options)", !!first && Math.abs(first.w - w) <= 1 &&
-      J(first.acts.map(a => a.split(" ")[0])) === J(["like", "talk", "save", "share"]) && first.acts.every(big) && !first.dots && first.name === "Pat's Pantry", J(first));
+    // NAMED (Nov 21 2026, FX2): BEFORE Like, Talk, Save and Share (Tip unseen). AFTER Tip BFC between Talk and Save (Rose is a paid member).
+    check(at + "a post is the screen's width; Like, Talk, Tip BFC, Save and Share, each 44 x 44 or more; no three dots (Share opens the options)", !!first && Math.abs(first.w - w) <= 1 &&
+      J(first.acts.map(a => a.split(" ")[0])) === J(["like", "talk", "tip", "save", "share"]) && first.acts.every(big) && !first.dots && first.name === "Pat's Pantry", J(first));
     // nothing of the page shows through a full-screen post: the legal footer is at the feed's end, not over the first post
     const foot = await ev("(function(){var f=document.querySelector('.bf-legal-footer');if(!f)return null;var r=f.getBoundingClientRect();var hit=[].some.call(f.querySelectorAll('a'),function(a){var q=a.getBoundingClientRect();if(q.bottom<=0||q.top>=innerHeight)return false;var e=document.elementFromPoint(q.left+q.width/2,q.top+q.height/2);return !!e&&(e===a||a.contains(e));});return {inFeed:!!f.closest('#feed'),top:Math.round(r.top),seen:hit};})()");
     check(at + "the legal footer is at the feed's end, never painted over a post", !!foot && foot.inFeed && !foot.seen && foot.top >= h, J(foot));
@@ -1797,6 +1837,212 @@ async function p23Run(cdp, origin) {
     await shot("home-few-follows");
     await click("#findPeople [data-follow]"); await sleep(700);
     check(at + "Follow there is stored", P23S.db.t.follows.length === 1 && P23S.db.t.follows[0].follower_id === ROSE.id, J(P23S.db.t.follows));
+  }
+
+  /* ══ FX2 (Nov 21 2026): at 390 x 844 (the tabs at every width), screenshots to Downloads\design (fx1Shot's scale) ══
+     The feed with a linked listing (Rose, a paid member): the rail 16 px above the bar, level with the caption block, Tip BFC
+     shown; the product strip (a 40 px tile, the title, the price, the cyan Buy pill) one link to the listing. A free viewer:
+     Tip unseen, nothing moved. The tabs on one line. The dashboard's first settle (no jump, no jerk, at rest on ORACLE's
+     front place in SETTLE_MS; under reduced motion, placed at once), then the Sun in the centre with its gold ring (the
+     shimmer stopped under reduced motion). The Profile without and with a banner (Edit profile: Change banner, Remove).
+     The Agent Directory: Compact by default, Grid two across, the choice saved and kept after a reload. */
+  {
+    const w = 390, h = 844, F = DS.FEED, G = DS.COLOR;
+    console.log("\n  FX2 at " + w + " x " + h);
+    Object.assign(P23S, await p23World());
+    const db = P23S.db, first = db.t.posts.slice().sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0];
+    db.t.marketplace_listings = [{ id: FX2_LISTING, slug: "strawberry-jam", seller_id: first.author_id, title: "Strawberry jam, 12 oz jar", price_bfc: 9, media: [], status: "active", created_at: first.created_at }];
+    first.listing_id = FX2_LISTING;
+    Object.assign(FX2S, { on: true, free: false, banner: null, agView: null, puts: [], profilePuts: [] });
+    const STRIP = String.raw`(function(id){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),r:+r.right.toFixed(1),b:+r.bottom.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+      var post=document.querySelector('#feed [data-post="'+id+'"]');var b=post&&post.querySelector('.bfp-buy');var tip=post&&post.querySelector('.bfp-tip');var go=b&&b.querySelector('.bfp-buy-go');
+      return {tag:b&&b.tagName,href:b&&b.getAttribute('href'),box:R(b),tile:R(b&&b.querySelector('.bfp-buy-tile')),go:R(go),goBg:go&&getComputedStyle(go).backgroundColor,goText:go&&go.textContent.trim(),text:b&&b.textContent.replace(/\s+/g,' ').trim(),
+        inMeta:!!(b&&b.closest('.bfp-meta')),tip:tip&&{vis:getComputedStyle(tip).visibility,hidden:tip.getAttribute('aria-hidden'),dis:tip.disabled,tab:tip.getAttribute('tabindex'),label:tip.getAttribute('aria-label')}};})`;
+
+    // 1. the feed with a listing, a paid member
+    await open(cdp, origin, "home.html", w, h, true);
+    let at = "FX2 feed (a paid member) at " + w + ": ";
+    const m = await ev(FX1_FEED_MEASURE + "(" + J(first.id) + ")"), st = await ev(STRIP + "(" + J(first.id) + ")");
+    if (!m || !st) check(at + "the newest post is on the screen", false, J([!!m, st]));
+    else {
+      const last = m.items[m.items.length - 1], gaps = m.items.slice(1).map((it, i) => +(it.box.t - m.items[i].box.b).toFixed(1));
+      check(at + "the rail " + F.RAIL.ORDER.join(", ") + ", every one shown, " + F.RAIL.GAP + " px apart; its bottom " + F.RAIL.BOTTOM_ABOVE_BAR + " px above the bar's top",
+        J(m.items.map(i => i.kind)) === J(F.RAIL.ORDER) && m.items.every(i => i.vis === "visible") && gaps.every(g => near(g, F.RAIL.GAP)) && near(last.box.b, m.bar.t - F.RAIL.BOTTOM_ABOVE_BAR),
+        J([m.items.map(i => i.kind + " " + i.vis + " " + i.box.t + "-" + i.box.b), m.bar.t]));
+      check(at + "the rail's bottom is level with the bottom-left block's (the caption and the strip)", near(last.box.b, m.meta.b), J([last.box.b, m.meta.b]));
+      check(at + "Tip BFC gold, reachable, labelled", !!st.tip && st.tip.vis === "visible" && st.tip.hidden === null && !st.tip.dis && st.tip.tab === null && st.tip.label === "Tip BFC" &&
+        m.items.find(i => i.kind === "tip").color === rgb(G.GOLD), J(st.tip));
+      check(at + "the product strip in the bottom-left block: a " + F.STRIP.TILE + " px tile, the title, the price, a cyan Buy pill " + F.STRIP.BUY_HEIGHT + " px tall; one link to /listing/strawberry-jam",
+        st.tag === "A" && st.href === "/listing/strawberry-jam" && st.inMeta && !!st.tile && near(st.tile.w, F.STRIP.TILE) && near(st.tile.h, F.STRIP.TILE) &&
+        /Strawberry jam, 12 oz jar/.test(st.text) && /9 BFC/.test(st.text) && st.goText === "Buy" && st.goBg === rgb(G.ACCENT) && near(st.go.h, F.STRIP.BUY_HEIGHT) && st.box.h >= 44 && st.box.r <= w - F.META.RIGHT + DS.TOLERANCE,
+        J(st));
+      await pageChecks(at);
+      await fx1Shot("live-feed-after-fx2.png");
+      FX2S.memberRail = m.items.map(i => [i.kind, i.box]);
+      FX2S.memberMeta = m.meta;
+    }
+    const other = db.t.posts.find(p => p.id !== first.id && p.status === "published" && !p.listing_id);
+    const none = other ? await ev("(function(){var p=document.querySelector('#feed [data-post=\"" + other.id + "\"]');return p?!!p.querySelector('.bfp-buy'):null;})()") : null;
+    check(at + "a post with no listing has no strip", none === false, J(none));
+    await click("#feed [data-post=\"" + first.id + "\"] .bfp-buy"); await sleep(1200);
+    const went = await ev("location.pathname");
+    check(at + "tapping the strip opens the listing's page", went === "/listing/strawberry-jam", J(went));
+
+    // 2. a free viewer: Tip unseen, nothing moves
+    FX2S.free = true;
+    await open(cdp, origin, "home.html", w, h, true);
+    at = "FX2 feed (a free viewer) at " + w + ": ";
+    const mf = await ev(FX1_FEED_MEASURE + "(" + J(first.id) + ")"), sf = await ev(STRIP + "(" + J(first.id) + ")");
+    if (!mf || !sf) check(at + "the newest post is on the screen", false, J([!!mf, sf]));
+    else {
+      check(at + "Tip BFC unseen and out of reach (disabled, out of the tab order, hidden from readers)", !!sf.tip && sf.tip.vis === "hidden" && sf.tip.hidden === "true" && sf.tip.dis && sf.tip.tab === "-1", J(sf.tip));
+      const moved = (FX2S.memberRail || []).filter(([k, b], i) => !mf.items[i] || mf.items[i].kind !== k || ["l", "t", "r", "b"].some(e => Math.abs(mf.items[i].box[e] - b[e]) > 0.5));
+      check(at + "nothing moves: every rail item and the bottom-left block where a member's are", !!FX2S.memberRail && moved.length === 0 && ["l", "t", "r", "b"].every(e => Math.abs(mf.meta[e] - FX2S.memberMeta[e]) <= 0.5), J(moved));
+      check(at + "the strip is the same for a free viewer", sf.href === "/listing/strawberry-jam", J(sf.href));
+      await pageChecks(at);
+      await fx1Shot("live-feed-free-fx2.png");
+    }
+    FX2S.free = false;
+
+    // 3. the tabs on one line at every width
+    for (const tw of P23_WIDTHS) {
+      await open(cdp, origin, "home.html", tw, HT[tw] || h, true);
+      const tb = await ev("[].filter.call(document.querySelectorAll('.feed-tab'),function(t){return t.getBoundingClientRect().width>0;}).map(function(t){var r=document.createRange();r.selectNodeContents(t);var tops={};[].forEach.call(r.getClientRects(),function(q){if(q.width>0)tops[Math.round(q.top)]=1;});var b=t.getBoundingClientRect();return {text:t.textContent.trim(),ws:getComputedStyle(t).whiteSpace,lines:Object.keys(tops).length,h:Math.round(b.height),r:Math.round(b.right)};})");
+      check("FX2 tabs at " + tw + ": " + F.TOP.TABS.join(", ") + " each on one line (never wrapped), inside the screen",
+        J(tb.map(t => t.text)) === J(F.TOP.TABS) && tb.every(t => t.ws === "nowrap" && t.lines === 1 && near(t.h, F.TOP.TAB_HEIGHT) && t.r <= tw), J(tb));
+    }
+
+    // 4. the dashboard's first settle, then the Sun
+    const frames = async reduced => {
+      await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: reduced ? "reduce" : "no-preference" }] });
+      await ev("sessionStorage.removeItem('bf_orbit_portal'),sessionStorage.setItem('fx2_frames','1'),true");
+      await open(cdp, origin, "dashboard.html", w, h, true);
+      await sleep(1200);
+      const r = await ev("(function(){var f=window.__fr||[],O=window.BFOrbit;return {f:f,drift:O&&O.DRIFT_MS,open:O&&O.state.open,front:O&&O.state.open?O.frontBase(O.state.open):null,base:O&&O.state.base,ms:O&&O.SETTLE_MS};})()");
+      await ev("sessionStorage.removeItem('fx2_frames'),true");
+      return r;
+    };
+    const mod = x => ((x % 360) + 360) % 360, same = (a, b) => Math.abs(((a - b) % 360 + 540) % 360 - 180) < 0.01;
+    let fr = await frames(false);
+    at = "FX2 HQ orbit at " + w + ": ";
+    {
+      const f = fr.f || [], oi = f.findIndex(x => x[2]);
+      const seg = oi > 0 ? f.slice(oi - 1) : [];
+      const speeds = seg.slice(1).map((x, i) => (x[1] - seg[i][1]) / ((x[0] - seg[i][0]) / 1000));   // degrees a second
+      let endAt = null; for (let i = oi; oi >= 0 && i < f.length; i++) if (same(f[i][1], fr.front)) { endAt = f[i][0] - f[oi - 1][0]; break; }
+      // the two frame loops (the orbit's and this recorder's) sample a frame at slightly different moments, so the speed is read over 100 ms windows
+      const win = []; for (let t = seg.length ? seg[0][0] : 0; seg.length && t + 100 <= seg[seg.length - 1][0]; t += 100) {
+        const at2 = x => { let k = seg.findIndex(q => q[0] >= x); if (k <= 0) return seg[0][1]; const a = seg[k - 1], b = seg[k]; return a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]); };
+        win.push((at2(t + 100) - at2(t)) * 10); }
+      const jerks = win.slice(1).map((v, i) => Math.abs(v - win[i]));
+      const steps = seg.slice(1).map((x, i) => Math.abs(x[1] - seg[i][1]));
+      const driftSpeed = 360 / fr.drift * 1000;
+      check(at + "the drift turned before the first opening (" + (oi > 0 ? f.slice(0, oi).length : 0) + " frames)", oi > 5 && Math.abs(f[oi - 1][1] - f[0][1]) > 0.01, J(f.slice(0, 3)));
+      check(at + "it eases to rest, no jump: it starts at the drift's own speed (" + driftSpeed.toFixed(1) + " deg/s), its speed (over 100 ms) changes by at most 1.5 deg/s, stays under 6, and no frame moves it over 0.5 deg",
+        speeds.length > 20 && win.length >= 10 && Math.abs(win[0] - driftSpeed) <= 1.5 && jerks.every(j => j <= 1.5) && win.every(v => Math.abs(v) <= 6) && steps.every(d => d <= 0.5),
+        J([win.map(v => +v.toFixed(2)), Math.max.apply(null, jerks.concat([0])).toFixed(2), Math.max.apply(null, steps.concat([0])).toFixed(3)]));
+      check(at + "at rest on " + fr.open + "'s front place in " + DS.ORBIT.SETTLE_MS + " ms (" + DS.ORBIT.SETTLE_MIN_MS + " to " + DS.ORBIT.SETTLE_MAX_MS + "), and still after",
+        fr.ms === DS.ORBIT.SETTLE_MS && endAt !== null && endAt >= DS.ORBIT.SETTLE_MIN_MS - 50 && endAt <= DS.ORBIT.SETTLE_MAX_MS + 50 && same(fr.base, fr.front) && same(f[f.length - 1][1], fr.front), J([endAt, fr.base, fr.front, fr.ms]));
+    }
+    fr = await frames(true);
+    {
+      const f = fr.f || [], bases = f.map(x => x[1]);
+      check(at + "under reduced motion nothing turns: placed at once on the front place", f.length > 20 && bases.every(b => same(b, bases[0])) && same(fr.base, fr.front), J([f.length, bases.slice(0, 3), fr.front]));
+      const an = await ev("(function(){var s=document.querySelector('#orbitCore .hq-core-sun-shimmer');return s?getComputedStyle(s).animationName:null;})()");
+      await ev("window.BFOrbit&&window.BFOrbit.open('oracle'),true"); await sleep(900);
+      const an2 = await ev("(function(){var s=document.querySelector('#orbitCore .hq-core-sun-shimmer');return s?getComputedStyle(s).animationName:null;})()");
+      check(at + "under reduced motion the Sun's shimmer is stopped", an === "none" && an2 === "none", J([an, an2]));
+    }
+    await cdp.send("Emulation.setEmulatedMedia", { features: [] });
+    await open(cdp, origin, "dashboard.html", w, h, true);
+    await ev("window.BFOrbit&&window.BFOrbit.open('oracle'),true"); await sleep(1500);
+    const sun = await ev(String.raw`(function(){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+      var core=document.getElementById('orbitCore'),s=core&&core.querySelector('.hq-core-sun'),img=s&&s.querySelector('img'),ring=core&&core.querySelector('.hq-gold-ring'),sh=s&&s.querySelector('.hq-core-sun-shimmer');
+      return {open:document.getElementById('orbitTop').getAttribute('data-hq-open'),core:R(core),sun:R(s),disp:s&&getComputedStyle(s).display,glow:s&&getComputedStyle(s).boxShadow,
+        img:img&&{done:img.complete,nw:img.naturalWidth,src:img.getAttribute('src'),fit:getComputedStyle(img).objectFit},ring:R(ring),ringDisp:ring&&getComputedStyle(ring).display,anim:sh&&getComputedStyle(sh).animationName,dur:sh&&getComputedStyle(sh).animationDuration,
+        coreMoon:!!core.querySelector('[data-hq-moon]'),nodeMoon:!!document.querySelector('.orbit-portal[data-portal=oracle] [data-hq-moon=node]'),chipMoon:!!document.querySelector('[data-hq-moon=chip]')};})()`);
+    at = "FX2 the Sun at " + w + ": ";
+    const sunBytes = (() => { try { return fs.statSync(path.join(FRONTEND, DS.HQ.SUN.FILE)).size; } catch (e) { return -1; } })();
+    check(at + "ORACLE open: the centre is the NASA SDO image (" + DS.HQ.SUN.FILE + ", " + sunBytes + " bytes, under " + DS.HQ.SUN.MAX_BYTES + "), loaded, filling the disc",
+      !!sun && sun.open === "oracle" && sun.disp === "block" && !!sun.img && sun.img.done && sun.img.nw > 0 && sun.img.src === "/" + DS.HQ.SUN.FILE && sun.img.fit === "cover" &&
+      sunBytes > 0 && sunBytes < DS.HQ.SUN.MAX_BYTES && near(sun.sun.w, sun.core.w) && near(sun.sun.h, sun.core.h), J([sun, sunBytes]));
+    check(at + "a glow, and a slow shimmer (" + DS.HQ.SUN.SHIMMER_S + " s)", !!sun && !!sun.glow && sun.glow !== "none" && !!sun.anim && sun.anim !== "none" && sun.dur === DS.HQ.SUN.SHIMMER_S + "s", J(sun && [sun.glow, sun.anim, sun.dur]));
+    check(at + "the gold ring kept round it (3 px outside the disc), shown", !!sun && sun.ringDisp !== "none" && !!sun.ring && near(sun.ring.w, sun.core.w + 6) && near(sun.ring.l, sun.core.l - 3), J(sun && [sun.ring, sun.core]));
+    check(at + "the ORACLE node and the chip keep the moon; the centre has none", !!sun && !sun.coreMoon && sun.nodeMoon && sun.chipMoon, J(sun && [sun.coreMoon, sun.nodeMoon, sun.chipMoon]));
+    await pageChecks(at);
+    await fx1Shot("live-hq-oracle-sun-fx2.png");
+
+    // 5. the Profile, without and with a banner
+    const PROF = String.raw`(function(){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),r:+r.right.toFixed(1),b:+r.bottom.toFixed(1)};};
+      var av=document.querySelector('.pfs-av'),bn=document.querySelector('.pfs-banner'),img=bn&&bn.querySelector('img');
+      return {bar:R(document.querySelector('.pfs-bar')),pic:R(document.querySelector('.pfs-pic')||av),banner:R(bn),ring:av&&getComputedStyle(av).backgroundImage,fit:img&&getComputedStyle(img).objectFit,
+        mask:bn&&(getComputedStyle(bn).maskImage||getComputedStyle(bn).webkitMaskImage),src:img&&img.getAttribute('src'),has:!!document.querySelector('.pfs.has-banner')};})()`;
+    await open(cdp, origin, "profile.html", w, h, true);
+    at = "FX2 Profile (no banner) at " + w + ": ";
+    let pr = await ev(PROF);
+    const P = DS.PROFILE;
+    check(at + "the top row " + P.TOP.ROW_TOP + " px below the safe area (none in this browser)", !!pr.bar && near(pr.bar.t, P.TOP.ROW_TOP), J(pr.bar));
+    check(at + "the ring a " + P.AVATAR.RING_ANGLE + "deg teal-to-purple gradient (the theme's two accents)", /^linear-gradient\(135deg, rgb\(34, 211, 238\)/.test(pr.ring || "") && /rgb\(139, 92, 246\)\)$/.test(pr.ring || ""), J(pr.ring));
+    check(at + "no banner unless the member sets one", !pr.banner && !pr.has, J(pr.banner));
+    await pageChecks(at);
+    await fx1Shot("live-profile-fx2.png");
+    FX2S.banner = "/brand/force-hex-tile-1024.png";
+    await open(cdp, origin, "profile.html", w, h, true);
+    at = "FX2 Profile (a banner) at " + w + ": ";
+    pr = await ev(PROF);
+    check(at + "the banner from the screen's top to the picture's bottom (" + P.BANNER.BOTTOM + " px), the screen's width, cover-cropped, fading out",
+      !!pr.banner && near(pr.banner.t, 0) && near(pr.banner.b, P.BANNER.BOTTOM) && near(pr.banner.b, pr.pic.b) && near(pr.banner.l, 0) && near(pr.banner.r, w) && pr.fit === "cover" &&
+      /linear-gradient/.test(pr.mask || "") && pr.src === FX2S.banner && pr.has, J(pr));
+    check(at + "the top row and the picture where they are without one", !!pr.bar && near(pr.bar.t, P.TOP.ROW_TOP) && near(pr.pic.t, P.AVATAR.TOP), J([pr.bar, pr.pic]));
+    await pageChecks(at);
+    await fx1Shot("live-profile-banner-fx2.png");
+    await click("#pfsEdit"); await sleep(600);
+    const ed = await ev("(function(){var a=document.getElementById('pfsBannerPick'),b=document.getElementById('pfsBannerRemove'),bn=document.querySelector('.pfs-banner');var r=a&&a.getBoundingClientRect(),q=b&&b.getBoundingClientRect();return {pick:a&&a.textContent.trim(),remove:b&&b.textContent.trim(),pw:r&&Math.round(r.height),rw:q&&Math.round(q.height),bannerShown:!!bn&&getComputedStyle(bn).display!=='none',file:!!document.getElementById('fi-banner')};})()");
+    check(at + "Edit profile: Change banner (the page's own upload) and Remove banner, each 44 px or more; the banner itself steps aside",
+      ed.pick === "Change banner" && ed.remove === "Remove banner" && ed.pw >= 44 && ed.rw >= 44 && !ed.bannerShown && ed.file, J(ed));
+    await click("#pfsBannerRemove"); await sleep(900);
+    const gone = await ev("({banner:!!document.querySelector('.pfs-banner'),pick:(document.getElementById('pfsBannerPick')||{}).textContent||null})");
+    check(at + "Remove banner saves banner_url null and the banner is gone (Add banner offered)", FX2S.profilePuts.length === 1 && J(FX2S.profilePuts[0]) === J({ banner_url: null }) && !gone.banner && /Add banner/.test(gone.pick || ""),
+      J([FX2S.profilePuts, gone]));
+    FX2S.banner = null;
+
+    // 6. the Agent Directory
+    const AGM = String.raw`(function(){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+      var it=[].slice.call(document.querySelectorAll('#agList .ag-item'));var list=document.getElementById('agList'),grid=document.querySelector('.agents-grid');
+      return {view:document.querySelector('.page').getAttribute('data-ag-view'),btns:[].map.call(document.querySelectorAll('.ag-view-btn'),function(b){var r=R(b);return {v:b.getAttribute('data-view'),p:b.getAttribute('aria-pressed'),w:r.w,h:r.h};}),
+        items:it.map(function(x){return R(x);}),cards:document.querySelectorAll('article.agent-card').length,listShown:!!list&&getComputedStyle(list).display!=='none',gridShown:!!grid&&getComputedStyle(grid).display!=='none',
+        local:localStorage.getItem('bf_agents_view'),over:[].filter.call(document.querySelectorAll('.ag-name,.ag-sub'),function(n){return n.scrollWidth>n.clientWidth+1;}).length};})()`;
+    await ev("localStorage.removeItem('bf_agents_view'),true");
+    await open(cdp, origin, "ai-agents.html", w, h, true);
+    at = "FX2 Agent Directory at " + w + ": ";
+    let ag = await ev(AGM);
+    const A = DS.AGENTS;
+    check(at + "Large, Compact, Grid, each " + A.BUTTON + " x " + A.BUTTON + " with aria-pressed; Compact by default", J(ag.btns.map(b => b.v)) === J(A.VIEWS) && ag.btns.every(b => near(b.w, A.BUTTON) && near(b.h, A.BUTTON)) &&
+      ag.view === "compact" && J(ag.btns.map(b => b.p)) === J(["false", "true", "false"]), J([ag.view, ag.btns]));
+    check(at + "Compact: one " + A.ROW + " px row per agent (" + ag.cards + "), one under another, nothing cut off; the cards set aside",
+      ag.cards > 0 && ag.items.length === ag.cards && ag.items.every(x => near(x.h, A.ROW) && near(x.w, ag.items[0].w)) && ag.items.slice(1).every((x, i) => x.t > ag.items[i].t) && ag.over === 0 && ag.listShown && !ag.gridShown,
+      J([ag.items.slice(0, 3), ag.over]));
+    await pageChecks(at + "Compact: ");
+    await fx1Shot("live-agents-compact-fx2.png");
+    await click('.ag-view-btn[data-view="grid"]'); await sleep(500);
+    ag = await ev(AGM);
+    check(at + "Grid: " + A.GRID_COLUMNS + " across, equal, nothing cut off; saved on this device and on the account",
+      ag.view === "grid" && ag.items.length > 2 && near(ag.items[0].t, ag.items[1].t) && ag.items[2].t > ag.items[0].t && near(ag.items[0].w, ag.items[1].w) && near(ag.items[2].l, ag.items[0].l) && ag.over === 0 &&
+      ag.local === "grid" && J(FX2S.puts) === J([{ agents_card_view: "grid" }]), J([ag.view, ag.items.slice(0, 3), ag.local, FX2S.puts]));
+    await pageChecks(at + "Grid: ");
+    await fx1Shot("live-agents-grid-fx2.png");
+    await open(cdp, origin, "ai-agents.html", w, h, true);
+    ag = await ev(AGM);
+    check(at + "a reload keeps Grid", ag.view === "grid", J(ag.view));
+    await ev("localStorage.setItem('bf_agents_view','large'),true");
+    await open(cdp, origin, "ai-agents.html", w, h, true);
+    ag = await ev(AGM);
+    check(at + "the account's choice wins over this device's (Grid over a device's Large), and becomes this device's", ag.view === "grid" && ag.local === "grid", J([ag.view, ag.local]));
+    await click('.ag-view-btn[data-view="large"]'); await sleep(500);
+    ag = await ev(AGM);
+    check(at + "Large: the page's own cards again", ag.view === "large" && ag.gridShown && !ag.listShown && FX2S.agView === "large", J([ag.view, ag.gridShown, FX2S.agView]));
+    FX2S.on = false;
+    console.log("    FX2 screenshots: " + FX1_DIR);
   }
   console.log("    screenshots: " + P23_OUT);
 }

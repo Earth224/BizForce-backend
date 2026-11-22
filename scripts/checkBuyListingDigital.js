@@ -9,7 +9,7 @@
    download, and the listing sold out after one copy.
 
    WHAT THIS PROVES
-     R. THE MIGRATIONS: 199 is the highest (P3-2); only 191 to 199 are above 190.
+     R. THE MIGRATIONS: 200 is the highest (FX2); only 191 to 200 are above 190.
      S. MIGRATION 192, as text: one transaction; the guard drops only a
         single-column unique rule on marketplace_orders.listing_id (and says
         so); and the function is 089's body with exactly the documented
@@ -62,8 +62,10 @@ const BUYER = "11111111-1111-4111-8111-111111111111", SELLER = "22222222-2222-42
   // 198_storage_account_backfill.sql (P3-1A's 196a/196b/196c, renamed) are allowed above 190 too, by name.
   // NAMED (Nov 21 2026, P3-2, migration 199): BEFORE "the highest migration is 198" and "only 191 to 198 are above 190". AFTER 199 is
   // the highest, and 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above 190 too.
-  check("R1. the highest migration is 199 (P3-2)", Math.max(...nums) === 199, Math.max(...nums));
-  check("R2. only 191 to 199 are above 190", J(above) === J(["191_safety.sql", "192_buy_listing_digital.sql", "193_posts.sql", "194_social_graph.sql", "195_users_email_canonical.sql", "196_storage_account_tables.sql", "197_storage_account_functions.sql", "198_storage_account_backfill.sql", "199_verified_badge.sql"]), J(above));
+  // NAMED (Nov 21 2026, FX2, migration 200): BEFORE "the highest migration is 199" and "only 191 to 199 are above 190". AFTER 200
+  // (200_categories_and_intent.sql, applied by hand Nov 21 2026) is the highest, and it is allowed above 190 too.
+  check("R1. the highest migration is 200 (FX2)", Math.max(...nums) === 200, Math.max(...nums));
+  check("R2. only 191 to 200 are above 190", J(above) === J(["191_safety.sql", "192_buy_listing_digital.sql", "193_posts.sql", "194_social_graph.sql", "195_users_email_canonical.sql", "196_storage_account_tables.sql", "197_storage_account_functions.sql", "198_storage_account_backfill.sql", "199_verified_badge.sql", "200_categories_and_intent.sql"]), J(above));
 
   /* ── S ── */
   console.log("\n══ S. migration 192 ══");

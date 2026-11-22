@@ -320,8 +320,9 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     check("I3. no listed page is a sign-in or billing page, and nothing listed is under /api",
       PAGES.length >= 20 && PAGES.every(p => NEVER.indexOf(p) === -1 && !/^api\//.test(p) && /\.html$/.test(p)) && STATIC.every(f => !/^\/api/.test(f)),
       PAGES.filter(p => NEVER.indexOf(p) !== -1).join(","));
-    check("I4. every static file it lists is a stylesheet, script, icon or the manifest, and exists in the frontend",
-      STATIC.every(f => /^\/(css\/[\w.-]+\.css|scripts\/[\w.-]+\.js|icons\/[\w.-]+\.(png|svg)|manifest\.json)$/.test(f) && fs.existsSync(path.join(FRONTEND, f))),
+    // NAMED (Nov 21 2026, FX2): BEFORE stylesheets, scripts, icons and the manifest. AFTER also an image in brand/ (the HQ orbit's Sun, a WebP).
+    check("I4. every static file it lists is a stylesheet, script, icon, brand image or the manifest, and exists in the frontend",
+      STATIC.every(f => /^\/(css\/[\w.-]+\.css|scripts\/[\w.-]+\.js|icons\/[\w.-]+\.(png|svg)|brand\/[\w.-]+\.webp|manifest\.json)$/.test(f) && fs.existsSync(path.join(FRONTEND, f))),
       STATIC.filter(f => !fs.existsSync(path.join(FRONTEND, f))).join(","));
     const pageSrc = p => lf(fs.readFileSync(path.join(FRONTEND, p), "utf8"));
     /* NAMED (Nov 11 2026, polish): every same-origin script any page loads is in STATIC_FILES, or exempt for a stated
@@ -379,13 +380,15 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // NAMED (Nov 20 2026, FX1): BEFORE "p23". AFTER "fx1": Home's feed and the Profile as the approved design pictures.
     // NAMED (Nov 20 2026, P3-1): BEFORE "fx1". AFTER "p31": free accounts (the members panel, the verification banner, landing by tier).
     // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
-    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-p32", names.length === 1 && names[0] === "bf-shell-abc1234-p32", names.join(","));
+    // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-fx2", names.length === 1 && names[0] === "bf-shell-abc1234-fx2", names.join(","));
     // NAMED (Nov 20 2026, P2-2): BEFORE at most 600 characters between BUILD and SHELL_REV; AFTER 800, for P2-2's one-line note.
     // NAMED (Nov 20 2026, P2-3): BEFORE 800; AFTER 1000, for P2-3 one-line note (861 today).
     // NAMED (Nov 20 2026, P3-1): BEFORE at most 1000 characters between BUILD and SHELL_REV; AFTER 1400, for P3-1's one-line note.
+    // NAMED (Nov 21 2026, FX2): BEFORE 1400; AFTER 1800, for FX2's one-line note (1450 today).
     check("I8. netlify.toml's build writes the deploying commit into sw.js, and sw.js carries the placeholder it replaces",
       /command = 'sed -i "s\/__BF_BUILD__\/\$\{COMMIT_REF:-local\}\/" sw\.js'/.test(FILES[TOML]) && (FILES[SW].match(/__BF_BUILD__/g) || []).length === 1 &&
-      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,1400}?var SHELL_REV = "p32";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,1800}?var SHELL_REV = "fx2";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -394,7 +397,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // activate: an older shell cache goes, another app's cache stays
     sw.caches.set("bf-shell-old0000", new Map()); sw.caches.set("someone-else", new Map());
     await sw.dispatch("activate");
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-p32") && sw.caches.has("someone-else"),
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-fx2") && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle
@@ -604,8 +607,10 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        sign-out clears it.
        NAMED BEFORE → AFTER (Nov 19 2026, HQ1). BEFORE: PER_USER had 12 keys. AFTER: 14; bf_hq_view and bf_hq_orbit (the phone
        dashboard's card view and orbit choice, scripts/bf-hq-views.js, the device copy of user_preferences.hq_card_view and
-       hq_orbit) are the member's choices, so sign-out clears them. */
-    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "bf_main_boxes", "bf_hq_view", "bf_hq_orbit", "mcTargetGoalConversions", "bf_theme", "bf_music"];
+       hq_orbit) are the member's choices, so sign-out clears them.
+       NAMED BEFORE → AFTER (Nov 21 2026, FX2). BEFORE: PER_USER had 14 keys. AFTER: 15; bf_agents_view (the phone Agent Directory's
+       view, scripts/bf-agents-views.js, the device copy of user_preferences.agents_card_view) is the member's choice, so sign-out clears it. */
+    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "bf_main_boxes", "bf_hq_view", "bf_hq_orbit", "bf_agents_view", "mcTargetGoalConversions", "bf_theme", "bf_music"];
     const SESSION_PREFIX = "bf_tmx_insight:";
     /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
