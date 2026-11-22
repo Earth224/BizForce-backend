@@ -41,6 +41,11 @@
        135 degrees; the optional banner (PROFILE.BANNER);
      the Agent Directory's three views (AGENTS), the Oracle's Sun (HQ.SUN)
        and the orbit's first settle (ORBIT).
+
+   NAMED (Nov 22 2026, FX3): THE OWNER'S CANVAS, ROW 5 (four boards, 390 x 844):
+   "HQ: the abyss sun" (TmxHQ), "The Guide open" (TmxGuideOpen), "The chat on
+   a page" (TmxChatGuide) and "The chat with ORACLE open" (TmxChatOracle). Their
+   figures are TMX below. BEFORE HQ.SUN (the NASA photograph); AFTER HQ.ABYSS.
    ══════════════════════════════════════════════════════════════════════════ */
 
 const TOLERANCE = 2;
@@ -202,7 +207,28 @@ const AGENTS = {
   KEY: "bf_agents_view"     // the device copy; the member's choice is user_preferences.agents_card_view
 };
 // NAMED (Nov 21 2026, FX2): the HQ orbit's centre while ORACLE is open, and its first settle
-const HQ = { SUN: { FILE: "brand/sun-sdo-hmi-20261121.webp", MAX_BYTES: 120 * 1024, SHIMMER_S: 16 } };
+// NAMED (Nov 22 2026, FX3): BEFORE HQ = { SUN: { FILE: "brand/sun-sdo-hmi-20261121.webp", MAX_BYTES: 120 * 1024, SHIMMER_S: 16 } }.
+// AFTER the abyss sun (board TmxHQ): the disc is the orbit's centre (the Sun's size, unchanged), the chat box's void inside the gold ring.
+const HQ = { ABYSS: {
+  VOID_BASE: "rgba(2,1,10,0.98)",                                  // under the four gradients, as #tmx-chat
+  VOID_SIZES: "200% 200%, 200% 200%, 200% 200%, 240% 240%",
+  VOID_ANIMATION: "tmx-chat-void 22s ease-in-out infinite",
+  STAR_BASE: { W: 288, H: 340, COUNTS: [70, 35, 16] },             // the chat box's starfield, per its own area
+  BOARD_RING: 104,                                                 // the board's 104 px: the gold ring's outer box at 390 px (the disc inside it is
+                                                                   // the centre's circle, the Sun's size, 98 px at 390)
+  BOARD_COUNTS: [8, 4, 2],                                         // a 104 px box at the chat's density (the formula's worked example)
+  RING: "gold",                                                    // the moon ring stays gold
+  NO_GREEN_RING: [".orbit-core-halo", ".orbit-core-arc", ".orbit-goal-arc"]
+} };
+// NAMED (Nov 22 2026, FX3): Termaximus on the phone (760 px and below), the boards TmxGuideOpen, TmxChatGuide and TmxChatOracle
+const TMX = {
+  BOARDS: ["TmxHQ", "TmxGuideOpen", "TmxChatGuide", "TmxChatOracle"],
+  MIST: { SIZE: 56, DESK_SIZE: 110, RIGHT: 16, ABOVE_BAR: 16, LABEL: "Ask Termaximus", Z: 46 },   // the board: right 16, bottom 100 (84 bar + 16)
+  GUIDE: { TAB_W: 32, TAB_MIN_H: 170, TAB_PAD: "14px 0", TAB_RADIUS: "0 14px 14px 0", TAB_BG: "rgba(12, 18, 38, 0.78)", TAB_BLUR: 14,
+    PANEL_W: 300, PANEL_EDGE: 48, PANEL_MAX_VH: 70, PANEL_RADIUS: "0 20px 20px 0", PANEL_BG: "rgba(12, 18, 38, 0.9)", PANEL_BLUR: 18, SLIDE_S: 0.3 },
+  CHAT: { SIDE: 8, ABOVE_MIST: 10, HEIGHT: 420, TOP_GAP: 16 },   // the board: right 8, bottom 166 (100 + 56 + 10), 374 x 420
+  STILL_FADE_S: 0.2                                              // under reduced motion every open and close is this fade
+};
 const ORBIT = { SETTLE_MS: 1300, SETTLE_MIN_MS: 1000, SETTLE_MAX_MS: 1500 };
 
-module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT };   // NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT
+module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX };   // NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN

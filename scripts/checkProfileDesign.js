@@ -706,7 +706,9 @@ async function editorSection(routes) {
   pv.dispatchEvent(new pv.MessageEvent("message", { data: { type: "bf-profile-preview", design: draft, photo_url: null, name: "Alice" }, origin: ORIGIN, source: pv }));
   check("F14. the preview ignores a draft from another origin", fromEvil === null, fromEvil);
   check("F14. ... draws a draft from its parent, same origin, and redraws the grid and videos", pv.document.documentElement.getAttribute("data-pd-layout") === "minimal" && redrawn === 1);
-  check("F14. ... and keeps the mist and the boombox out of the preview", Array.prototype.some.call(pv.document.querySelectorAll("style"), st => /#tmx-presence-root,#tmx-chat,\.bfm-float\{display:none!important\}/.test(st.textContent)));
+  // NAMED (Nov 22 2026, FX3): BEFORE the rule hid the mist, the chat and the boombox; AFTER it also hides the Guide's tab
+  // (#tmx-guide-root), which FX3 shows at every width, so the preview stays free of it as it was of the book button.
+  check("F14. ... and keeps the mist, the Guide and the boombox out of the preview", Array.prototype.some.call(pv.document.querySelectorAll("style"), st => /#tmx-presence-root,#tmx-chat,#tmx-guide-root,\.bfm-float\{display:none!important\}/.test(st.textContent)));
   check("F14. profile.html draws the preview's draft, not the saved design, once its data is in",
     /function designNow\(\) \{\n  if \(bfPreview && window\.BFProfileDesign && window\.BFProfileDesign\.current\(\)\) return window\.BFProfileDesign\.current\(\);/.test(FILES[PROFILE]));
   pv.close();

@@ -44,6 +44,7 @@ const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "Biz
 const MUTATE = process.env.MUTATE || "";
 const PHONE = "css/bf-phone.css", DASH = "dashboard.html", ORBIT = "scripts/bf-orbit.js", BOX = "scripts/bf-boombox.js";
 const PROFILE = "scripts/agent-profile.js", SW = "sw.js", GUIDE = "scripts/termaximus-guide.js";
+const PRESENCE = "scripts/termaximus-presence.js";   // NAMED (Nov 22 2026, FX3): the phone's mist is drawn there now
 
 const MUTATIONS = {
   // a phone rule outside the media block reaches the desktop (P)
@@ -70,10 +71,17 @@ const MUTATIONS = {
   "orbit-ellipse": [[ORBIT, "rx: r, ry: r,", "rx: r, ry: Math.round(r * 0.4),"]],
   // the orbit stands still on the phone (B)
   "phone-no-drift": [[ORBIT, "  function drifting() { return !state.open && !state.hover && !state.focus && !reduced() && !document.hidden; }", "  function drifting() { return !state.open && !state.hover && !state.focus && !reduced() && !document.hidden && !phone(); }"]],
-  // the Guide grows past 48 px on the phone (C)
-  "guide-56": [[PHONE, "  #tmx-guide-fab { width: 48px; height: 48px; min-width: 48px; min-height: 48px;", "  #tmx-guide-fab { width: 56px; height: 56px; min-width: 56px; min-height: 56px;"]],
-  // the Guide ignores the safe area (C)
-  "guide-no-inset": [[PHONE, "bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }", "bottom: 16px; }"]],
+  // NAMED (Nov 22 2026, FX3): BEFORE "guide-56" and "guide-no-inset" (the book button's size and inset, gone). AFTER:
+  // the book button comes back (C)
+  "book-button-back": [[PHONE, "  canvas.star-canvas, #starCanvas {", "  #tmx-guide-fab { width: 48px; height: 48px; min-width: 48px; min-height: 48px; }\n  canvas.star-canvas, #starCanvas {"]],
+  // the mist grows past 56 px (C)
+  "mist-64": [[PRESENCE, "  var TMX_PHONE_MIST = 56, TMX_DESK_MIST = 110;", "  var TMX_PHONE_MIST = 64, TMX_DESK_MIST = 110;"]],
+  // the mist ignores the safe area (C)
+  "mist-no-inset": [[PRESENCE, "right: 16px !important; bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;", "right: 16px !important; bottom: 16px !important;"]],
+  // a Guide spacer comes back (C)
+  "guide-spacer-back": [[GUIDE, "  var accessKnown = false;\n", "  var accessKnown = false;\n  var fabSpacer = document.createElement(\"div\"); fabSpacer.id = \"tmx-guide-fab-spacer\";\n"]],
+  // the Guide's tab moves to the bottom (C)
+  "guide-tab-low": [[GUIDE, "    \"#tmx-guide-root {\",\n    \"  position: fixed;\",\n    \"  top: 50%;\",", "    \"#tmx-guide-root {\",\n    \"  position: fixed;\",\n    \"  top: 90%;\","]],
   // the music button floats over the page on a phone (D)
   "music-floats": [[BOX, "      if (phoneRow() && state === \"icon\" && !home) { var row = headerRow(); if (row) { toRow(row); return; } }\n", ""]],
   // the live tiles are cut to an ellipsis again (E)
@@ -84,8 +92,10 @@ const MUTATIONS = {
   "card-icon-60": [[DASH, "    .orbit-main-head .bf-hq-icon,.orbit-main-box .bf-card-icon{width:44px;height:44px;flex:0 0 44px;margin:0}\n", ""]],
   // the stars sit over the text and take taps (G)
   "stars-over-text": [[PHONE, "  canvas.star-canvas, #starCanvas { z-index: -1 !important; pointer-events: none !important; opacity: .75; }\n", ""]],
-  // the mist is over the text (G)
-  "mist-over-text": [[PHONE, "  #tmx-presence-root { z-index: -1 !important;", "  #tmx-presence-root { z-index: 5 !important;"]],
+  // NAMED (Nov 22 2026, FX3): BEFORE "mist-over-text" (the mist under the page). AFTER the old rule sending it under the page comes back (G)
+  "mist-under-page-back": [[PHONE, "  canvas.star-canvas, #starCanvas {", "  #tmx-presence-root { z-index: -1 !important; opacity: .6; pointer-events: none !important; }\n  canvas.star-canvas, #starCanvas {"]],
+  // the corner stars over the text (G)
+  "corner-over-text": [[PHONE, "  .corner-star, #oracleCornerStar { z-index: -1 !important;", "  .corner-star, #oracleCornerStar { z-index: 2 !important;"]],
   // 100dvh without its 100vh fallback (H)
   "dvh-no-fallback": [[PHONE, "  html, body { min-height: 100vh; min-height: 100dvh; }", "  html, body { min-height: 100dvh; }"]],
   // a field under 16 px (H)
@@ -103,12 +113,14 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"p31c\";", "var SHELL_REV = \"\";"]],
+  // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx3\";", "var SHELL_REV = \"\";"]],
   // bf-phone.css is not cached for offline (S)
   "sw-without-phone-css": [[SW, "  \"/css/bf-phone.css\",", ""]],
   // an emoji slips into the phone stylesheet (N)
   // (a mobile phone, built from its code point so this file holds none: checkNoEmoji N2)
-  "emoji": [[PHONE, "/* ── C. The Guide:", "/* " + String.fromCodePoint(0x1F4F1) + " ── C. The Guide:"]]
+  // NAMED (Nov 22 2026, FX3): BEFORE anchored on "/* ── C. The Guide:" (that comment went with the book button's rules). AFTER on G's
+  "emoji": [[PHONE, "/* ── G. Decoration behind the text:", "/* " + String.fromCodePoint(0x1F4F1) + " ── G. Decoration behind the text:"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -118,7 +130,7 @@ const MAP = JSON.parse(fs.readFileSync(path.join(REPO, "lib", "appMap.json"), "u
 const PAGES = Object.keys(MAP.pages).map(k => String(MAP.pages[k].p || "/" + k).replace(/^\//, ""));
 const FILES = {};
 const read = f => { try { return fs.readFileSync(path.join(FRONTEND, f), "utf8").replace(/\r\n/g, "\n"); } catch (e) { return null; } };
-[PHONE, DASH, ORBIT, BOX, PROFILE, SW, GUIDE].concat(PAGES).forEach(f => { if (!(f in FILES)) FILES[f] = read(f); });
+[PHONE, DASH, ORBIT, BOX, PROFILE, SW, GUIDE, PRESENCE].concat(PAGES).forEach(f => { if (!(f in FILES)) FILES[f] = read(f); });
 if (MUTATE) {
   for (const [file, from, to] of MUTATIONS[MUTATE]) FILES[file] = s.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
   console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
@@ -208,10 +220,16 @@ check("B5. THIS WEEK and the goal button under the orbit at the card's width (.o
 /* ── C. the Guide ── */
 console.log("\n══ C. the Guide ══");
 const mb = M ? M.body : "";
-check("C1. the Guide is 48 px, bottom-right inside the safe area, round", /#tmx-guide-fab \{ width: 48px; height: 48px; min-width: 48px; min-height: 48px;\s*right: calc\(16px \+ env\(safe-area-inset-right, 0px\)\); bottom: calc\(16px \+ env\(safe-area-inset-bottom, 0px\)\); \}/.test(mb) &&
-  /#tmx-guide-fab \{ left: auto; padding: 0; gap: 0; border-radius: 50%; \}/.test(mb));
-check("C2. every page ends with the Guide's spacer (80 px and the bottom inset), so at the end it covers nothing", /#tmx-guide-fab-spacer \{ display: block !important; height: calc\(80px \+ env\(safe-area-inset-bottom, 0px\)\) !important; \}/.test(mb) &&
-  has(FILES[GUIDE], "#tmx-guide-fab-spacer"));
+// NAMED (Nov 22 2026, FX3): BEFORE "C1. the Guide is 48 px, bottom-right inside the safe area, round" and "C2. every page ends with the Guide's
+// spacer (80 px and the bottom inset)" (the book button, gone). AFTER no book button; the bottom-right is the mist, a 56 px button inside the
+// safe area; the Guide is its tab at the left edge, in the middle, so the page's end needs no spacer.
+const PR = FILES[PRESENCE] || "", GD = (FILES[GUIDE] || "").replace(/\/\*[\s\S]*?\*\//g, "");
+check("C1. no book button; bottom-right is the mist: 56 px (the 110 px mist scaled), 16 px from the right, inside the bottom safe area",
+  !/tmx-guide-fab/.test(mb) && !/tmx-guide-fab/.test(GD) && has(PR, "  var TMX_PHONE_MIST = 56, TMX_DESK_MIST = 110;") &&
+  has(PR, "  #tmx-presence-root { top: auto !important; left: auto !important; right: 16px !important; bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;"));
+check("C2. no Guide spacer: nothing fixed sits at the page's end (the Guide's tab is at the left edge, in the middle)",
+  !/tmx-guide-fab-spacer/.test(mb) && !/tmx-guide-fab-spacer/.test(GD) &&
+  has(FILES[GUIDE], "    \"#tmx-guide-root {\",\n    \"  position: fixed;\",\n    \"  top: 50%;\",\n    \"  left: 0;\",\n    \"  transform: translateY(-50%);\","));
 
 /* ── D. the music button ── */
 console.log("\n══ D. the music button in the header row ══");
@@ -242,8 +260,10 @@ check("F1. 16 px of even padding; the 44 px icon, the title and Swap on one row;
 
 /* ── G. decoration ── */
 console.log("\n══ G. the decoration behind the text ══");
-check("G1. the mist, the star canvases and the corner stars sit under the page (z-index -1), faded, and take no tap",
-  /#tmx-presence-root \{ z-index: -1 !important; opacity: \.6; pointer-events: none !important; \}/.test(mb) && /\.tmx-star \{ pointer-events: none !important; \}/.test(mb) &&
+// NAMED (Nov 22 2026, FX3): BEFORE "the mist, the star canvases and the corner stars sit under the page". AFTER the mist is a button over the
+// page (C1, scripts/checkTermaximusPhone.js C), so bf-phone.css holds no rule for it or its stars; the canvases and corner stars stay under.
+check("G1. the star canvases and the corner stars sit under the page (z-index -1), faded, and take no tap; no rule here sends the mist under it",
+  !/#tmx-presence-root|\.tmx-star/.test(mb.replace(/\/\*[\s\S]*?\*\//g, "")) &&
   /canvas\.star-canvas, #starCanvas \{ z-index: -1 !important; pointer-events: none !important; opacity: \.75; \}/.test(mb) &&
   /\.corner-star, #oracleCornerStar \{ z-index: -1 !important; pointer-events: none !important; opacity: \.55; \}/.test(mb));
 check("G2. the legal footer sits above the decoration (z-index 1)", /\.bf-legal-footer \{ position: relative; z-index: 1; \}/.test(mb));
@@ -271,7 +291,8 @@ const W = FILES[SW] || "";
 // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
 // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
 // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-check("S1. the shell's cache version is bumped: SHELL_REV \"p31c\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"p31c\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+// NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
+check("S1. the shell's cache version is bumped: SHELL_REV \"fx3\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"fx3\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
 check("S2. css/bf-phone.css is cached with the shell, for a page opened offline", /\n  "\/css\/bf-phone\.css",/.test(W));
 
 /* ── N. no emoji ── */

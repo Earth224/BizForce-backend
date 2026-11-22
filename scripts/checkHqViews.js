@@ -94,15 +94,22 @@ const MUTATIONS = {
   "no-server-save": [[VIEWS, "apply(); return save({ hq_card_view: value }); }", "apply(); return null; }"]],
   "server-does-not-win": [[VIEWS, "        if (v) { state.view = v; writeLocal(VIEW_KEY, v); }", "        if (false) { state.view = v; writeLocal(VIEW_KEY, v); }"]],
   "desktop-asks-server": [[VIEWS, "    if (!phone() || state.server || typeof fetch !== \"function\")", "    if (state.server || typeof fetch !== \"function\")"]],
-  // NAMED (Nov 21 2026, FX2): the hide list gained .hq-core-sun (its line carries a NAMED comment after the rule)
-  "phone-rule-leaks": [[DASH, "  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-sun,.hq-gold-ring{display:none}", "  .hq-view-row{display:flex}\n  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-sun,.hq-gold-ring{display:none}"]],
-  // NAMED (Nov 21 2026, FX2): the Sun in the centre
-  "sun-back-to-moon": [[VIEWS, "      var c = el(\"span\", \"hq-core-sun\");\n", "      var c = el(\"span\", \"hq-core-moon\"); c.setAttribute(\"data-hq-moon\", \"core\");\n"]],
-  "sun-wrong-image": [[VIEWS, "      sun.src = \"/brand/sun-sdo-hmi-20261121.webp\";\n", "      sun.src = \"https://sdo.gsfc.nasa.gov/assets/img/latest/latest_1024_HMIIC.jpg\";\n"]],
-  "sun-no-credit": [[VIEWS, "Credit: Courtesy of NASA/SDO and the\n     HMI science team.", "Credit: NASA."]],
-  "sun-shimmers-when-reduced": [[DASH, "    @media (prefers-reduced-motion: reduce){ .hq-core-sun-shimmer{animation:none} }\n", ""]],
-  "sun-no-glow": [[DASH, "      box-shadow:0 0 8px 1px rgba(255,196,110,.55),0 0 26px 6px rgba(255,150,50,.30),0 0 56px 16px rgba(255,120,30,.14)}\n", "      box-shadow:none}\n"]],
-  "sun-always-shown": [[DASH, "    #orbitTop[data-hq-open=\"oracle\"] .hq-core-sun{display:block;", "    #orbitTop .hq-core-sun{display:block;"]],
+  // NAMED (Nov 21 2026, FX2): the hide list gained .hq-core-sun (its line carries a NAMED comment after the rule). NAMED (Nov 22 2026, FX3): now .hq-core-abyss
+  "phone-rule-leaks": [[DASH, "  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-abyss,.hq-gold-ring{display:none}", "  .hq-view-row{display:flex}\n  .hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-abyss,.hq-gold-ring{display:none}"]],
+  // NAMED (Nov 22 2026, FX3): BEFORE the Sun's mutations (sun-back-to-moon, sun-wrong-image, sun-no-credit, sun-shimmers-when-reduced,
+  // sun-no-glow, sun-always-shown). AFTER the abyss sun's
+  "abyss-back-to-moon": [[VIEWS, "      var c = el(\"span\", \"hq-core-abyss\");\n", "      var c = el(\"span\", \"hq-core-moon\"); c.setAttribute(\"data-hq-moon\", \"core\");\n"]],
+  "abyss-not-the-chat-void": [[DASH, "        radial-gradient(ellipse at 50% 50%, rgba(4,2,48,0.16)   0%, transparent 64%),\n", "        radial-gradient(ellipse at 50% 50%, rgba(4,2,48,0.22)   0%, transparent 64%),\n"]],
+  "abyss-wrong-sizes": [[DASH, "      background-size: 200% 200%, 200% 200%, 200% 200%, 240% 240%;\n      animation: tmx-chat-void 22s", "      background-size: 200% 200%, 200% 200%, 200% 200%, 200% 200%;\n      animation: tmx-chat-void 22s"]],
+  "abyss-wrong-drift": [[DASH, "      animation: tmx-chat-void 22s ease-in-out infinite}", "      animation: tmx-chat-void 16s ease-in-out infinite}"]],
+  "abyss-glows": [[DASH, "      animation: tmx-chat-void 22s ease-in-out infinite}", "      animation: tmx-chat-void 22s ease-in-out infinite;box-shadow:0 0 26px 6px rgba(255,150,50,.30)}"]],
+  "abyss-moves-when-reduced": [[DASH, "    @media (prefers-reduced-motion: reduce){ .hq-core-abyss{animation:none !important} }\n", ""]],
+  "abyss-always-shown": [[DASH, "    #orbitTop[data-hq-open=\"oracle\"] .hq-core-abyss{display:block;", "    #orbitTop .hq-core-abyss{display:block;"]],
+  "abyss-no-stars": [[VIEWS, "      if (window.BFAbyss) abyss = window.BFAbyss.create(cv, { perArea: true });\n", ""]],
+  "abyss-stars-not-per-area": [[VIEWS, "window.BFAbyss.create(cv, { perArea: true })", "window.BFAbyss.create(cv, {})"]],
+  "abyss-keyframes-drift": [[DASH, "  @keyframes tmx-chat-void {\n    0%   { background-position: 15% 20%, 85% 80%, 50% 50%, 40% 60%; }", "  @keyframes tmx-chat-void {\n    0%   { background-position: 15% 20%, 85% 80%, 50% 50%, 45% 60%; }"]],
+  "green-ring-shown": [[DASH, "    #orbitTop[data-hq-open=\"oracle\"] .orbit-core-halo,#orbitTop[data-hq-open=\"oracle\"] .orbit-core-arc,#orbitTop[data-hq-open=\"oracle\"] .orbit-goal-arc{display:none}\n", ""]],
+  "abyss-runs-everywhere": [[VIEWS, "    abyssRun(open === \"oracle\" && phone() && state.orbit === \"shown\");", "    abyssRun(phone());"]],
   "moon-copy-drift": [[MOON, "    var SYNODIC_MONTH = 29.53058867;", "    var SYNODIC_MONTH = 29.53058868;"]],
   "moon-not-live": [[MOON, "      if (result) b.setReal(result);\n", ""]],
   "moon-shared-ids": [[MOON, "    return html.replace(/id=\"([^\"]+)\"/g", "    return html; return html.replace(/id=\"([^\"]+)\"/g"]],
@@ -125,7 +132,7 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"p31b\";", "var SHELL_REV = \"ph1\";"]],
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx3\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
   // (a crescent moon, built from its code point so this file holds none: checkNoEmoji N2)
   "emoji": [[VIEWS, "  var VIEW_KEY = \"bf_hq_view\"", "  /* " + String.fromCodePoint(0x1F319) + " */ var VIEW_KEY = \"bf_hq_view\""]]
 };
@@ -444,13 +451,15 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   const media = blockAt(st, "@media (max-width: 760px){");
   const reduced = blockAt(st, "@media (prefers-reduced-motion: reduce){");
   const keys = blockAt(st, "@keyframes tmx-gold-shimmer {");
+  const voidKeys = blockAt(st, "@keyframes tmx-chat-void {");   // NAMED (Nov 22 2026, FX3): the chat box's drift, for the abyss sun
   let outside = st;
-  [media, reduced, keys].filter(Boolean).sort((a, b) => b.start - a.start).forEach(b => { outside = outside.slice(0, b.start) + outside.slice(b.end); });
+  [media, reduced, keys, voidKeys].filter(Boolean).sort((a, b) => b.start - a.start).forEach(b => { outside = outside.slice(0, b.start) + outside.slice(b.end); });
   const outRules = outside.split("}").map(x => x.trim()).filter(Boolean).map(x => x.split("{")[0].trim());
   check("P1. outside @media (max-width: 760px) the block only hides HQ1's elements and defines the gold, its keyframes and its still version",
     // NAMED (Nov 21 2026, FX2): the hide list gained .hq-core-sun (the centre's Sun); the comment after it is no rule
-    !!media && J(outRules.map(r => r.replace(/^\/\*[\s\S]*?\*\/\s*/, ""))) === J([".hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-sun,.hq-gold-ring", ".hq-gold,.hq-gold-ring", ".hq-gold-ring", ".hq-gold-glyph"]) &&
-    /\.hq-chips,\.hq-view-row,\.hq-list,\.hq-moon,\.hq-core-moon,\.hq-core-sun,\.hq-gold-ring\{display:none\}/.test(outside) &&
+    // NAMED (Nov 22 2026, FX3): BEFORE .hq-core-sun. AFTER .hq-core-abyss, and the tmx-chat-void keyframes (set aside like the gold's)
+    !!media && !!voidKeys && J(outRules.map(r => r.replace(/^\/\*[\s\S]*?\*\/\s*/, ""))) === J([".hq-chips,.hq-view-row,.hq-list,.hq-moon,.hq-core-moon,.hq-core-abyss,.hq-gold-ring", ".hq-gold,.hq-gold-ring", ".hq-gold-ring", ".hq-gold-glyph"]) &&
+    /\.hq-chips,\.hq-view-row,\.hq-list,\.hq-moon,\.hq-core-moon,\.hq-core-abyss,\.hq-gold-ring\{display:none\}/.test(outside) &&
     // the only shown display outside: the gold glyph's block, which lives inside .hq-list (hidden above 760 px)
     !/display:(?!none)/.test(outside.replace(".hq-gold-glyph{display:block;", ".hq-gold-glyph{")), J(outRules));
   {
@@ -490,24 +499,34 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
     ids.length >= 18 && new Set(ids).size === ids.length   /* NAMED (Nov 21 2026, FX2): BEFORE >= 27 (three moons); AFTER two */ && moons.every(m => (m.innerHTML.match(/url\(#([^)]+)\)/g) || []).every(u => !!m.querySelector("#" + u.slice(5, -1)))), J(ids.length));
   const cent = PM.d.getElementById("orbitTop").getAttribute("data-hq-open");
   // NAMED (Nov 21 2026, FX2): BEFORE "M7. the centre's moon shows only while ORACLE is open". AFTER the Sun, M7 to M10.
-  const core = PM.d.getElementById("orbitCore"), sunEl = core && core.querySelector(".hq-core-sun"), sunImg = sunEl && sunEl.querySelector("img.hq-core-sun-img");
-  check("M7. the centre's Sun shows only while ORACLE is open (the rule), first in the centre, under its words, with the gold ring after them",
-    cent === "oracle" && !!sunEl && core.firstChild === sunEl && !!core.lastChild && core.lastChild.className === "hq-gold-ring" &&
-    has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .hq-core-sun{display:block;position:absolute;inset:0;border-radius:50%;overflow:hidden;pointer-events:none;z-index:0;") &&
-    has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .orbit-core > :not(.hq-core-moon):not(.hq-core-sun):not(.hq-gold-ring){position:relative;z-index:1;"));
+  // NAMED (Nov 22 2026, FX3): BEFORE the Sun (NASA SDO's photograph, its glow, its shimmer, its credit). AFTER the abyss sun, M7 to M10.
+  const core = PM.d.getElementById("orbitCore"), abEl = core && core.querySelector(".hq-core-abyss"), abCv = abEl && abEl.querySelector("canvas.hq-core-abyss-canvas");
+  check("M7. the centre's abyss shows only while ORACLE is open (the rule), first in the centre, under its words, with the gold ring after them",
+    cent === "oracle" && !!abEl && core.firstChild === abEl && !!core.lastChild && core.lastChild.className === "hq-gold-ring" &&
+    has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .hq-core-abyss{display:block;position:absolute;inset:0;border-radius:50%;overflow:hidden;pointer-events:none;z-index:0;") &&
+    has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .orbit-core > :not(.hq-core-moon):not(.hq-core-abyss):not(.hq-gold-ring){position:relative;z-index:1;"));
+  // the chat box's own rule, read from the presence's style lines
+  const PRES0 = FILES[PRESENCE] || "";
+  const presRule = head => { const a = PRES0.indexOf(head); if (a < 0) return ""; const b = PRES0.indexOf("\"}\",", a); return PRES0.slice(a, b).split("\n").map(l => (/^\s*"(.*)",?\s*$/.exec(l) || [])[1]).filter(x => x !== undefined).join("\n"); };
+  const chatRule = presRule("\"#tmx-chat {\","), chatKeys = presRule("\"@keyframes tmx-chat-void {\",") + "\n}";
+  const bgOf = s => { const m = /background:\s*([\s\S]*?rgba\(2,1,10,0\.98\));/.exec(s || ""); return m ? squash(m[1]) : null; };
+  const val = (s, k) => { const m = String(s || "").split(/[;{}]/).map(x => x.trim()).filter(x => x.indexOf(k + ":") === 0)[0]; return m ? squash(m.slice(k.length + 1)) : null; };
+  const abRule = (blockAt(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .hq-core-abyss{") || {}).body || "";
+  const keyBody = s => { const b = blockAt(s || "", "@keyframes tmx-chat-void {"); return b ? squash(b.body) : null; };
+  check("M8. its background is EXACTLY the chat box's void: the same four gradients over rgba(2,1,10,0.98), the same sizes, the tmx-chat-void drift at 22 s, the same keyframes",
+    !!bgOf(chatRule) && bgOf(abRule) === bgOf(chatRule) && (bgOf(chatRule).match(/radial-gradient/g) || []).length === 4 &&
+    val(abRule, "background-size") === val(chatRule, "background-size") && val(abRule, "background-size") === "200% 200%, 200% 200%, 200% 200%, 240% 240%" &&
+    val(abRule, "animation") === val(chatRule, "animation") && val(abRule, "animation") === "tmx-chat-void 22s ease-in-out infinite" &&
+    !!keyBody(chatKeys) && keyBody(HQ_STYLE) === keyBody(chatKeys), J([bgOf(abRule), bgOf(chatRule), val(abRule, "background-size"), val(abRule, "animation"), keyBody(HQ_STYLE), keyBody(chatKeys)]));
   const SUN_FILE = path.join(FRONTEND, "brand", "sun-sdo-hmi-20261121.webp");
-  const sunBytes = fs.existsSync(SUN_FILE) ? fs.readFileSync(SUN_FILE) : null;
-  check("M8. it is the local photograph (/brand/sun-sdo-hmi-20261121.webp, a WebP under 120 KB), decorative (alt empty, aria-hidden), hidden if it cannot load",
-    !!sunImg && sunImg.getAttribute("src") === "/brand/sun-sdo-hmi-20261121.webp" && sunImg.getAttribute("alt") === "" && sunImg.getAttribute("aria-hidden") === "true" &&
-    !!sunBytes && sunBytes.length < 120 * 1024 && sunBytes.slice(0, 4).toString("latin1") === "RIFF" && sunBytes.slice(8, 12).toString("latin1") === "WEBP" &&
-    has(FILES[VIEWS], "sun.addEventListener(\"error\", function () { c.hidden = true; });"), J([sunImg && sunImg.getAttribute("src"), sunBytes && sunBytes.length]));
-  check("M9. its source and credit are in the code: NASA SDO's HMI image, the file it came from, and \"Courtesy of NASA/SDO and the HMI science team\"",
-    has(FILES[VIEWS], "https://sdo.gsfc.nasa.gov/assets/img/latest/latest_1024_HMIIC.jpg") && has(FILES[VIEWS], "Credit: Courtesy of NASA/SDO and the\n     HMI science team.") && has(FILES[VIEWS], "public-domain"));
-  check("M10. a soft warm glow round it, and a slow shimmer (16 s each way) that stops under reduced motion",
-    has(HQ_STYLE, "box-shadow:0 0 8px 1px rgba(255,196,110,.55),0 0 26px 6px rgba(255,150,50,.30),0 0 56px 16px rgba(255,120,30,.14)}") &&
-    has(HQ_STYLE, "animation:hq-sun-shimmer 16s ease-in-out infinite alternate}") && has(HQ_STYLE, "@keyframes hq-sun-shimmer{") &&
-    has(HQ_STYLE, "@media (prefers-reduced-motion: reduce){ .hq-core-sun-shimmer{animation:none} }") &&
-    HQ_STYLE.indexOf("@media (prefers-reduced-motion: reduce){ .hq-core-sun-shimmer{animation:none} }") > HQ_STYLE.indexOf("animation:hq-sun-shimmer 16s"));
+  check("M9. clipped to the circle, decorative (aria-hidden), a canvas on top running the chat's starfield at its density per area (BFAbyss, perArea); no glow, rays or corona; the NASA image gone",
+    !!abEl && abEl.getAttribute("aria-hidden") === "true" && !!abCv && /border-radius:50%/.test(abRule) && /overflow:hidden/.test(abRule) &&
+    has(FILES[VIEWS], "if (window.BFAbyss) abyss = window.BFAbyss.create(cv, { perArea: true });") &&
+    !/box-shadow|filter:|corona|rays/.test(abRule) && !/hq-core-abyss[^{]*::(after|before)/.test(HQ_STYLE) && !fs.existsSync(SUN_FILE) && !/sun-sdo|hq-core-sun/.test(noComments(HQ_STYLE)), J([abRule.slice(0, 200)]));
+  check("M10. the stars run only while ORACLE is open on the phone with the orbit shown; still under reduced motion; the green stats ring hidden while ORACLE is open",
+    has(FILES[VIEWS], "    abyssRun(open === \"oracle\" && phone() && state.orbit === \"shown\");") &&
+    has(HQ_STYLE, "    @media (prefers-reduced-motion: reduce){ .hq-core-abyss{animation:none !important} }") &&
+    has(HQ_STYLE, "#orbitTop[data-hq-open=\"oracle\"] .orbit-core-halo,#orbitTop[data-hq-open=\"oracle\"] .orbit-core-arc,#orbitTop[data-hq-open=\"oracle\"] .orbit-goal-arc{display:none}"));
 
   /* ══ G. the gold ══ */
   console.log("\n══ G. the gold ══");
@@ -582,9 +601,10 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-  check("W1. SHELL_REV \"p31c\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p31c\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 22 2026, FX3): BEFORE "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
+  check("W1. SHELL_REV \"fx3\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"fx3\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
-  check("W2. the dashboard loads both, after bf-orbit.js", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
+  check("W2. the dashboard loads both, after bf-orbit.js (NAMED, Nov 22 2026, FX3: bf-abyss.js, the abyss sun's stars, just before bf-oracle-moon.js)", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-abyss\.js"><\/script>\n<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 
   /* ══ N. no emoji ══ */
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;

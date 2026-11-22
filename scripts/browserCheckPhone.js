@@ -243,7 +243,7 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -355,6 +355,10 @@ const P22_OUT = process.env.PHONE_P22_OUT || path.join(os.homedir(), "Downloads"
 const P23 = process.env.PHONE_P23 === "1";
 const P23_WIDTHS = String(process.env.PHONE_P23_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
 const P23_OUT = process.env.PHONE_P23_OUT || path.join(os.homedir(), "Downloads", "p23");
+// NAMED (Nov 22 2026, FX3): PHONE_FX3=1 runs only FX3's own screens (fx3Run, at the end of this file)
+const FX3 = process.env.PHONE_FX3 === "1";
+const FX3_WIDTHS = String(process.env.PHONE_FX3_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const FX3_OUT = process.env.PHONE_FX3_OUT || path.join(os.homedir(), "Downloads", "fx3");
 const BAR_HIDDEN = ["app.html", "reset-password.html", "verify-email.html", "terms.html", "privacy.html", "refund.html", "contact.html",
   "music-popout.html", "card-view.html", "blogpost.html", "blogindex.html", "oracle.html", "mychart.html", "calendar.html", "synastry.html", "the-third.html",
   "compose.html"];   // NAMED (Nov 20 2026, P2-3): the full-screen composer turns the bar off (data-bf-tabbar="off")
@@ -437,6 +441,7 @@ const TONE = (() => { const n = 160000, b = Buffer.alloc(44 + n * 2); b.write("R
   b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(16000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write("data", 36); b.writeUInt32LE(n * 2, 40); return b; })();
 function api(method, u, request) {
   const p = u.pathname;
+  if (FX3) { const a = fx3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 22 2026, FX3)
   if (P23 && FX2S.on && !FX2S.inner) { const a = fx2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, FX2)
   // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
   if (P31) { const a = p31Api(method, p); if (a !== undefined) return a; }
@@ -619,13 +624,19 @@ const MEASURE = String.raw`(function(){
     if (r.right < 0 || r.left > document.documentElement.scrollWidth) return;
     var c = getComputedStyle(n); if (c.opacity === "0" && t === n) return;
     if (r.width <= 2 || r.height <= 2) return;
+    // NAMED (Nov 22 2026, FX3): the Guide's tab, now on the phone too, is the owner's board's 32 x 170 (the desktop's look,
+    // drawn at every width); PHONE_FX3 holds it to that size. Every control inside its panel is still held to 44.
+    if (n.id === "tmx-guide-tab") return;
     if (n.tagName === "A" && c.display === "inline") { var par = n.parentElement; var pt = (par.innerText || "").replace(/\s+/g, " ").trim(); var lt = (n.innerText || "").replace(/\s+/g, " ").trim(); if (pt.length > lt.length + 8) return; }
     if (r.width < 44 - 0.5 || r.height < 44 - 0.5) out.small.push(name(t) + " \"" + txt(t).slice(0, 18) + "\" " + Math.round(r.width) + "x" + Math.round(r.height));
   });
   out.smallCount = out.small.length; out.small = out.small.slice(0, 15);
   // 5. decoration painted over text
   var DECO = /star|nebula|glow|spark|cosmic|galaxy|aurora|particle|twinkle|halo|orb-bg|backdrop|sky/i;
+  // NAMED (Nov 22 2026, FX3): BEFORE the Termaximus mist sat under the page on a phone, as decoration. AFTER it is a 56 px
+  // button above the page (like the bar), so its own glows and sparkles are the button's face, not decoration over text.
   var decos = vis.filter(function(n){ var c = getComputedStyle(n); var nm = String(n.id) + " " + String(n.className && n.className.baseVal !== undefined ? n.className.baseVal : n.className);
+    if (n.closest && n.closest("#tmx-presence-root")) return false;
     return (n.tagName === "CANVAS" || DECO.test(nm)) && (c.position === "fixed" || c.position === "absolute") && !n.matches(TAPSEL) && !ownText(n) && !n.querySelector(TAPSEL); });
   var texts = vis.filter(function(n){ return ownText(n) && !n.closest("svg"); });
   out.deco = [];
@@ -692,6 +703,7 @@ async function shotPage(cdp, file, w) {
   fs.writeFileSync(file, Buffer.from(r.data, "base64"));
 }
 let DESK_UA = "";
+let exceptionsSeen = () => [];   // NAMED (Nov 22 2026, FX3)
 
 /* ── the dashboard's own checks (PH1) ── */
 const ORBIT = String.raw`(function(){
@@ -724,6 +736,7 @@ const ORBIT = String.raw`(function(){
   let cdp;
   const defects = {}, boxes = {};
   const exceptions = [];
+  exceptionsSeen = () => exceptions.slice();   // NAMED (Nov 22 2026, FX3): fx3Run reads the page errors
   let currentPage = "";
   try {
     cdp = await connect(chrome.ws);
@@ -749,7 +762,7 @@ const ORBIT = String.raw`(function(){
           const pic = P21_IMG[(u.pathname.length % P21_IMG.length)];
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: fs.readFileSync(path.join(FRONTEND, pic)).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "image/png" }, { name: "Access-Control-Allow-Origin", value: "*" }] });
-        } else if (HQ1 && request.url === MOON_PHOTO) {
+        } else if ((HQ1 || FX3) && request.url === MOON_PHOTO) {   // NAMED (Nov 22 2026, FX3): and PHONE_FX3
           // HQ1: the Oracle's moon photo (Wikimedia) answered by a stand-in disc, so the moon draws with no outside request
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(MOON_STANDIN).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "image/svg+xml" }, { name: "Access-Control-Allow-Origin", value: "*" }] });
@@ -778,6 +791,7 @@ const ORBIT = String.raw`(function(){
     else if (P23) { await p23Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-3)
     else if (P31) { await p31Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P3-1)
     else if (P32) { await p32Run(cdp, origin); PAGES = []; }   // NAMED (Nov 21 2026, P3-2)
+    else if (FX3) { await fx3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 22 2026, FX3)
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -801,7 +815,7 @@ const ORBIT = String.raw`(function(){
           check(at + "no horizontal scroll", !d.hscroll, J(d.wide));
           check(at + "no text cut off (ellipsis or clipped)", d.clipped.length === 0, J(d.clipped));
           // NAMED (Nov 19 2026, P2-1): the bottom bar, like the Guide, floats over the scrolling page by design: judged at the end
-          const restOver = d.overAtRest.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x));
+          const restOver = d.overAtRest.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x));
           check(at + "no fixed element over a heading, text, button or link (the Guide at the end of the page, every other one at rest too)", restOver.length === 0 && d.overAtEnd.length === 0, J(restOver.concat(d.overAtEnd)));
           check(at + "every tap target is at least 44 x 44", d.smallCount === 0, d.smallCount + " " + J(d.small));
           check(at + "decoration is under the text", d.deco.length === 0, J(d.deco));
@@ -938,6 +952,18 @@ const HQ_MEASURE = `(function(){
     icons:items.map(function(it){var n=it.querySelector(".hq-icon > .bf-neon-icon");return n?Math.round(r(n).w)+"x"+Math.round(r(n).h):"none";})};})()`;
 const HQ_TITLES = { grow: "GROW TOOLS", sell: "SELL TOOLS", connect: "CONNECT TOOLS", agents: "AGENT TOOLS", oracle: "THE ORACLE" };
 
+/* NAMED (Nov 22 2026, FX3): the abyss sun in the orbit's centre, as drawn (HQ1 and P2-3's FX2 section read it) */
+const ABYSS_READ = String.raw`(function(){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+  var core=document.getElementById('orbitCore'),s=core&&core.querySelector('.hq-core-abyss'),cv=s&&s.querySelector('canvas'),ring=core&&core.querySelector('.hq-gold-ring');
+  if(!s)return null;var cs=getComputedStyle(s),painted=0,ch=document.getElementById('tmx-chat'),chs=ch?getComputedStyle(ch):null;
+  try{var x=cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;for(var i=3;i<x.length;i+=4)if(x[i]>0)painted++;}catch(e){painted=-1;}
+  return {open:document.getElementById('orbitTop').getAttribute('data-hq-open'),core:R(core),disc:R(s),canvas:R(cv),first:core.firstChild===s,disp:cs.display,radius:cs.borderTopLeftRadius,overflow:cs.overflow,
+    inner:core.clientWidth,chatBg:chs&&chs.backgroundImage,chatSize:chs&&chs.backgroundSize,chatColor:chs&&chs.backgroundColor,chatAnim:chs&&chs.animationName,chatDur:chs&&chs.animationDuration,
+    bgImage:cs.backgroundImage,bgColor:cs.backgroundColor,grads:(cs.backgroundImage.match(/radial-gradient/g)||[]).length,size:cs.backgroundSize,anim:cs.animationName,dur:cs.animationDuration,
+    glow:cs.boxShadow,filter:cs.filter,after:getComputedStyle(s,'::after').content,before:getComputedStyle(s,'::before').content,painted:painted,
+    info:window.BFHqViews&&window.BFHqViews.abyss?window.BFHqViews.abyss():null,ring:R(ring),ringDisp:ring&&getComputedStyle(ring).display,
+    green:[].map.call(document.querySelectorAll('#orbitTop .orbit-core-halo,#orbitTop .orbit-core-arc,#orbitTop .orbit-goal-arc'),function(n){return getComputedStyle(n).display;}),
+    coreMoon:!!core.querySelector('[data-hq-moon]'),nodeMoon:!!document.querySelector('.orbit-portal[data-portal=oracle] [data-hq-moon=node]'),chipMoon:!!document.querySelector('[data-hq-moon=chip]')};})()`;
 async function hq1Run(cdp, origin) {
   fs.mkdirSync(HQ1_OUT, { recursive: true });
   console.log("browserCheckPhone HQ1 (the phone dashboard's views, orbit toggle, Oracle moon, boombox sound on load) at " + HQ1_WIDTHS.join(", "));
@@ -976,7 +1002,7 @@ async function hq1Run(cdp, origin) {
           // NAMED (Nov 21 2026, P3-1B): BEFORE only the Guide was set aside at rest, so the P2-1 bottom bar, fixed over the dashboard's
           // lower content by design, failed 14 of these. AFTER the bar is set aside at rest the same way P2-1's checks do, and the end
           // of the page is judged with the bar and the Guide included (below).
-          const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x)); if (over.length) bad.fixed.push(p + " " + J(over));
+          const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x)); if (over.length) bad.fixed.push(p + " " + J(over));
           if (view === "large") { if (L.rows.length || !q.cards) bad.links.push(p + " rows " + L.rows.length + ", cards shown " + q.cards); }
           else if (!L.cards.length || J(L.rows) !== J(L.cards) || L.rows.some(x => !x.href)) bad.links.push(p + " " + J({ cards: L.cards, rows: L.rows }).slice(0, 300));
           const pressed = q.btns.filter(b => b.pressed === "true").map(b => b.id).sort().join();
@@ -1056,8 +1082,8 @@ async function hq1Run(cdp, origin) {
     await ev("window.BFOrbit.open('oracle'),true"); await sleep(900);
     const dm = await ev("(function(){var out={};['node','core'].forEach(function(k){var n=document.querySelector('[data-hq-moon='+k+']');var b=n?n.getBoundingClientRect():{width:0};" +
       "out[k]=n?{phase:n.getAttribute('data-moon-phase'),angle:n.getAttribute('data-moon-angle'),live:n.getAttribute('data-moon-live'),hidden:n.hidden,w:Math.round(b.width),paths:[].map.call(n.querySelectorAll('path'),function(p){return p.getAttribute('d');}),img:!!n.querySelector('image')}:null;});" +
-      // NAMED (Nov 21 2026, FX2): the centre's Sun
-      "var s=document.querySelector('#orbitCore .hq-core-sun'),i=s&&s.querySelector('img'),q=s?s.getBoundingClientRect():{width:0};out.sun=s?{shown:getComputedStyle(s).display!=='none',w:Math.round(q.width),src:i&&i.getAttribute('src'),loaded:!!i&&i.complete&&i.naturalWidth>0}:null;return out;})()");
+      // NAMED (Nov 21 2026, FX2): the centre's Sun. NAMED (Nov 22 2026, FX3): BEFORE the Sun (.hq-core-sun, its img). AFTER the abyss sun
+      "var s=document.querySelector('#orbitCore .hq-core-abyss'),cv=s&&s.querySelector('canvas'),q=s?s.getBoundingClientRect():{width:0};out.sun=s?{shown:getComputedStyle(s).display!=='none',w:Math.round(q.width),canvas:!!cv,running:!!(window.BFHqViews&&window.BFHqViews.abyss&&(window.BFHqViews.abyss()||{}).running)}:null;return out;})()");
     const gold = await ev("(function(){var t=document.getElementById('hqSetTitle');var cs=getComputedStyle(t);" +
       "return {title:t.classList.contains('hq-gold'),anim:cs.animationName,size:cs.backgroundSize,img:cs.backgroundImage.slice(0,40),icons:document.querySelectorAll('#hqList .hq-gold-glyph').length,rings:[].filter.call(document.querySelectorAll('.hq-gold-ring'),function(n){return getComputedStyle(n).display!=='none';}).length};})()");
     await shotPage(cdp, path.join(HQ1_OUT, "oracle-set-moon-and-gold-390.png"), 390).catch(() => null);
@@ -1068,7 +1094,7 @@ async function hq1Run(cdp, origin) {
       !!dm.node && dm.node.phase === om.phase && dm.node.angle === String(MOON.phaseAngle) && dm.node.live === "true" && !dm.node.hidden && dm.node.w >= 44 && dm.node.img && J(dm.node.paths) === J(om.paths), J(dm.node).slice(0, 400));
     // NAMED (Nov 21 2026, FX2): BEFORE "the centre's moon while ORACLE is open: the same". AFTER the centre is the Sun (a NASA SDO
     // image, brand/sun-sdo-hmi-20261121.webp) in the same gold ring; the node and the chip keep the moon.
-    check(at + "the centre while ORACLE is open: the Sun (loaded, 60 px or more), no moon", !dm.core && !!dm.sun && dm.sun.shown && dm.sun.loaded && dm.sun.w >= 60 && dm.sun.src === "/brand/sun-sdo-hmi-20261121.webp", J([dm.core, dm.sun]).slice(0, 300));
+    check(at + "the centre while ORACLE is open: the abyss sun (60 px or more, its stars running), no moon", !dm.core && !!dm.sun && dm.sun.shown && dm.sun.canvas && dm.sun.running && dm.sun.w >= 60, J([dm.core, dm.sun]).slice(0, 300));   // NAMED (Nov 22 2026, FX3): BEFORE the Sun (loaded, its NASA file)
     check(at + "the ORACLE chip's moon (orbit hidden): the same", !!cm && cm.phase === om.phase && !cm.hidden && cm.w >= 20 && J(cm.paths) === J(om.paths), J(cm).slice(0, 300));
     check(at + "the gold with ORACLE open: the title's shine is tmx-gold-shimmer at 260% 260%, the rings on the node and the centre, the four Oracle tools' icons gold",
       gold.title && gold.anim === "tmx-gold-shimmer" && gold.size === "260% 260%" && /linear-gradient/.test(gold.img) && gold.icons === 4 && gold.rings >= 2, J(gold));
@@ -1123,7 +1149,7 @@ const BAR_STATE = String.raw`(function(){
   out.h = Math.round(br.height); out.bottomGap = Math.round(innerHeight - br.bottom); out.w = Math.round(br.width);
   out.items = [].map.call(bar.children, function(n){ var r = n.getBoundingClientRect(); return { tab: n.getAttribute("data-tab"), w: Math.round(r.width), h: Math.round(r.height), cur: n.getAttribute("aria-current") }; });
   out.active = (bar.querySelector("[aria-current=page]") || { getAttribute: function(){ return null; } }).getAttribute("data-tab");
-  var g = document.getElementById("tmx-guide-fab");
+  var g = document.getElementById("tmx-presence-root");   // NAMED (Nov 22 2026, FX3): BEFORE the Guide's book button (gone); AFTER the mist, 16 px above the bar
   if (vis(g)) { var gr = g.getBoundingClientRect(); out.guide = [Math.round(gr.left), Math.round(gr.top), Math.round(gr.right), Math.round(gr.bottom)];
     out.guideOverlap = !(gr.bottom <= br.top + 0.5 || gr.top >= br.bottom - 0.5 || gr.right <= br.left + 0.5 || gr.left >= br.right - 0.5); }
   // anything else painted over the bar: 20 points across it, at three heights; the topmost must be the bar
@@ -1147,7 +1173,7 @@ async function barChecks(cdp, page, w) {
   if (!want || !s.shown) return;
   check(at + "the bar is at the very bottom, 56 px or more, five items each 44 x 44 or more, " + (BAR_ACTIVE[file] || "hq") + " active",
     s.h >= 56 && s.bottomGap === 0 && s.items.length === 5 && s.items.every(i => i.w >= 44 && i.h >= 44) && s.active === (BAR_ACTIVE[file] || "hq"), J(s));
-  check(at + "nothing else is painted over the bar (the big music player excepted) and the Guide button clears it", s.cover.length === 0 && !s.guideOverlap, J({ cover: s.cover, guide: s.guide }));
+  check(at + "nothing else is painted over the bar (the big music player excepted) and the mist clears it", s.cover.length === 0 && !s.guideOverlap, J({ cover: s.cover, guide: s.guide }));
 }
 
 async function p21Run(cdp, origin) {
@@ -1204,7 +1230,7 @@ async function p21Run(cdp, origin) {
       check(at + "every tap target is at least 44 x 44", rest.smallCount === 0, rest.smallCount + " " + J(rest.small));
       const deco = rest.deco.filter(x => !(act === "create" && /^div#bf-create-backdrop /.test(x)));   // the open dialog's scrim dims the page by design
       check(at + "decoration is under the text" + (act === "create" ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
-      const restOver = rest.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x));
+      const restOver = rest.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x));
       check(at + "the page is no wider than the screen (layout viewport " + w + ")", (await ev("innerWidth")) === w);
       check(at + "no fixed element over text or a control at rest (the bar and the Guide are judged at the end)", restOver.length === 0, J(restOver));
       if (act === "create") {
@@ -1307,7 +1333,7 @@ async function p22Run(cdp, origin) {
     check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
     const deco = m.deco.filter(x => !(opts && opts.sheet && /^div#bf-safety-backdrop /.test(x)));
     check(at + "decoration is under the text" + (opts && opts.sheet ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
-    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && /^div#bf-safety(-backdrop)? /.test(x)));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && /^div#bf-safety(-backdrop)? /.test(x)));
     check(at + "no fixed element over text or a control at rest" + (opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
     return m;
   };
@@ -1555,7 +1581,7 @@ const FX1_PROFILE_MEASURE = String.raw`(function(){
     handle:R(q('.pfs-handle')),handleText:(q('.pfs-handle')||{}).textContent,handleFont:S(q('.pfs-handle'),'fontSize'),stats:stats,btns:btns,
     bio:R(bio),bioFont:S(bio,'fontSize'),bioAlign:S(bio,'textAlign'),store:R(store),storeText:store?store.textContent.trim():'',
     tabsBox:R(tb),divider:S(tb,'borderBottomWidth'),dividerColor:S(tb,'borderBottomColor'),tabs:tabs,cells:cells,
-    oldHeader:[].some.call(document.querySelectorAll('.pf-nav,.pf-banner,.pf-header-wrap'),vis),fab:vis(document.getElementById('tmx-guide-fab'))};
+    oldHeader:[].some.call(document.querySelectorAll('.pf-nav,.pf-banner,.pf-header-wrap'),vis),fab:vis(document.getElementById('tmx-guide-root'))};   // NAMED (Nov 22 2026, FX3): BEFORE the book button; AFTER the Guide's tab, kept off this screen
 })()`;
 // FX1: the before and after screenshots beside the design pictures (Downloads\design), named by FX1_TAG (default "after")
 const FX1_DIR = path.join(os.homedir(), "Downloads", "design");
@@ -1598,7 +1624,7 @@ async function p23Run(cdp, origin) {
     check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
     const deco = m.deco.filter(x => !(opts && opts.sheet && SHEETS.test(x)));
     check(at + "decoration is under the text" + (opts && opts.sheet ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
-    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && SHEETS.test(x)));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && SHEETS.test(x)));
     check(at + "no fixed element over text or a control at rest" + (opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
     return m;
   };
@@ -1656,7 +1682,7 @@ async function p23Run(cdp, origin) {
   const fx1Profile = async (w, owner) => {
     const at = "FX1 profile " + (owner ? "(owner)" : "(visitor)") + " at " + w + ": ", P = DS.PROFILE, m = await ev(FX1_PROFILE_MEASURE);
     if (!m || !m.bar) { check(at + "the phone header is on the screen", false, J(m)); return null; }
-    check(at + "the page's old header (its buttons, banner and picture) and the Guide's button are not on the screen", !m.oldHeader && !m.fab, J([m.oldHeader, m.fab]));
+    check(at + "the page's old header (its buttons, banner and picture) and the Guide's tab are not on the screen", !m.oldHeader && !m.fab, J([m.oldHeader, m.fab]));
     check(at + "the top row " + P.TOP.ROW_TOP + " px down: add friends and the menu " + P.TOP.BUTTON + " px, " + P.TOP.PAD_X + " px from each side, the name centred, " + P.TOP.NAME_FONT + " px bold",
       near(m.bar.t, P.TOP.ROW_TOP) && near(m.invite.w, P.TOP.BUTTON) && near(m.invite.h, P.TOP.BUTTON) && near(m.invite.l, P.TOP.PAD_X) && near(m.menu.w, P.TOP.BUTTON) && near(m.menu.r, w - P.TOP.PAD_X) &&
       near((m.title.l + m.title.r) / 2, w / 2) && px(m.titleFont) === P.TOP.NAME_FONT && Number(m.titleWeight) === P.TOP.NAME_WEIGHT && m.titleText === (owner ? "Rose" : "Lee Ceramics"), J([m.bar, m.invite, m.menu, m.title, m.titleText]));
@@ -1987,29 +2013,38 @@ async function p23Run(cdp, origin) {
     {
       const f = fr.f || [], bases = f.map(x => x[1]);
       check(at + "under reduced motion nothing turns: placed at once on the front place", f.length > 20 && bases.every(b => same(b, bases[0])) && same(fr.base, fr.front), J([f.length, bases.slice(0, 3), fr.front]));
-      const an = await ev("(function(){var s=document.querySelector('#orbitCore .hq-core-sun-shimmer');return s?getComputedStyle(s).animationName:null;})()");
+      // NAMED (Nov 22 2026, FX3): BEFORE "the Sun's shimmer is stopped". AFTER the abyss sun is drawn still (no void drift, the stars not running)
       await ev("window.BFOrbit&&window.BFOrbit.open('oracle'),true"); await sleep(900);
-      const an2 = await ev("(function(){var s=document.querySelector('#orbitCore .hq-core-sun-shimmer');return s?getComputedStyle(s).animationName:null;})()");
-      check(at + "under reduced motion the Sun's shimmer is stopped", an === "none" && an2 === "none", J([an, an2]));
+      const still = await ev(ABYSS_READ);
+      const sp1 = await ev("(function(){var c=document.querySelector('#orbitCore .hq-core-abyss canvas');return c?c.toDataURL():null;})()"); await sleep(1500);
+      const sp2 = await ev("(function(){var c=document.querySelector('#orbitCore .hq-core-abyss canvas');return c?c.toDataURL():null;})()");
+      check(at + "under reduced motion the abyss sun is drawn still (no void drift; the same picture 1.5 s apart)", !!still && still.anim === "none" && !!still.info && still.info.reducedMotion && still.painted > 0 && !!sp1 && sp1 === sp2, J(still && [still.anim, still.info, still.painted, sp1 === sp2]));
     }
     await cdp.send("Emulation.setEmulatedMedia", { features: [] });
     await open(cdp, origin, "dashboard.html", w, h, true);
     await ev("window.BFOrbit&&window.BFOrbit.open('oracle'),true"); await sleep(1500);
-    const sun = await ev(String.raw`(function(){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
-      var core=document.getElementById('orbitCore'),s=core&&core.querySelector('.hq-core-sun'),img=s&&s.querySelector('img'),ring=core&&core.querySelector('.hq-gold-ring'),sh=s&&s.querySelector('.hq-core-sun-shimmer');
-      return {open:document.getElementById('orbitTop').getAttribute('data-hq-open'),core:R(core),sun:R(s),disp:s&&getComputedStyle(s).display,glow:s&&getComputedStyle(s).boxShadow,
-        img:img&&{done:img.complete,nw:img.naturalWidth,src:img.getAttribute('src'),fit:getComputedStyle(img).objectFit},ring:R(ring),ringDisp:ring&&getComputedStyle(ring).display,anim:sh&&getComputedStyle(sh).animationName,dur:sh&&getComputedStyle(sh).animationDuration,
-        coreMoon:!!core.querySelector('[data-hq-moon]'),nodeMoon:!!document.querySelector('.orbit-portal[data-portal=oracle] [data-hq-moon=node]'),chipMoon:!!document.querySelector('[data-hq-moon=chip]')};})()`);
-    at = "FX2 the Sun at " + w + ": ";
-    const sunBytes = (() => { try { return fs.statSync(path.join(FRONTEND, DS.HQ.SUN.FILE)).size; } catch (e) { return -1; } })();
-    check(at + "ORACLE open: the centre is the NASA SDO image (" + DS.HQ.SUN.FILE + ", " + sunBytes + " bytes, under " + DS.HQ.SUN.MAX_BYTES + "), loaded, filling the disc",
-      !!sun && sun.open === "oracle" && sun.disp === "block" && !!sun.img && sun.img.done && sun.img.nw > 0 && sun.img.src === "/" + DS.HQ.SUN.FILE && sun.img.fit === "cover" &&
-      sunBytes > 0 && sunBytes < DS.HQ.SUN.MAX_BYTES && near(sun.sun.w, sun.core.w) && near(sun.sun.h, sun.core.h), J([sun, sunBytes]));
-    check(at + "a glow, and a slow shimmer (" + DS.HQ.SUN.SHIMMER_S + " s)", !!sun && !!sun.glow && sun.glow !== "none" && !!sun.anim && sun.anim !== "none" && sun.dur === DS.HQ.SUN.SHIMMER_S + "s", J(sun && [sun.glow, sun.anim, sun.dur]));
-    check(at + "the gold ring kept round it (3 px outside the disc), shown", !!sun && sun.ringDisp !== "none" && !!sun.ring && near(sun.ring.w, sun.core.w + 6) && near(sun.ring.l, sun.core.l - 3), J(sun && [sun.ring, sun.core]));
+    // NAMED (Nov 22 2026, FX3): BEFORE "FX2 the Sun" (the NASA SDO image, its glow and its shimmer). AFTER the abyss sun (the board
+    // TmxHQ): the chat box's void and starfield in the centre's disc, the gold ring round it, no green ring, the stars running.
+    const sun = await ev(ABYSS_READ);
+    at = "FX3 the abyss sun at " + w + ": ";
+    const AB = DS.HQ.ABYSS;
+    check(at + "ORACLE open: the centre is the abyss disc, filling the centre's circle (its content box, the Sun's size), clipped round, first in the centre",
+      !!sun && sun.open === "oracle" && sun.disp === "block" && sun.first && sun.radius === "50%" && sun.overflow === "hidden" && near(sun.disc.w, sun.inner) && near(sun.disc.h, sun.inner), J(sun && [sun.disc, sun.core, sun.inner]));
+    check(at + "its background is the chat box's void, as the browser draws #tmx-chat: the same four gradients, sizes and colour, tmx-chat-void at 22 s",
+      !!sun && sun.grads === 4 && !!sun.chatBg && sun.bgImage === sun.chatBg && sun.size === sun.chatSize && sun.bgColor === sun.chatColor && /rgba\(2, 1, 10, 0\.98\)/.test(sun.bgColor) &&
+      sun.anim === "tmx-chat-void" && sun.anim === sun.chatAnim && sun.dur === "22s" && sun.dur === sun.chatDur, J(sun && [sun.grads, sun.bgColor, sun.chatColor, sun.size, sun.chatSize, sun.anim, sun.dur]));
+    check(at + "no glow, rays or corona (no shadow, filter or pseudo-element round the disc)", !!sun && sun.glow === "none" && sun.filter === "none" && sun.after === "none" && sun.before === "none", J(sun && [sun.glow, sun.filter, sun.after, sun.before]));
+    check(at + "the starfield runs on its canvas at the chat box's density per area (" + AB.STAR_BASE.COUNTS.join("/") + " per " + AB.STAR_BASE.W + " x " + AB.STAR_BASE.H + ")",
+      !!sun && !!sun.info && sun.info.running && near(sun.canvas.w, sun.disc.w) && J(sun.info.counts) === J(AB.STAR_BASE.COUNTS.map(c => Math.round(c * sun.info.width * sun.info.height / (AB.STAR_BASE.W * AB.STAR_BASE.H)))) && sun.painted > 0, J(sun && [sun.info, sun.canvas, sun.painted]));
+    check(at + "the gold ring kept round it (centred on the disc, outside it), shown; the green stats ring hidden", !!sun && sun.ringDisp !== "none" && !!sun.ring && sun.ring.w > sun.disc.w + 2 &&
+      Math.abs((sun.ring.l + sun.ring.w / 2) - (sun.disc.l + sun.disc.w / 2)) <= 1 && Math.abs((sun.ring.t + sun.ring.h / 2) - (sun.disc.t + sun.disc.h / 2)) <= 1 && sun.green.length > 0 && sun.green.every(d => d === "none"), J(sun && [sun.ring, sun.disc, sun.green]));
     check(at + "the ORACLE node and the chip keep the moon; the centre has none", !!sun && !sun.coreMoon && sun.nodeMoon && sun.chipMoon, J(sun && [sun.coreMoon, sun.nodeMoon, sun.chipMoon]));
+    await ev("window.BFOrbit&&window.BFOrbit.open('sell'),true"); await sleep(700);
+    const otherAb = await ev(ABYSS_READ);
+    check(at + "another portal (SELL): the disc hidden, the stars stopped, the green ring back", !!otherAb && otherAb.disp === "none" && !!otherAb.info && !otherAb.info.running && otherAb.green.some(d => d !== "none"), J(otherAb && [otherAb.disp, otherAb.info, otherAb.green]));
+    await ev("window.BFOrbit&&window.BFOrbit.open('oracle'),true"); await sleep(900);
     await pageChecks(at);
-    await fx1Shot("live-hq-oracle-sun-fx2.png");
+    await fx1Shot("live-hq-oracle-abyss-fx3.png");
 
     // 5. the Profile, without and with a banner
     const PROF = String.raw`(function(){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),r:+r.right.toFixed(1),b:+r.bottom.toFixed(1)};};
@@ -2135,7 +2170,7 @@ async function p31Run(cdp, origin) {
     const TALK = /^(div|section)#bfp-talk(-backdrop)? /;
     const deco = m.deco.filter(x => !(opts && opts.panel && VEIL.test(x)) && !(opts && opts.sheet && TALK.test(x)));
     check(at + "decoration is under the text" + (opts && opts.panel ? " (the panel's veil aside)" : opts && opts.sheet ? " (the open sheet's backdrop aside)" : ""), deco.length === 0, J(deco));
-    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.panel && VEIL.test(x)) && !(opts && opts.sheet && TALK.test(x)));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !(opts && opts.panel && VEIL.test(x)) && !(opts && opts.sheet && TALK.test(x)));
     check(at + "no fixed element over text or a control at rest" + (opts && opts.panel ? " (the members panel is meant to cover the page)" : opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
   };
   const panelBox = () => ev(P23_BOX + "('#bf-members-panel .bfa-panel', 'a,button')");
@@ -2270,9 +2305,12 @@ async function p31Run(cdp, origin) {
     await ev("(function(){var p=document.querySelector('#feed [data-post=\"" + P23_POST.photo + "\"]');if(p)p.scrollIntoView({block:'center'});return !!p;})()"); await sleep(300);
     await ev("(function(){var b=document.querySelector('#feed [data-post=\"" + P23_POST.photo + "\"] .bfp-act[data-act=talk]');if(b)b.click();return !!b;})()"); await sleep(1200);
     const tk = await ev("(function(){var b=document.getElementById('bfpTalkMembers'),f=document.getElementById('bfpTalkForm');if(!b)return null;var j=b.querySelector('a'),q=j&&j.getBoundingClientRect();" +
-      "return {shown:!b.hidden,form:!!f&&!f.hidden&&f.getBoundingClientRect().height>0,head:(b.querySelector('.bfp-tm-h')||{}).textContent,rule:(b.querySelector('.bfp-tm-s')||{}).textContent,join:j&&j.getAttribute('href'),jw:q&&Math.round(q.width),jh:q&&Math.round(q.height),list:document.querySelectorAll('#bfpTalkList > li').length};})()");
-    check(at + "\"Comments on members' posts are for members\" with Join (44 px, to billing.html), the server's sentence, the comments still shown, no comment box",
-      !!tk && tk.shown && !tk.form && tk.head === "Comments on members' posts are for members" && tk.rule === require("../lib/membership").FREE_RULES.comment_member_post &&
+      "return {shown:!b.hidden,form:!!f&&!f.hidden&&f.getBoundingClientRect().height>0,head:(b.querySelector('.bfp-tm-h')||{}).textContent,paras:b.querySelectorAll('p').length,old:!!b.querySelector('.bfp-tm-s'),join:j&&j.getAttribute('href'),jw:q&&Math.round(q.width),jh:q&&Math.round(q.height),list:document.querySelectorAll('#bfpTalkList > li').length};})()");
+    // NAMED (Nov 22 2026, FX3): BEFORE a heading typed in bf-feed.js ("Comments on members' posts are for members") over the server's refusal
+    // sentence. AFTER one sentence, lib/membership.js's TALK_MEMBERS_ONLY, sent by the server before any try; the refusal keeps its own.
+    const TMO = require("../lib/membership").TALK_MEMBERS_ONLY;
+    check(at + "\"" + TMO + "\" (the server's one sentence, shown before any try) with Join (44 px, to billing.html), the comments still shown, no comment box",
+      !!tk && tk.shown && !tk.form && tk.head === TMO && tk.paras === 1 && !tk.old && TMO !== require("../lib/membership").FREE_RULES.comment_member_post &&
       tk.join === "/billing.html" && tk.jh >= 44 && tk.jw >= 44 && tk.list >= 1, J(tk));
     await pageChecks(at, { panel: false, sheet: true });
     await shotB("talk-member-post-free");
@@ -2400,7 +2438,7 @@ async function p32Run(cdp, origin) {
     check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
     const deco = m.deco.filter(x => !(opts && opts.sheet && SHEETS.test(x)));
     check(at + "decoration is under the text" + (opts && opts.sheet ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
-    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && SHEETS.test(x)));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && SHEETS.test(x)));
     check(at + "no fixed element over text or a control at rest" + (opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
   };
   // the mark, then a tap on it: the sheet, Close, and the page stays
@@ -2475,3 +2513,234 @@ async function p32Run(cdp, origin) {
     await ev("sessionStorage.removeItem('phone_check_out'),true");
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NAMED (Nov 22 2026, FX3): PHONE_FX3=1 runs only FX3's own screens (fx3Run) at PHONE_FX3_WIDTHS (default 360,390,430),
+   with the owner's boards' screenshots at 390 x 844, DPR 2, to PHONE_FX3_OUT (default Downloads\fx3). Fixtures only:
+   the owner Rose (a member), then a free account (/api/auth/me tier "free"). Every page's Guide insight is seeded in
+   sessionStorage (bf_tmx_insight:<page>), so no insight is asked of the server; the free account's pass clears the seed
+   and proves no /api/insights/page request is made. No chat message is ever sent (FX3S.sent stays 0).
+     the HQ with ORACLE open: the abyss sun (the chat's void, its stars at the chat's density, no glow, the gold ring,
+       no green ring), and another portal (SELL: none of it);
+     the mist: 56 x 56, 16 px from the right, 16 px above the bar, z-index 46, a labelled button, its whisper inside;
+     the Guide: the tab at the left edge, in the middle, 32 x 170 or taller; open, min(300, width - 48) wide, at most
+       70vh, clear of the bar, the tab at its right edge; Escape, an outside tap and the tab close it; no book button;
+     the chat: 8 px each side, 10 px above the mist, at most 420 px, Reset hidden, Guide and Oracle modes;
+     a free account: the mist opens the members panel, never the chat; the Guide has no Insights and asks nothing;
+     reduced motion: the disc and the chat drawn still, the plain fade, no shooting star;
+     the Agent Directory: Large, Compact and Grid, each agent's colour and icon the shared map's and the dashboard's;
+     where they stay hidden: oracle.html (no mist), signed out (neither).
+   ══════════════════════════════════════════════════════════════════════════ */
+const FX3S = { free: false, insightAsks: 0, sent: 0 };
+function fx3Api(method, u, request) {
+  const p = u.pathname;
+  if (p === "/api/auth/me" && FX3S.free) return { user: Object.assign({}, ROSE, { role: "user", email_verified_at: ago(24) }),
+    access: { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: true, members_panel: require("../lib/membership").membersPanelFromCode() },
+    subscription: null, profile: { username: "rose" } };
+  if (p === "/api/insights/page") { FX3S.insightAsks++; return { insight: "A live insight (this request should not have been made)." }; }
+  if (p === "/api/oracle") { if (method !== "GET") { FX3S.sent++; return { reply: "" }; } return { messages: [] }; }
+  if (p === "/api/user/preferences") return method === "PUT" ? { saved: true } : { ok: true, preferences: {}, termaximus_active: true, hq_card_view: null, hq_orbit: null, agents_card_view: null };
+  if (p === "/api/moon") return MOON;
+  // the Directory's names and links, as the server sends them (the shared fixture has neither)
+  if (p === "/api/agents") return { agents: AGENTS.map(x => Object.assign({}, x, { display_name: x.name, page_url: "/" + x.agent_type + "-agent.html" })) };
+  return undefined;
+}
+const FX3_SEED_PAGES = ["dashboard.html", "ai-agents.html", "home.html", "profile.html", "inbox.html"];
+const FX3_INSIGHT = "A short insight about this page, written for you.";
+// the mist, the Guide and the chat, as drawn
+const FX3_READ = String.raw`(function(){var R=function(e){if(!e)return null;var r=e.getBoundingClientRect();return {l:+r.left.toFixed(1),t:+r.top.toFixed(1),r:+r.right.toFixed(1),b:+r.bottom.toFixed(1),w:+r.width.toFixed(1),h:+r.height.toFixed(1)};};
+  var root=document.getElementById('tmx-presence-root'),gr=document.getElementById('tmx-guide-root'),tab=document.getElementById('tmx-guide-tab'),panel=document.getElementById('tmx-guide-panel'),
+    chat=document.getElementById('tmx-chat'),bar=document.getElementById('bf-tabbar'),wh=document.getElementById('tmx-whisper'),reset=document.getElementById('tmx-chat-reset'),ins=panel&&panel.querySelector('.tmx-guide-section--insights');
+  var vis=function(e){if(!e)return false;for(var n=e;n&&n.nodeType===1;n=n.parentElement){var c=getComputedStyle(n);if(c.display==='none'||c.visibility==='hidden')return false;}var r=e.getBoundingClientRect();return r.width>0&&r.height>0;};
+  var cs=root&&getComputedStyle(root),pcs=panel&&getComputedStyle(panel),ccs=chat&&getComputedStyle(chat);
+  return {W:innerWidth,H:innerHeight,mist:vis(root)?R(root):null,mistZ:cs&&cs.zIndex,mistPE:cs&&cs.pointerEvents,mistRole:root&&root.getAttribute('role'),mistLabel:root&&root.getAttribute('aria-label'),mistTab:root&&root.tabIndex,
+    whisper:wh&&vis(wh)?R(wh):null,bar:vis(bar)?R(bar):null,guide:vis(gr),tab:vis(tab)?R(tab):null,open:!!gr&&gr.classList.contains('tmx-guide-open'),panel:panel?R(panel):null,
+    panelOpacity:pcs&&pcs.opacity,panelOverflow:pcs&&pcs.overflowY,insights:vis(ins),insightText:ins?(ins.querySelector('#tmx-guide-insight-text')||{}).textContent:null,
+    fab:!!document.getElementById('tmx-guide-fab')||!!document.getElementById('tmx-guide-sheet'),
+    chat:chat?R(chat):null,chatOpacity:ccs&&ccs.opacity,chatVis:ccs&&ccs.visibility,chatTransform:ccs&&ccs.transform,chatFilter:ccs&&ccs.filter,chatPE:ccs&&ccs.pointerEvents,chatAnim:ccs&&ccs.animationName,chatRimAnim:chat&&getComputedStyle(chat,'::before').animationName,chatTransition:chat&&chat.style.transition,
+    reset:reset?getComputedStyle(reset).display:null,shoot:(function(){var s=document.getElementById('tmx-chat-shoot');return s?{op:getComputedStyle(s).opacity,anim:getComputedStyle(s).animationName}:null;})(),
+    hscroll:document.documentElement.scrollWidth>innerWidth+1,panelBox:!!document.getElementById('bf-members-panel')};})()`;
+async function fx3Run(cdp, origin) {
+  fs.mkdirSync(FX3_OUT, { recursive: true });
+  console.log("browserCheckPhone FX3 (the abyss sun, Termaximus on the phone, the agents' colours and icons) at " + FX3_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");" +
+    "if(!sessionStorage.getItem('fx3_noseed'))" + J(FX3_SEED_PAGES) + ".forEach(function(p){sessionStorage.setItem('bf_tmx_insight:'+p," + J(J({ ok: true, insight: FX3_INSIGHT })) + ");});}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const DS = require("./designSpec"), TM = DS.TMX, AB = DS.HQ.ABYSS;
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const near = (a, b, d) => typeof a === "number" && typeof b === "number" && Math.abs(a - b) <= (d === undefined ? 1.5 : d);
+  const shot = async (w, file) => { if (w !== 390) return; const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(FX3_OUT, file), Buffer.from(r.data, "base64")); };
+  const exc0 = () => exceptionsSeen();
+  const pageChecks = async (at, extra) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    check(at + "every tap target is at least 44 x 44 (the Guide's 32 px tab aside, the board's)", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    check(at + "decoration is under the text", m.deco.length === 0, J(m.deco));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !(extra && extra.test(x)));
+    check(at + "no fixed element over text or a control at rest (the mist and the bar float by design)", over.length === 0, J(over));
+  };
+  const outside = "['pointerdown','mousedown','touchstart','click'].forEach(function(t){var e=t==='touchstart'?new Event(t,{bubbles:true}):new MouseEvent(t,{bubbles:true,clientX:innerWidth-6,clientY:40});document.body.dispatchEvent(e);}),true";
+  const tapTab = "(function(){var t=document.getElementById('tmx-guide-tab');if(!t)return false;t.click();return true;})()";
+  const tapMist = "(function(){var r=document.getElementById('tmx-presence-root');if(!r)return false;r.click();return true;})()";
+  const startExc = exceptionsSeen();
+  for (const w of FX3_WIDTHS) {
+    const h = HT[w] || 844;
+    FX3S.free = false; FX3S.insightAsks = 0;
+    await open(cdp, origin, "sw.js", w, h, true);
+    await ev("(function(){try{sessionStorage.removeItem('fx3_noseed');localStorage.removeItem('bf_hq_view');localStorage.removeItem('bf_hq_orbit');localStorage.removeItem('bf_agents_view');localStorage.removeItem('tmx_presence_pos');}catch(e){}return true;})()");
+
+    // 1. the HQ, ORACLE open: the abyss sun
+    await open(cdp, origin, "dashboard.html", w, h, true);
+    await ev("window.BFOrbit&&window.BFOrbit.open('oracle'),true"); await sleep(1500);
+    let at = "FX3 HQ ORACLE at " + w + ": ";
+    const sun = await ev(ABYSS_READ);
+    check(at + "the abyss disc fills the centre's circle (" + (sun && sun.disc && sun.disc.w) + " px, the Sun's size), clipped round, first in the centre; its gold ring " + AB.BOARD_RING + " px at 390 (the board's)",
+      !!sun && sun.open === "oracle" && sun.disp === "block" && sun.first && sun.radius === "50%" && sun.overflow === "hidden" && near(sun.disc.w, sun.inner) && near(sun.disc.h, sun.inner) &&
+      (w !== 390 || near(sun.ring.w, AB.BOARD_RING, 2)), J(sun && [sun.disc, sun.core, sun.inner, sun.ring]));
+    check(at + "its void is the chat box's, as the browser draws #tmx-chat: the same four gradients, sizes and colour (" + AB.VOID_BASE + "), tmx-chat-void at 22 s",
+      !!sun && sun.grads === 4 && !!sun.chatBg && sun.bgImage === sun.chatBg && sun.size === sun.chatSize && sun.bgColor === sun.chatColor && /rgba\(2, 1, 10, 0\.98\)/.test(sun.bgColor) &&
+      sun.anim === "tmx-chat-void" && sun.anim === sun.chatAnim && sun.dur === "22s" && sun.dur === sun.chatDur, J(sun && [sun.grads, sun.bgColor, sun.chatColor, sun.size, sun.chatSize, sun.anim, sun.dur]));
+    const want = sun && sun.info ? AB.STAR_BASE.COUNTS.map(c => Math.round(c * sun.info.width * sun.info.height / (AB.STAR_BASE.W * AB.STAR_BASE.H))) : null;
+    check(at + "its stars run at the chat box's density per area (" + J(want) + " in " + (sun && sun.info ? sun.info.width + " x " + sun.info.height : "?") + "), painted",
+      !!sun && !!sun.info && sun.info.running && J(sun.info.counts) === J(want) && sun.painted > 0 && near(sun.canvas.w, sun.disc.w), J(sun && [sun.info, sun.painted]));
+    check(at + "no glow, rays or corona; the gold ring round it; the green stats ring hidden; the moon on the ORACLE node and chip, none in the centre",
+      !!sun && sun.glow === "none" && sun.filter === "none" && sun.after === "none" && sun.before === "none" && sun.ringDisp !== "none" && sun.ring.w > sun.disc.w + 2 && Math.abs((sun.ring.l + sun.ring.w / 2) - (sun.disc.l + sun.disc.w / 2)) <= 1 &&
+      sun.green.length > 0 && sun.green.every(d => d === "none") && !sun.coreMoon && sun.nodeMoon && sun.chipMoon, J(sun && [sun.glow, sun.ring, sun.green, sun.coreMoon, sun.nodeMoon, sun.chipMoon]));
+    // the mist and the Guide's tab at rest
+    let s = await ev(FX3_READ);
+    const barTop = s.bar ? s.bar.t : s.H;
+    check(at + "the mist: " + TM.MIST.SIZE + " x " + TM.MIST.SIZE + ", " + TM.MIST.RIGHT + " px from the right, " + TM.MIST.ABOVE_BAR + " px above the bar, z-index " + TM.MIST.Z + ", a labelled button (\"" + TM.MIST.LABEL + "\") that takes taps",
+      !!s.mist && near(s.mist.w, TM.MIST.SIZE) && near(s.mist.h, TM.MIST.SIZE) && near(s.W - s.mist.r, TM.MIST.RIGHT) && near(barTop - s.mist.b, TM.MIST.ABOVE_BAR) && !!s.bar &&
+      s.mistZ === String(TM.MIST.Z) && s.mistPE === "auto" && s.mistRole === "button" && s.mistLabel === TM.MIST.LABEL && s.mistTab === 0, J([s.mist, s.bar, s.mistZ, s.mistPE, s.mistRole, s.mistLabel]));
+    check(at + "its whisper (when shown) stays inside the screen", !s.whisper || (s.whisper.l >= -0.5 && s.whisper.r <= s.W + 0.5), J(s.whisper));
+    check(at + "the Guide's tab at the left edge, in the middle, " + TM.GUIDE.TAB_W + " px wide, " + TM.GUIDE.TAB_MIN_H + " px or taller; no book button and no sheet",
+      !!s.tab && near(s.tab.l, 0) && near(s.tab.w, TM.GUIDE.TAB_W) && s.tab.h >= TM.GUIDE.TAB_MIN_H - 0.5 && near((s.tab.t + s.tab.b) / 2, s.H / 2, 2) && !s.open && !s.fab, J([s.tab, s.open, s.fab]));
+    await pageChecks(at);
+    await shot(w, "hq-abyss-sun.png");
+    // the Guide open
+    await ev(tapTab); await sleep(700);
+    s = await ev(FX3_READ);
+    const pw = Math.min(TM.GUIDE.PANEL_W, w - TM.GUIDE.PANEL_EDGE);
+    at = "FX3 Guide open at " + w + ": ";
+    check(at + "the panel " + pw + " px wide from the left edge, the tab at its right edge, shown",
+      s.open && !!s.panel && near(s.panel.l, 0) && near(s.panel.w, pw) && !!s.tab && near(s.tab.l, s.panel.r, 1.5) && s.panelOpacity === "1", J([s.panel, s.tab, s.panelOpacity]));
+    check(at + "at most " + TM.GUIDE.PANEL_MAX_VH + "vh tall, scrolling, clear of the bottom bar", s.panel.h <= s.H * TM.GUIDE.PANEL_MAX_VH / 100 + 0.5 && s.panelOverflow === "auto" && s.panel.b <= barTop + 0.5 && s.panel.t >= -0.5, J([s.panel, barTop, s.panelOverflow]));
+    check(at + "a member sees the page's tips and the Insights section (the seeded insight; nothing asked of the server)", s.insights && s.insightText === FX3_INSIGHT && FX3S.insightAsks === 0, J([s.insights, s.insightText, FX3S.insightAsks]));
+    const barHit = await ev("(function(){var b=document.getElementById('bf-tabbar');if(!b)return 'no bar';var r=b.getBoundingClientRect(),bad=[];for(var i=0;i<10;i++){var x=r.left+(i+.5)*r.width/10,e=document.elementFromPoint(x,r.top+r.height/2);if(e&&!b.contains(e))bad.push(e.id||e.className);}return bad;})()");
+    check(at + "it never covers the bottom bar", Array.isArray(barHit) && barHit.length === 0, J(barHit));
+    await shot(w, "guide-open.png");
+    await ev("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})),true"); await sleep(500);
+    const escClosed = !(await ev(FX3_READ)).open;
+    await ev(tapTab); await sleep(500); await ev(outside); await sleep(500);
+    const outClosed = !(await ev(FX3_READ)).open;
+    await ev(tapTab); await sleep(500); await ev(tapTab); await sleep(500);
+    const tabClosed = !(await ev(FX3_READ)).open;
+    check(at + "Escape, an outside tap and the tab each close it", escClosed && outClosed && tabClosed, J([escClosed, outClosed, tabClosed]));
+    // the chat: Guide mode, then Oracle mode (measured once its opening transition has finished: the ten styles differ in length)
+    await ev(tapMist); await sleep(900);
+    for (let i = 0; i < 25; i++) { s = await ev(FX3_READ); if (s.chatOpacity === "1" && (s.chatTransform === "none" || /^matrix(1, 0, 0, 1, 0, 0)$/.test(s.chatTransform)) && (s.chatFilter === "none" || !s.chatFilter)) break; await sleep(200); }
+    at = "FX3 chat at " + w + ": ";
+    const mistTop = s.mist ? s.mist.t : NaN, wantH = Math.min(TM.CHAT.HEIGHT, s.H - TM.CHAT.TOP_GAP, s.H - (s.H - mistTop + TM.CHAT.ABOVE_MIST) - 8);
+    check(at + "open, " + TM.CHAT.SIDE + " px from each side, its bottom " + TM.CHAT.ABOVE_MIST + " px above the mist, " + Math.round(wantH) + " px tall (at most " + TM.CHAT.HEIGHT + ")",
+      !!s.chat && s.chatOpacity === "1" && s.chatPE === "auto" && near(s.chat.l, TM.CHAT.SIDE) && near(s.W - s.chat.r, TM.CHAT.SIDE) && near(mistTop - s.chat.b, TM.CHAT.ABOVE_MIST) && near(s.chat.h, wantH) && !s.hscroll, J([s.chat, s.mist, s.chatOpacity]));
+    check(at + "Reset hidden; the box drawn (visible) and keeps its void and gold rim (animated, motion allowed)", s.chatVis === "visible" && s.reset === "none" && s.chatAnim === "tmx-chat-void" && !!s.chatRimAnim && s.chatRimAnim !== "none", J([s.reset, s.chatAnim, s.chatRimAnim]));
+    const cv = await ev("(function(){var c=document.querySelector('#tmx-chat canvas');return c?{w:c.clientWidth,h:c.clientHeight}:null;})()");
+    check(at + "its starfield canvas fills the phone's box", !!cv && near(cv.w, s.chat.w, 2) && near(cv.h, s.chat.h, 2), J([cv, s.chat]));
+    await shot(w, "chat-guide.png");
+    await ev("(function(){var t=document.getElementById('tmx-tab-oracle');if(t)t.click();return !!t;})()"); await sleep(900);
+    const om = await ev("(function(){var t=document.getElementById('tmx-tab-oracle');var m=document.getElementById('tmx-chat-msgs');return {sel:t&&t.getAttribute('aria-selected'),text:m?m.textContent:''};})()");
+    check(at + "Oracle mode: its tab selected, the Oracle's greeting; no message sent", om.sel === "true" && /The Oracle stirs/.test(om.text) && FX3S.sent === 0, J([om.sel, om.text.slice(0, 80), FX3S.sent]));
+    await shot(w, "chat-oracle.png");
+    await ev("(function(){var t=document.getElementById('tmx-tab-guide');if(t)t.click();return true;})()"); await sleep(300);
+    await ev(tapMist); await sleep(1200);
+    s = await ev(FX3_READ);
+    check(at + "a second tap on the mist closes it, and once closed the box is not drawn on the phone (hidden, so no blur or animation is painted over the orbit)", s.chatOpacity === "0" && s.chatPE === "none" && s.chatVis === "hidden", J([s.chatOpacity, s.chatPE, s.chatVis]));
+    // another portal
+    await ev("window.BFOrbit&&window.BFOrbit.open('sell'),true"); await sleep(900);
+    const other = await ev(ABYSS_READ);
+    check("FX3 HQ another portal (SELL) at " + w + ": no abyss, its stars stopped, the green ring back", !!other && other.disp === "none" && !!other.info && !other.info.running && other.green.some(d => d !== "none"), J(other && [other.disp, other.info, other.green]));
+
+    // 2. reduced motion
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    await open(cdp, origin, "dashboard.html", w, h, true);
+    await ev("window.BFOrbit&&window.BFOrbit.open('oracle'),true"); await sleep(1300);
+    at = "FX3 reduced motion at " + w + ": ";
+    const r1 = await ev(ABYSS_READ), pic1 = await ev("(function(){var c=document.querySelector('#orbitCore .hq-core-abyss canvas');return c?c.toDataURL():null;})()");
+    await sleep(1500);
+    const pic2 = await ev("(function(){var c=document.querySelector('#orbitCore .hq-core-abyss canvas');return c?c.toDataURL():null;})()");
+    check(at + "the abyss disc is drawn still: no void drift, the same picture 1.5 s apart", !!r1 && r1.anim === "none" && !!r1.info && r1.info.reducedMotion && r1.painted > 0 && !!pic1 && pic1 === pic2, J(r1 && [r1.anim, r1.info, r1.painted, pic1 === pic2]));
+    await ev(tapMist); await sleep(700);
+    s = await ev(FX3_READ);
+    check(at + "the chat opens with a plain " + TM.STILL_FADE_S + " s fade; its void, rim and shooting star still",
+      s.chatOpacity === "1" && /opacity 0\.2s/.test(s.chatTransition || "") && s.chatAnim === "none" && s.chatRimAnim === "none" && !!s.shoot && s.shoot.op === "0", J([s.chatOpacity, s.chatTransition, s.chatAnim, s.chatRimAnim, s.shoot]));
+    await shot(w, "chat-reduced-motion.png");
+    await ev(tapMist); await sleep(500);
+    await cdp.send("Emulation.setEmulatedMedia", { features: [] });
+
+    // 3. another page: Home's feed (the mist over the feed, under its sheets); oracle.html (no mist)
+    await open(cdp, origin, "home.html", w, h, true);
+    s = await ev(FX3_READ);
+    // Home loads no Guide (as before FX3), so only the mist is here
+    check("FX3 Home at " + w + ": the mist in its place over the feed, no book button", !!s.mist && near(s.W - s.mist.r, TM.MIST.RIGHT) && !!s.bar && near(s.bar.t - s.mist.b, TM.MIST.ABOVE_BAR) && !s.fab, J([s.mist, s.bar]));
+    await pageChecks("FX3 Home at " + w + ": ");
+    await open(cdp, origin, "oracle.html", w, h, true);
+    s = await ev(FX3_READ);
+    check("FX3 oracle.html at " + w + ": no mist (TMX_NO_MIST_PAGES, as before)", !s.mist, J(s.mist));
+
+    // 4. the Agent Directory: Large, Compact and Grid
+    const dash = await (async () => {
+      await open(cdp, origin, "dashboard.html", w, h, true);
+      await ev("window.BFOrbit&&window.BFOrbit.open('agents'),true"); await sleep(900);
+      return ev("[].map.call(document.querySelectorAll('#orbitGrid #agentDirectoryLanding .orbit-dir-icon'),function(e){var cs=getComputedStyle(e),s=e.querySelector('svg');return{agent:e.getAttribute('data-bf-agent-mark'),color:cs.color,ring:cs.borderTopColor,glow:cs.boxShadow,icon:s?s.innerHTML.replace(/\\s+/g,' '):null}})");
+    })();
+    check("FX3 dashboard agents at " + w + ": the Directory box's five agents carry their marks", Array.isArray(dash) && dash.length === 5 && dash.every(d => d.agent && d.icon), J(dash));
+    await open(cdp, origin, "ai-agents.html", w, h, true);
+    for (const view of ["large", "compact", "grid"]) {
+      await ev("(function(){var b=document.querySelector('#agViewRow .ag-view-btn[data-view=\"" + view + "\"]');if(b)b.click();return !!b;})()"); await sleep(500);
+      const items = await ev(FX3_AGENTS);
+      at = "FX3 Agent Directory " + view + " at " + w + ": ";
+      const bad = (items || []).filter(i => !i.known || i.color !== i.wantColor || i.icon !== i.wantIcon || !i.shown);
+      const dashBad = (items || []).filter(i => { const d = (dash || []).find(x => x.agent === i.agent); return d && (d.color !== i.color || d.icon !== i.icon || d.ring !== i.ring || d.glow !== i.glow); });
+      check(at + "every agent (" + (items || []).length + ") carries the shared map's own colour and icon", Array.isArray(items) && items.length >= 18 && bad.length === 0 && items.every(i => i.view === view), J(bad.slice(0, 3)));
+      check(at + "and the dashboard's agents are identical there (colour, ring, glow, icon)", dashBad.length === 0 && (items || []).filter(i => (dash || []).some(d => d.agent === i.agent)).length === 5, J(dashBad.slice(0, 2)));
+      await pageChecks(at);
+      await shot(w, "agents-" + view + ".png");
+    }
+
+    // 5. a free account: the mist opens the members panel; the Guide asks nothing
+    FX3S.free = true; FX3S.insightAsks = 0;
+    await ev("(function(){try{sessionStorage.setItem('fx3_noseed','1');Object.keys(sessionStorage).filter(function(k){return k.indexOf('bf_tmx_insight:')===0;}).forEach(function(k){sessionStorage.removeItem(k);});}catch(e){}return true;})()");
+    await open(cdp, origin, "dashboard.html", w, h, true);
+    at = "FX3 free account at " + w + ": ";
+    await ev(tapMist); await sleep(900);
+    s = await ev(FX3_READ);
+    check(at + "a tap on the mist opens the members panel, never the chat", s.panelBox && s.chatOpacity === "0" && s.chatPE === "none", J([s.panelBox, s.chatOpacity]));
+    await shot(w, "free-mist-panel.png");
+    await ev("(function(){var v=document.getElementById('bf-members-panel');if(v)v.parentNode.removeChild(v);return true;})()");
+    await ev(tapTab); await sleep(900);
+    s = await ev(FX3_READ);
+    const insNode = await ev("!!document.querySelector('#tmx-guide-panel .tmx-guide-section--insights')");
+    check(at + "the Guide shows the page's tips only: no Insights section, no /api/insights/page request", s.open && !s.insights && !insNode && FX3S.insightAsks === 0, J([s.open, s.insights, insNode, FX3S.insightAsks]));
+    await ev(tapTab); await sleep(300);
+    FX3S.free = false;
+    await ev("(function(){try{sessionStorage.removeItem('fx3_noseed');}catch(e){}return true;})()");
+
+    // 6. signed out: neither the mist nor the Guide
+    await ev("sessionStorage.setItem('phone_check_out','1'),localStorage.removeItem('bf_token'),localStorage.removeItem('bf_user'),true");
+    await open(cdp, origin, "ai-agents.html", w, h, true);
+    s = await ev(FX3_READ);
+    check("FX3 signed out at " + w + ": no mist and no Guide", !s.mist && !s.guide, J([s.mist, s.guide]));
+    await ev("sessionStorage.removeItem('phone_check_out'),true");
+  }
+  check("FX3: no chat message was sent in the whole run", FX3S.sent === 0, FX3S.sent);
+  const exc = exceptionsSeen().slice(startExc.length).filter(x => /tmx|abyss|Abyss|agent-marks|AgentMarks|guide|bf-hq-views/i.test(x));
+  check("FX3: no page threw from the Termaximus, abyss or agent-marks scripts", exc.length === 0, J(exc.slice(0, 5)));
+}
+// the Agent Directory's marks against the shared map (BFAgentMarks), as drawn
+const FX3_AGENTS = String.raw`(function(){var pg=document.querySelector('.page');var v=pg&&pg.getAttribute('data-ag-view');var M=window.BFAgentMarks;
+  var q=v==='large'?[].map.call(document.querySelectorAll('article.agent-card'),function(c){return[(/agent-card--([a-z_]+)/.exec(c.className)||[])[1],c.querySelector('.agent-avatar')]}):[].map.call(document.querySelectorAll('#agList .ag-item'),function(i){return[i.getAttribute('data-agent'),i.querySelector('.ag-icon')]});
+  var probe=document.createElement('span');document.body.appendChild(probe);
+  var out=q.map(function(p){var e=p[1],cs=e?getComputedStyle(e):null,s=e&&e.querySelector('svg');var known=!!(M&&p[0]&&M.colour&&M.colour(p[0]));var wantColor=null,wantIcon=null;
+    if(known){probe.style.color=M.colour(p[0]);wantColor=getComputedStyle(probe).color;var d=document.createElement('div');d.innerHTML=M.svg(p[0]);var ws=d.querySelector('svg');wantIcon=ws?ws.innerHTML.replace(/\s+/g,' '):null;}
+    return{agent:p[0],view:v,known:known,color:cs&&cs.color,wantColor:wantColor,ring:cs&&cs.borderTopColor,glow:cs&&cs.boxShadow,icon:s?s.innerHTML.replace(/\s+/g,' '):null,wantIcon:wantIcon,shown:!!e&&e.getBoundingClientRect().width>0};});
+  probe.remove();return out;})()`;

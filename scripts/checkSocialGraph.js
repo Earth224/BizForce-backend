@@ -34,6 +34,10 @@
         paid member's post it is 403 with the members panel and one sentence,
         and nothing is written; GET .../comments tells the app (can_comment,
         comment_rule); a member comments anywhere they can see.
+        NAMED (Nov 22 2026, FX3): before an attempt Talk shows lib/membership.js
+        TALK_MEMBERS_ONLY (one source, sent by the server, never copied into
+        the app) with Join; the refusal after an attempt keeps its own
+        sentence; a member sees neither.
 
    MUTATE=<name> applies one mutation in memory; MUTATE=all runs each.
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -41,6 +45,7 @@ const H = require("./_p21Harness");
 const { memDb } = require("./_p23Db");
 
 const SERVER = "@server.js", POSTS = "@lib/posts.js", MIG = "@supabase/migrations/194_social_graph.sql", YD = "@lib/yourData.js", BK = "@lib/backup.js";
+const MEMB = "@lib/membership.js", FEED = "scripts/bf-feed.js";   // NAMED (Nov 22 2026, FX3)
 const MUTATIONS = {
   "follow-across-block": [[POSTS, "  if (await SF.blockedEitherWay(deps.sb, viewerId, target)) return notAvailable();\n", ""]],
   "follow-self": [[POSTS, "  if (target === viewerId) return fail(400, MESSAGES.self);\n", ""]],
@@ -60,10 +65,19 @@ const MUTATIONS = {
   "yourdata-no-follows": [[YD, '  { table: "follows", group: "profile",', '  { table: "follows_gone", group: "profile",']],
   // NAMED (Nov 21 2026, P3-1B): the comment rule (section G)
   "free-comments-member-post": [[POSTS, "  if (rule) return membersOnly(deps, rule, \"members_only\");\n", ""]],
-  "free-blocked-on-free": [[POSTS, "  if ((await tierOf(deps, post.author_id)) !== \"member\") return null;\n", ""]]
+  "free-blocked-on-free": [[POSTS, "  if ((await tierOf(deps, post.author_id)) !== \"member\") return null;\n", ""]],
+  // NAMED (Nov 22 2026, FX3): Talk before an attempt (section G4, G6-G8)
+  "talk-rule-is-refusal": [[POSTS, "comment_rule: rule ? require(\"./membership\").TALK_MEMBERS_ONLY : null", "comment_rule: rule"]],
+  "talk-rule-for-members": [[POSTS, "comment_rule: rule ? require(\"./membership\").TALK_MEMBERS_ONLY : null", "comment_rule: require(\"./membership\").TALK_MEMBERS_ONLY"]],
+  "refusal-is-talk": [[POSTS, "  if (rule) return membersOnly(deps, rule, \"members_only\");\n", "  if (rule) return membersOnly(deps, require(\"./membership\").TALK_MEMBERS_ONLY, \"members_only\");\n"]],
+  "talk-wording-changed": [[MEMB, "const TALK_MEMBERS_ONLY = \"Comments on members' posts are for members. Join to add yours.\";", "const TALK_MEMBERS_ONLY = \"Comments on members' posts are for members.\";"]],
+  "talk-copied-in-feed": [[FEED, "      if (r.body.can_comment === false) talkRule(r.body.comment_rule);", "      if (r.body.can_comment === false) talkRule(r.body.comment_rule || \"Comments on members' posts are for members. Join to add yours.\");"]],
+  "feed-ignores-rule": [[FEED, "      if (r.body.can_comment === false) talkRule(r.body.comment_rule);", "      if (r.body.can_comment === false) talkRule(null);"]],
+  "feed-no-join": [[FEED, "      '<a class=\"bfp-send bfp-tm-join\" href=\"/billing.html\">Join</a></div>';", "      '</div>';"]],
+  "feed-refusal-replaced": [[FEED, "if (r.body && r.body.reason === \"members_only\") { talkRule(r.body.error); return; }", "if (r.body && r.body.reason === \"members_only\") { talkRule(talkState.rule); return; }"]]
   // (no mutant for commentRule's own-post line: a free viewer's own post has a free author, so the next line answers the same)
 };
-const T = H.setup(__filename, MUTATIONS, [SERVER, POSTS, MIG, YD, BK]);
+const T = H.setup(__filename, MUTATIONS, [SERVER, POSTS, MIG, YD, BK, MEMB, FEED]);
 const { FILES, check, J, has } = T;
 const P = T.libRequire("./lib/posts");
 
@@ -224,13 +238,15 @@ const f = (a, b, at) => ({ follower_id: a, following_id: b, created_at: at || OL
   /* ── G (NAMED, Nov 21 2026, P3-1B, the owner's rule) ── */
   console.log("\n══ G. comments: a free account comments on free accounts' posts only ══");
   {
-    const RULE = require("../lib/membership").FREE_RULES.comment_member_post;
+    const RULE = T.libRequire("./lib/membership").FREE_RULES.comment_member_post;
+    const TALK = T.libRequire("./lib/membership").TALK_MEMBERS_ONLY;   // NAMED (Nov 22 2026, FX3)
     const PANEL = { title: "Members get this" };
     const FREE_IDS = new Set([FAN, OTHER]);   // ME and THEM are paid members
     const gw = world({ posts: [post(pid(81), ME), post(pid(82), OTHER), post(pid(83), FAN)] });
     gw.deps.tierOf = async id => (FREE_IDS.has(id) ? "free" : "member");
     gw.deps.membersPanel = () => PANEL;
     let g = await P.addComment(gw.deps, FAN, pid(81), { body: "Lovely bread" });
+    const g1Refusal = g.body && g.body.error;   // NAMED (Nov 22 2026, FX3): G7
     check("G1. a free account on a paid member's post: 403 members_only, the owner's sentence and the members panel, nothing written",
       g.status === 403 && g.body.reason === "members_only" && g.body.error === RULE && J(g.body.members_panel) === J(PANEL) && gw.db.t.post_comments.length === 0, J(g));
     g = await P.addComment(gw.deps, FAN, pid(82), { body: "Same here" });
@@ -240,10 +256,28 @@ const f = (a, b, at) => ({ follower_id: a, following_id: b, created_at: at || OL
     const g3 = await P.addComment(gw.deps, ME, pid(82), { body: "Member on a free post" });
     check("G3. a member comments on a member's post and on a free account's", g.status === 201 && g3.status === 201, J([g.status, g3.status]));
     const lf = await P.listComments(gw.deps, FAN, pid(81)), lm = await P.listComments(gw.deps, THEM, pid(81)), lo = await P.listComments(gw.deps, FAN, pid(82));
-    check("G4. the comments list tells the app: can_comment false and the sentence for a free account on a member's post; true otherwise",
-      lf.status === 200 && lf.body.can_comment === false && lf.body.comment_rule === RULE && lf.body.comments.length === 1 &&
+    // NAMED (Nov 22 2026, FX3): BEFORE comment_rule === RULE (the refusal itself). AFTER the sentence for before an attempt.
+    check("G4. the comments list tells the app: can_comment false and the before-an-attempt sentence for a free account on a member's post; true and no sentence otherwise (a member sees none)",
+      lf.status === 200 && lf.body.can_comment === false && lf.body.comment_rule === TALK && lf.body.comments.length === 1 &&
       lm.body.can_comment === true && lm.body.comment_rule === null && lo.body.can_comment === true, J([lf.body.can_comment, lf.body.comment_rule, lm.body.can_comment, lo.body.can_comment]));
     check("G5. the sentence says what is allowed instead", /for members/.test(RULE) && /posts by other free accounts/.test(RULE) && /Nothing was posted\.$/.test(RULE), RULE);
+    /* NAMED (Nov 22 2026, FX3): Talk before an attempt. */
+    const WANT = "Comments on members' posts are for members. Join to add yours.";
+    const REFUSAL = "Comments on members' posts are for members. You can comment on posts by other free accounts. Nothing was posted.";
+    const fsx = require("fs"), px = require("path");
+    const frontFiles = [];
+    [".", "scripts"].forEach(d => { try { fsx.readdirSync(px.join(H.FRONTEND, d)).filter(n => /[.](js|html)$/.test(n)).forEach(n => frontFiles.push(d === "." ? n : d + "/" + n)); } catch (e) {} });
+    const copies = frontFiles.filter(n => /Join to add yours/.test((n === FEED ? FILES[FEED] : fsx.readFileSync(px.join(H.FRONTEND, n), "utf8")) || ""));
+    const backCopies = [SERVER, POSTS].filter(k => /Join to add yours/.test(FILES[k] || ""));
+    check("G6. the Talk sentence is said once, in lib/membership.js, word for word; no copy in server.js, lib/posts.js or any frontend page or script (" + frontFiles.length + " read)",
+      TALK === WANT && T.count(FILES[MEMB], WANT) === 1 && frontFiles.length > 50 && copies.length === 0 && backCopies.length === 0, J([TALK, copies, backCopies]));
+    check("G7. the refusal after an attempt keeps its own sentence, word for word, and is not the Talk sentence", RULE === REFUSAL && g1Refusal === REFUSAL && RULE !== TALK, J([RULE, g1Refusal]));
+    const FD = FILES[FEED] || "";
+    check("G8. Talk (scripts/bf-feed.js) shows the server's sentence when can_comment is false, in the box with Join (billing.html) in place of the form; after a refused attempt, the server's refusal",
+      T.has(FD, "      if (r.body.can_comment === false) talkRule(r.body.comment_rule);") &&
+      T.has(FD, "<p class=\"bfp-tm-h\" id=\"bfpTalkRule\"></p>' +\n      '<a class=\"bfp-send bfp-tm-join\" href=\"/billing.html\">Join</a></div>';") &&
+      T.has(FD, "    form.hidden = !!rule; box.hidden = !rule;\n    talk.querySelector(\"#bfpTalkRule\").textContent = rule || \"\";") &&
+      T.has(FD, "if (r.body && r.body.reason === \"members_only\") { talkRule(r.body.error); return; }") && !/TALK_MEMBERS[^_]/.test(FD));
   }
   T.finish();
 })().catch(e => { check("the check ran to the end", false, e && (e.stack || e.message || JSON.stringify(e))); T.finish(); });

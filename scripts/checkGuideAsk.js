@@ -484,7 +484,27 @@ async function main() {
        theme tokens, each with that cyan as its fallback. Today's side is read through scripts/_unthemed.js (every
        token resolved to its fallback, which checkThemeSpectrums proves is the page as it was); every byte must then
        match, as before. */
-    const differ = names.filter(n => { const a = fnOf(require("./_unthemed").unthemed(FILES[PRESENCE]), n), b = fnOf(BASE_PRESENCE, n); return !a || a !== b; });
+    /* NAMED BEFORE -> AFTER (Nov 22 2026, FX3): openChat and closeChat gained four things, read away here word for word
+       (fx3Undo), so every other byte must still match: a free account's tap opens the members panel instead (and waits
+       for the tier when it is not known yet); on the phone the box is fitted to the screen (tmxPhoneFit); under reduced
+       motion the box's style is -1 and both take the plain 0.2 s fade (tmxFx()) in place of TMX_STYLES[_currentStyle].
+       Any of these not word for word, or any other change, leaves the text unequal. */
+    const FX3_FREE = "    if (tmxFree()) { tmxMembersPanel(); return; }\n    if (window.bfAccess && window.bfAccess.ready && !_tmxAccessKnown) {\n" +
+      "      window.bfAccess.ready.then(function () {\n        _tmxAccessKnown = true;\n        if (tmxFree()) { tmxMembersPanel(); return; }\n" +
+      "        if (!_chatOpen) { openChat(); tmxFocusModeSoon(); }\n      });\n      return;\n    }\n";
+    const fx3Undo = (n, fn) => {
+      if (!fn || (n !== "openChat" && n !== "closeChat")) return fn;
+      const swap = (x, from, to) => (x === null || x.split(from).length !== 2) ? null : x.split(from).join(to);
+      let x = swap(fn, "    var s = tmxFx();\n", "    var s = TMX_STYLES[_currentStyle];\n");
+      if (n === "openChat") {
+        x = swap(x, "  function openChat() {\n" + FX3_FREE, "  function openChat() {\n");
+        // NAMED (Nov 22 2026, FX3): and the phone's live mark (the closed chat is not drawn on the phone)
+        x = swap(x, "    _chatOpen = true;\n    chat.classList.add(\"tmx-chat-live\");   // FX3: drawn again on the phone before its opening starts\n    tmxPhoneFit();\n", "    _chatOpen = true;\n");
+        x = swap(x, "    _currentStyle = tmxStill() ? -1 : Math.floor(Math.random() * 10);\n", "    _currentStyle = Math.floor(Math.random() * 10);\n");
+      }
+      return x;
+    };
+    const differ = names.filter(n => { const a = fx3Undo(n, fnOf(require("./_unthemed").unthemed(FILES[PRESENCE]), n)), b = fnOf(BASE_PRESENCE, n); return !a || a !== b; });
     check("G6. the Oracle's " + names.length + " functions in the mist are byte-identical to frontend " + FRONT_BASE, differ.length === 0, differ.join(","));
     const markupOf = src => { const a = src.indexOf("  chat.innerHTML =\n"); return a === -1 ? null : src.slice(a, src.indexOf("</div>';\n", a)); };
     /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): the attach button's face was the paperclip emoji, as a hex

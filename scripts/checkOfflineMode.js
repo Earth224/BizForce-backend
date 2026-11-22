@@ -383,7 +383,8 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
     // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
     // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-p31c", names.length === 1 && names[0] === "bf-shell-abc1234-p31c", names.join(","));
+    // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-fx3", names.length === 1 && names[0] === "bf-shell-abc1234-fx3", names.join(","));
     // NAMED (Nov 20 2026, P2-2): BEFORE at most 600 characters between BUILD and SHELL_REV; AFTER 800, for P2-2's one-line note.
     // NAMED (Nov 20 2026, P2-3): BEFORE 800; AFTER 1000, for P2-3 one-line note (861 today).
     // NAMED (Nov 20 2026, P3-1): BEFORE at most 1000 characters between BUILD and SHELL_REV; AFTER 1400, for P3-1's one-line note.
@@ -391,8 +392,9 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     check("I8. netlify.toml's build writes the deploying commit into sw.js, and sw.js carries the placeholder it replaces",
       /command = 'sed -i "s\/__BF_BUILD__\/\$\{COMMIT_REF:-local\}\/" sw\.js'/.test(FILES[TOML]) && (FILES[SW].match(/__BF_BUILD__/g) || []).length === 1 &&
       // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
+      // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
       // NAMED (P3-1C): BEFORE a window of 1,800 characters between BUILD and SHELL_REV; AFTER 2,400, for the history notes above SHELL_REV.
-      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,2400}?var SHELL_REV = "p31c";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,2400}?var SHELL_REV = "fx3";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -402,7 +404,8 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     sw.caches.set("bf-shell-old0000", new Map()); sw.caches.set("someone-else", new Map());
     await sw.dispatch("activate");
     // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-p31c") && sw.caches.has("someone-else"),
+    // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-fx3") && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle

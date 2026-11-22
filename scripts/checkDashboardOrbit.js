@@ -99,6 +99,14 @@ const DASH = "dashboard.html", ORBIT = "scripts/bf-orbit.js", GUIDE = "scripts/t
 const SERVER = "B:server.js", YOURDATA = "B:lib/yourData.js";
 
 const MUTATIONS = {
+  // FX3 (Nov 22 2026): the drift runs from the first frame again, before the figures (the settle turns back)
+  "fx3-drift-before-figures": [[ORBIT, "  function driftRuns() { return !!state.clockOn && drifting(); }", "  function driftRuns() { return drifting(); }"]],
+  // FX3: the ring waits on REST_BASE, so Sell's settle has no drift before it and nothing to ease from
+  "fx3-boot-at-rest": [[ORBIT, "  else { state.base = REST_BASE - (reduced() ? 0 : SETTLE_AHEAD); place(); }", "  else { state.base = REST_BASE; place(); }"]],
+  // FX3: Sell opens at once from the still ring (the settle starts from rest, not the drift's speed)
+  "fx3-no-wait": [[ORBIT, "    if (a <= SETTLE_DIST || a > SETTLE_AHEAD + 0.01) return false;", "    return false;"]],
+  // FX3: the settle starts on the wall clock (performance.now), not the frames' (checkOrbitStage2 F16's cause)
+  "fx3-settle-wall-clock": [[ORBIT, "start: state.last || 0, ms: SETTLE_MS", "start: state.last || (window.performance.now() + 5000), ms: SETTLE_MS"]],
   // a tile left out of every portal (O1)
   "tile-dropped": [[ORBIT, "\"prospecting\", \"sms-drip\"] },", "\"prospecting\"] },"]],
   // a tile's link changed (O1)
@@ -653,7 +661,33 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   await settle();
   check("a remembered portal opens again", M.w.BFOrbit.state.open === "oracle");
   check("a first visit opens the portal with the most attention (Sell: 3 low stock beats 2 proposals)", P.w.BFOrbit.firstPortal(TOP()) === "sell" && T.w.BFOrbit.firstPortal(Object.assign(TOP(), { proposals_pending: 9 })) === "agents");
+  // NAMED (Nov 22 2026, FX3): BEFORE Sell was open as soon as the figures arrived. AFTER the drift's clock starts with the
+  // figures and Sell opens once its front place is SETTLE_DIST ahead (bf-orbit.js), so its frames run first.
+  Z.run(Z.w.BFOrbit.SETTLE_MS + 400);
   check("with nothing needing attention, Sell", Z.w.BFOrbit.state.open === "sell");
+  /* FX3 (Nov 22 2026): THE FIRST SETTLE ONLY GOES FORWARD. Frames run before the figures arrive (the fetch's promise has not
+     settled while run() is synchronous) leave the ring still; after them the drift starts at its own speed, Sell opens with
+     the ring just behind its front place, the settle leaves at the drift's speed, never steps back, and rests on the place. */
+  {
+    const Q = page({ top: QUIET() }), QO = Q.w.BFOrbit, b00 = QO.state.base;
+    Q.run(500);
+    check("FX3 the ring is still until the figures arrive (the drift's clock has not started)", QO.state.base === b00 && !QO.state.open, JSON.stringify([b00, QO.state.base]));
+    await settle();
+    const rec = []; for (let i = 0; i < 130; i++) { Q.run(16); rec.push([QO.state.base, QO.state.open]); }
+    const oi = rec.findIndex(r => r[1]), back = rec.slice(1).filter((r, i) => r[0] < rec[i][0] - 1e-9);
+    const v = oi > 1 ? (rec[oi + 1][0] - rec[oi][0]) / 0.016 : NaN, vDrift = (rec[1][0] - rec[0][0]) / 0.016;
+    const restOff = ((rec[rec.length - 1][0] - QO.frontBase("sell")) % 360 + 360) % 360;
+    check("FX3 after the figures the ring drifts (about 3 deg/s) before Sell opens", oi > 1 && Math.abs(vDrift - 3) < 0.3 && rec[oi - 1][0] > rec[0][0], JSON.stringify([oi, vDrift]));
+    check("FX3 the settle leaves at the drift's speed, never steps back, and rests on Sell's front place", rec[oi] && rec[oi][1] === "sell" && Math.abs(v - 3) < 0.6 && back.length === 0 && (restOff < 0.01 || restOff > 359.99), JSON.stringify([v, back.length, restOff]));
+    Q.w.close();
+    // A first portal further round (Agents) settles at once, on the frames' own clock: at rest within SETTLE_MS of frames
+    // (BEFORE its start was performance.now(), another clock, so a harness's frames could end before it; checkOrbitStage2 F16)
+    const A = page({ top: Object.assign(QUIET(), { proposals_pending: 9 }) }), AO = A.w.BFOrbit;
+    await settle(); A.run(AO.SETTLE_MS + 50);
+    const aOff = ((AO.state.base - AO.frontBase("agents")) % 360 + 360) % 360;
+    check("FX3 a first portal further round (Agents) settles at once and is at rest on its front place within SETTLE_MS of frames", AO.state.open === "agents" && AO.state.turn === null && (aOff < 0.01 || aOff > 359.99), JSON.stringify([AO.state.open, !!AO.state.turn, aOff]));
+    A.w.close();
+  }
   const hover = (d, k) => { const b = d.querySelector(".orbit-portal[data-portal=\"" + k + "\"]"); b.dispatchEvent(new d.defaultView.MouseEvent("mouseenter")); return d.getElementById("orbitPreview"); };
   const pv = hover(T.d, "agents");
   check("hover shows a preview with the portal's top two figures", !pv.hidden && pv.textContent === "Agents: 4 saved prompts · 2 waiting for your approval", pv.textContent);
@@ -798,7 +832,10 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     Array.prototype.every.call(L.d.querySelectorAll("#orbitMain > .orbit-main-box p"), p => /^orbit-(big|second|live)$/.test(p.className)));
   // The directory box (layout as rules: no layout engine here; the real-browser harness measures it).
   const dirTpl = (/<div id="agentDirectoryLanding"[\s\S]*?\n<\/div>\n/.exec((/<template id="orbitTools">([\s\S]*?)<\/template>/.exec(FILES[DASH]) || ["", ""])[1]) || [""])[0];
-  const dirNames = (dirTpl.match(/<li class="orbit-dir-agent"><span class="bf-neon-icon bf-hq-icon orbit-dir-icon [a-z-]+" aria-hidden="true"><svg[\s\S]*?<\/svg><\/span><span class="orbit-dir-name">[A-Za-z]+<\/span><\/li>/g) || [])
+  /* NAMED (Nov 22 2026, FX3): BEFORE each agent's icon was drawn inline and coloured by its class (seo, sales, ...).
+     AFTER the span names its agent (data-bf-agent-mark) and scripts/bf-agent-marks.js, the one map the Agent Directory
+     reads too, draws and colours it; scripts/checkAgentMarks.js proves each is exactly as it was. */
+  const dirNames = (dirTpl.match(/<li class="orbit-dir-agent"><span class="bf-neon-icon bf-hq-icon orbit-dir-icon" data-bf-agent-mark="[a-z_]+" aria-hidden="true"><\/span><span class="orbit-dir-name">[A-Za-z]+<\/span><\/li>/g) || [])
     .map(x => />([A-Za-z]+)<\/span><\/li>$/.exec(x)[1]);
   check("the directory: icon and title, the one line, five agents (SEO, Sales, Content, Analytics, Social), two buttons", /class="orbit-dir bf-glass-panel bf-card"/.test(dirTpl) &&
     /<div class="orbit-dir-head">/.test(dirTpl) && /<h3>AI Agent Directory<\/h3>/.test(dirTpl) &&

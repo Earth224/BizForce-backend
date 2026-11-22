@@ -37,6 +37,14 @@ const H = require("./_p21Harness");
 const P20_COMMIT = "1803344";   // the frontend before P2-1
 // NAMED (Nov 21 2026, FX2): FX2's hunks in three of the unchanged files, [file, now, before] (U1)
 const FX2_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx2.json"), "utf8"));
+// NAMED (Nov 22 2026, FX3 part D): the dashboard's five agent icons now drawn from scripts/bf-agent-marks.js, and its
+// tag, [file, now, before] (U1); checkAgentMarks proves each icon is exactly as it was
+const FX3D_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx3d.json"), "utf8"));
+// NAMED (Nov 22 2026, FX3): FX3's own hunks in five of the unchanged files (the abyss sun in bf-hq-views.js and dashboard.html,
+// the drift clock in bf-orbit.js, the book button's rules gone from css/bf-phone.css and termaximus-guide.js, the Guide on the
+// phone), [file, now, before] (U1); undone after part D's, they return each file to frontend e3e8ce0 exactly
+const FX3_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx3.json"), "utf8"));
+const PRESENCE = "scripts/termaximus-presence.js", GUIDE = "scripts/termaximus-guide.js";
 // NAMED (Nov 20 2026, P2-2): the only lines P2-2 added to dashboard.html (see U1).
 const P22_DASH_LINES = [
   "<!-- P2-2: the owner alone sees the moderation queue's waiting count here, only when above 0 (scripts/bf-safety.js ownerCount) -->",
@@ -59,8 +67,12 @@ const MUTATIONS = {
   "four-tabs": [[BAR, "    { key: \"home\", label: \"Home\", href: \"/home.html\" },\n", ""]],
   "bar-on-desktop": [[BAR, "    \"#bf-tabbar,#bf-tabbar-spacer{display:none}\",\n", "    \"#bf-tabbar{display:flex}\",\n"]],
   "bar-over-dialogs": [[BAR, "align-items:stretch;background:rgba(7,11,24,.97);", "align-items:stretch;z-index:2147483646;background:rgba(7,11,24,.97);"]],
-  "guide-not-raised": [[BAR, "    \"html.bf-tabbar-on #tmx-guide-fab{bottom:calc(56px + 16px + env(safe-area-inset-bottom, 0px))}\",\n", ""]],
-  "guide-spacer-short": [[BAR, "height:calc(136px + env(safe-area-inset-bottom, 0px))!important", "height:calc(80px + env(safe-area-inset-bottom, 0px))!important"]],
+  // NAMED (Nov 22 2026, FX3): BEFORE "guide-not-raised" and "guide-spacer-short" (the book button's lift and its spacer, both gone).
+  // AFTER the bar lifts nothing for a button, the mist sits 16 px above the bar, under it in the stack, and the Guide's tab over it
+  "book-button-lift-back": [[BAR, "    \"html.bf-tabbar-on #bf-tabbar-spacer{display:block;", "    \"html.bf-tabbar-on #tmx-guide-fab{bottom:calc(56px + 16px + env(safe-area-inset-bottom, 0px))}\",\n    \"html.bf-tabbar-on #bf-tabbar-spacer{display:block;"]],
+  "mist-on-the-bar": [[PRESENCE, "  html.bf-tabbar-on #tmx-presence-root { bottom: calc(56px + 16px + env(safe-area-inset-bottom, 0px)) !important; }", "  html.bf-tabbar-on #tmx-presence-root { bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important; }"]],
+  "mist-over-bar": [[PRESENCE, "    z-index: 46; pointer-events: auto;", "    z-index: 95; pointer-events: auto;"]],
+  "guide-under-bar": [[GUIDE, "    \"  z-index: 999990;\",", "    \"  z-index: 80;\","]],
   "no-safe-area": [[BAR, "html.bf-tabbar-on #bf-tabbar-spacer{display:block;height:calc(56px + env(safe-area-inset-bottom, 0px))}", "html.bf-tabbar-on #bf-tabbar-spacer{display:block;height:56px}"]],
   "small-tabs": [[BAR, "#bf-tabbar .bf-tab{flex:1 1 0;min-width:44px;min-height:44px;", "#bf-tabbar .bf-tab{flex:1 1 0;min-width:44px;min-height:30px;"]],
   "styles-everywhere": [[BAR, "    if (!wanted()) return;   // a page the bar is not on", "    addStyle();\n    if (!wanted()) return;   // a page the bar is not on"]],
@@ -85,7 +97,8 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-  "sw-old-rev": [[SW, "var SHELL_REV = \"p31c\";", "var SHELL_REV = \"hq1\";"]],
+  // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
+  "sw-old-rev": [[SW, "var SHELL_REV = \"fx3\";", "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
   "sw-no-pages": [[SW, "  \"home.html\", \"inbox.html\",   //", "  //"]],
@@ -169,12 +182,18 @@ async function page(pathname, opts) {
   check("L1. 56 px plus the safe area, fixed to the bottom, the page's own spacer the same", has(css, "height:calc(56px + env(safe-area-inset-bottom, 0px));") && has(css, "html.bf-tabbar-on #bf-tabbar-spacer{display:block;height:calc(56px + env(safe-area-inset-bottom, 0px))}") && has(css, "position:fixed;left:0;right:0;bottom:0;z-index:90;"));
   const music = FILES["scripts/bf-music.js"] || "";
   const z = Number((/#bf-tabbar\{[^}]*z-index:(\d+)/.exec(css) || /bottom:0;z-index:(\d+)/.exec(css) || [])[1]);
-  check("L2. above the page (the Guide button is 40) and below dialogs: the Create sheet (2147483301), the music player's sheet (2147483000), the Guide's panel (2147483600)",
-    z === 90 && z > 40 && z < 2147483000 && has(css, "#bf-create{position:fixed;z-index:2147483301;") && has(music, "2147483000") && has(FILES["scripts/termaximus-guide.js"], "z-index: 2147483600;") &&
+  // NAMED (Nov 22 2026, FX3): BEFORE "above the page (the Guide button is 40) ... the Guide's panel (2147483600)" (the book button and its sheet,
+  // gone). AFTER above the mist (46 on the phone) and below the Create sheet, the music player's sheet and the Guide's tab and panel (999990)
+  const mistZ = Number((/\n    "    z-index: (\d+); pointer-events: auto;/.exec(FILES[PRESENCE] || "") || [])[1]);
+  const guideZ = Number((/"#tmx-guide-root \{",\n    "  position: fixed;",\n    "  top: 50%;",\n    "  left: 0;",\n    "  transform: translateY\(-50%\);",\n    "  z-index: (\d+);",/.exec(FILES[GUIDE] || "") || [])[1]);
+  check("L2. above the page and the mist (" + mistZ + ") and below dialogs: the Create sheet (2147483301), the music player's sheet (2147483000), the Guide's tab and panel (" + guideZ + ")",
+    z === 90 && mistZ === 46 && z > mistZ && z < guideZ && guideZ === 999990 && z < 2147483000 && has(css, "#bf-create{position:fixed;z-index:2147483301;") && has(music, "2147483000") &&
     !/z-index:\s*(?:[0-9]{3,})/.test((/align-items:stretch;[^"]*?backdrop-filter:blur\(12px\)\}/.exec(css) || [""])[0]), J(z));
-  check("L3. the Guide button sits 56 px higher and its spacer grows to 136 px", has(css, "html.bf-tabbar-on #tmx-guide-fab{bottom:calc(56px + 16px + env(safe-area-inset-bottom, 0px))}") &&
-    has(css, "html.bf-tabbar-on #tmx-guide-fab-spacer{display:block!important;height:calc(136px + env(safe-area-inset-bottom, 0px))!important}"));
-  check("L4. a page with the Guide uses its spacer, not a second one", has(css, "html.bf-tabbar-on body:has(#tmx-guide-fab-spacer) #bf-tabbar-spacer{display:none}"));
+  // NAMED (Nov 22 2026, FX3): BEFORE "L3. the Guide button sits 56 px higher and its spacer grows to 136 px" and "L4. a page with the Guide
+  // uses its spacer, not a second one" (the book button, gone). AFTER the mist sits 16 px above the bar, and the bar's own spacer is the page's only one.
+  check("L3. with the bar on, the mist sits 16 px above it (56 + 16 and the safe area); the bar lifts no book button", has(FILES[PRESENCE], "  html.bf-tabbar-on #tmx-presence-root { bottom: calc(56px + 16px + env(safe-area-inset-bottom, 0px)) !important; }") &&
+    !/tmx-guide-fab/.test(css));
+  check("L4. the bar's spacer is the page's only one: no Guide spacer, none hidden for it", !/tmx-guide-fab-spacer/.test(css) && !/tmx-guide-fab-spacer/.test(FILES[GUIDE] || "") && has(css, "html.bf-tabbar-on #bf-tabbar-spacer{display:block;height:calc(56px + env(safe-area-inset-bottom, 0px))}"));
   const kids = Array.from(d.doc.body.children).map(n => n.id || n.className || n.tagName);
   check("L5. the legal footer sits above the bar's spacer (the spacer and the bar come after it)", kids.indexOf("bf-legal-footer") < kids.indexOf("bf-tabbar-spacer") && kids.indexOf("bf-tabbar-spacer") > -1, J(kids));
   check("L6. every bar target is at least 44 px; the + is 52 x 34 with radius 11 in the brand gradient",
@@ -242,7 +261,8 @@ async function page(pathname, opts) {
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-  check("W1. SHELL_REV \"p31c\" in the cache's name", has(sw, "var SHELL_REV = \"p31c\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+  // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
+  check("W1. SHELL_REV \"fx3\" in the cache's name", has(sw, "var SHELL_REV = \"fx3\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
@@ -256,6 +276,10 @@ async function page(pathname, opts) {
     // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
     let now = FILES[f];
     if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    // NAMED (Nov 22 2026, FX3 part D): its hunks undone first, the same way
+    FX3D_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + "\u0000fx3d hunk missing"; });
+    // NAMED (Nov 22 2026, FX3): then FX3's own hunks, the same way
+    FX3_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + "\u0000fx3 hunk missing"; });
     // NAMED (Nov 21 2026, FX2): FX2's hunks undone (each must be found exactly once), then the same byte-for-byte equality
     FX2_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + "\u0000fx2 hunk missing"; });
     return old !== now;

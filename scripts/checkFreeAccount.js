@@ -387,9 +387,11 @@ const MEMBER_ROUTES = {
     has(CP, "  var SEO_TITLE_MAX = " + PL.SEO_TITLE_MAX + ", SEO_DESCRIPTION_MAX = " + PL.SEO_DESCRIPTION_MAX + ";") && has(CP, "<input type=\"checkbox\" id=\"bfcSearch\" checked> Show in Google") &&
     has(CP, "      seoBox.hidden = !(tier === \"member\" && audienceNow() === \"public\");\n") && PL.SEO_TITLE_MAX === 70 && PL.SEO_DESCRIPTION_MAX === 160);
   const FD = FILES[FEED] || "";
-  check("J12. Talk on a member's post: \"Comments on members' posts are for members\" with Join, when the server says can_comment is false",
-    has(FD, "  var TALK_MEMBERS = \"Comments on members' posts are for members\";") && has(FD, "<a class=\"bfp-send bfp-tm-join\" href=\"/billing.html\">Join</a>") &&
-    has(FD, "      if (r.body.can_comment === false) talkRule(r.body.comment_rule || TALK_MEMBERS);"));
+  // NAMED (Nov 22 2026, FX3): BEFORE a hand-typed heading TALK_MEMBERS ("Comments on members' posts are for members") over the
+  // server's refusal. AFTER one sentence, the server's: lib/membership.js TALK_MEMBERS_ONLY before an attempt (checkSocialGraph G4-G8).
+  check("J12. Talk on a member's post: the server's sentence with Join, when the server says can_comment is false (no copy typed in the app)",
+    !has(FD, "var TALK_MEMBERS") && has(FD, "<a class=\"bfp-send bfp-tm-join\" href=\"/billing.html\">Join</a>") &&
+    has(FD, "      if (r.body.can_comment === false) talkRule(r.body.comment_rule);"));
   const IB = FILES[INBOX] || "";
   check("J13. the Inbox: a free account replies where a member wrote first; otherwise the server's sentence, Join and the members panel",
     has(IB, "<p class=\"empty\" id=\"replyOnly\" hidden>Starting a conversation is for members. You can reply when a member messages you first. <a href=\"/billing.html\">Join</a></p>") &&

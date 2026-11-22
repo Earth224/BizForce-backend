@@ -24,12 +24,16 @@
         "BizForce member" only for a paid member; Reviews opens Coming soon;
         the page's old header hidden on a phone; desktop parts hidden.
      // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "p31c" (NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
+     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "fx3" (NAMED, FX3: BEFORE "p31c"; NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
      F. FX2 (Nov 21 2026): Tip BFC for a paid member; the product strip, built and linked (lib/posts.js
         sends a post's active listing, run here over the P2-3 test database); the tabs on one line; the
         Profile's banner (added, changed, removed in Edit profile) and its ring; the Agent Directory's
         look (its behaviour is checkAgentViews'); the orbit's first settle (no jump, no jerk, at rest
         in SETTLE_MS, nothing under reduced motion).
+     G. FX3 (Nov 22 2026): the owner's canvas row 5, four boards (designSpec TMX and HQ.ABYSS): the abyss
+        sun (the chat box's void and starfield density in the gold ring, no green ring); the mist a 56 px
+        button 16 px from the right and 16 px above the bar; the Guide tab and its panel on the phone; the
+        chat 8 px from each side, 10 px above the mist, at most 420 px; the still fade under reduced motion.
    Every phone rule is checked to be inside its file's @media (max-width:
    760px) block, so the desktop is unchanged.
 
@@ -41,6 +45,8 @@ const DS = require("./designSpec");
 const HOME = "home.html", FEED = "scripts/bf-feed.js", SHELL = "scripts/bf-profile-shell.js", BAR = "scripts/bf-tabbar.js", SW = "sw.js", PROFILE = "profile.html";
 // NAMED (Nov 21 2026, FX2): the server's posts library, the Agent Directory's views and the orbit
 const POSTS = "@lib/posts.js", AGV = "scripts/bf-agents-views.js", AGP = "ai-agents.html", ORB = "scripts/bf-orbit.js";
+// NAMED (Nov 22 2026, FX3)
+const TMXP = "scripts/termaximus-presence.js", TMXG = "scripts/termaximus-guide.js", ABY = "scripts/bf-abyss.js", DASHB = "dashboard.html";
 const MUTATIONS = {
   "tab-font": [[HOME, "color:#c9d1e6;font:600 16px/1 system-ui", "color:#c9d1e6;font:600 15px/1 system-ui"]],
   "underline-thin": [[HOME, "bottom:1px;height:3px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}", "bottom:1px;height:2px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}"]],
@@ -74,7 +80,8 @@ const MUTATIONS = {
   "grid-gap": [[SHELL, "\".pfs-grid{gap:2px}\",", "\".pfs-grid{gap:8px}\","]],
   "old-header": [[SHELL, "\"body:not(.edit-mode) .pf-nav,body:not(.edit-mode) .pf-banner,body:not(.edit-mode) .pf-header-wrap{display:none}\",\n", ""]],
   "no-soon-script": [[PROFILE, "<script src=\"/scripts/bf-feed.js\"></script>", ""]],
-  "shell-rev": [[SW, "var SHELL_REV = \"p31b\";", "var SHELL_REV = \"fx2\";"]],   // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
+  "shell-rev": [[SW, "var SHELL_REV = \"fx3\";", "var SHELL_REV = \"p31c\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
+    // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
   "tip-for-free": [[FEED, "setMember(!!a && a.tier === \"member\");", "setMember(!!a);"]],
@@ -97,9 +104,23 @@ const MUTATIONS = {
   "settle-jumps": [[ORB, "openPortal(firstPortal(state.top), \"settle\"); }", "openPortal(firstPortal(state.top), false); }"]],
   "settle-jerks": [[ORB, "return D * (1 - Math.pow(1 - t, 3)) + (V - 3 * D) * t * (1 - t) * (1 - t);", "return D * (1 - Math.pow(1 - t, 3));"]],
   "settle-slow": [[ORB, "  var SETTLE_MS = 1300;", "  var SETTLE_MS = 2400;"]],
+  // NAMED (Nov 22 2026, FX3): the four boards of row 5
+  "fx3-mist-size": [[TMXP, "  var TMX_PHONE_MIST = 56, TMX_DESK_MIST = 110;", "  var TMX_PHONE_MIST = 64, TMX_DESK_MIST = 110;"]],
+  "fx3-mist-right": [[TMXP, "right: 16px !important; bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;", "right: 12px !important; bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;"]],
+  "fx3-mist-on-bar": [[TMXP, "  html.bf-tabbar-on #tmx-presence-root { bottom: calc(56px + 16px + env(safe-area-inset-bottom, 0px)) !important; }", "  html.bf-tabbar-on #tmx-presence-root { bottom: calc(56px + env(safe-area-inset-bottom, 0px)) !important; }"]],
+  "fx3-chat-sides": [[TMXP, "left: 8px !important; right: 8px !important; width: auto !important;", "left: 16px !important; right: 16px !important; width: auto !important;"]],
+  "fx3-chat-tall": [[TMXP, "    var height = Math.min(420, visH - safeTop - 16,", "    var height = Math.min(520, visH - safeTop - 16,"]],
+  "fx3-chat-gap": [[TMXP, "    var bottom = Math.max(0, layoutH - mistTop) + 10;", "    var bottom = Math.max(0, layoutH - mistTop) + 24;"]],
+  "fx3-panel-wide": [[TMXG, "width: min(300px, calc(100vw - 48px)); margin-left: 0;", "width: min(340px, calc(100vw - 48px)); margin-left: 0;"]],
+  "fx3-panel-tall": [[TMXG, "    max-height: min(70vh, calc(", "    max-height: min(85vh, calc("]],
+  "fx3-slide-slow": [[TMXG, "transform: translate(calc(-1 * min(300px, 100vw - 48px)), -50%); transition: transform 0.3s ease; }", "transform: translate(calc(-1 * min(300px, 100vw - 48px)), -50%); transition: transform 0.6s ease; }"]],
+  "fx3-tab-narrow": [[TMXG, "    \"  width: 32px;\",\n    \"  min-height: 170px;\",", "    \"  width: 28px;\",\n    \"  min-height: 170px;\","]],
+  "fx3-fade-slow": [[TMXP, "tr: \"opacity 0.2s ease\", dur: 200 };", "tr: \"opacity 0.4s ease\", dur: 400 };"]],
+  "fx3-abyss-dense": [[ABY, "  var BASE_COUNTS = [70, 35, 16];", "  var BASE_COUNTS = [90, 35, 16];"]],
+  "fx3-green-ring": [[DASHB, "{display:none}\n    #orbitTop[data-hq-open=\"oracle\"] .orbit-core > :not(.hq-core-moon)", "{display:block}\n    #orbitTop[data-hq-open=\"oracle\"] .orbit-core > :not(.hq-core-moon)"]],
   "settle-when-reduced": [[ORB, "    if (reduced()) { state.turn = null; state.base += delta; place(); flushSparks(); return; }\n", ""]]
 };
-const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css"]);
+const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB]);   // NAMED (Nov 22 2026, FX3): + the four boards' files
 const { FILES, check, J } = T;
 
 /* The text of the block that opens at `marker` (its "{"), to the matching "}". The CSS in a .js file is an array of
@@ -280,7 +301,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2" (the feed's Tip and strip, the Profile's banner, the Agent Directory's views, the Sun).
 // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
 // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-check("E1. sw.js SHELL_REV is \"p31c\"", /\nvar SHELL_REV = "p31c";\n/.test(FILES[SW] || ""));
+// NAMED (Nov 22 2026, FX3): BEFORE "p31c". AFTER "fx3".
+check("E1. sw.js SHELL_REV is \"fx3\"", /\nvar SHELL_REV = "fx3";\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
@@ -361,5 +383,40 @@ check("E1. sw.js SHELL_REV is \"p31c\"", /\nvar SHELL_REV = "p31c";\n/.test(FILE
     orb.indexOf("var delta = ((target - state.base) % 360 + 540) % 360 - 180;   // the short way round") !== -1 &&
     orb.indexOf("    if (reduced()) { state.turn = null; state.base += delta; place(); flushSparks(); return; }\n") !== -1 &&
     orb.indexOf("var v0 = drifting() ? 360 / DRIFT_MS : 0;") !== -1 && /function drifting\(\) \{ return [^}]*!reduced\(\)/.test(orb));
+
+  /* ── G ── NAMED (Nov 22 2026, FX3) */
+  console.log("\n══ G. FX3: the owner's canvas row 5 (" + DS.TMX.BOARDS.join(", ") + ") ══");
+  const TM = DS.TMX, AB = DS.HQ.ABYSS, tp = FILES[TMXP] || "", tg = FILES[TMXG] || "", ab = FILES[ABY] || "", db = FILES[DASHB] || "";
+  const phoneCss = (() => { const a = tp.indexOf("  var TMX_PHONE = "), b = tp.indexOf("\n\n", a); return a < 0 ? "" : tp.slice(a, b); })();
+  const mistM = /\n  var TMX_PHONE_MIST = (\d+), TMX_DESK_MIST = (\d+);/.exec(tp) || [], mistScale = mistM[1], deskMist = mistM[2];
+  check("G1. TmxHQ: the abyss sun's void is the chat box's (" + AB.VOID_BASE + ", " + AB.VOID_SIZES + ", " + AB.VOID_ANIMATION + ")",
+    db.indexOf("        " + AB.VOID_BASE + ";\n      background-size: " + AB.VOID_SIZES + ";\n      animation: " + AB.VOID_ANIMATION + "}") !== -1 &&
+    tp.indexOf('    "    ' + AB.VOID_BASE + ';",\n    "  background-size: ' + AB.VOID_SIZES + ';",') !== -1 && tp.indexOf('"  animation: ' + AB.VOID_ANIMATION + ';",') !== -1);
+  let counts = null; try { const w = {}; new Function("window", "document", ab)(w, { addEventListener() {}, hidden: false }); counts = w.BFAbyss && [w.BFAbyss.countsFor(AB.BOARD_RING, AB.BOARD_RING), w.BFAbyss.countsFor(AB.STAR_BASE.W, AB.STAR_BASE.H)]; } catch (e) { counts = String(e && e.message); }
+  check("G2. its stars at the chat box's density per area: " + AB.STAR_BASE.COUNTS.join("/") + " in " + AB.STAR_BASE.W + " x " + AB.STAR_BASE.H + ", so " + AB.BOARD_COUNTS.join("/") + " in a " + AB.BOARD_RING + " px box (the board's ring)",
+    Array.isArray(counts) && J(counts[0]) === J(AB.BOARD_COUNTS) && J(counts[1]) === J(AB.STAR_BASE.COUNTS), J(counts));
+  check("G3. no green stats ring while ORACLE is open (" + AB.NO_GREEN_RING.join(", ") + "); the ring round the disc gold",
+    db.indexOf(AB.NO_GREEN_RING.map(s => '#orbitTop[data-hq-open="oracle"] ' + s).join(",") + "{display:none}") !== -1 && AB.RING === "gold" && db.indexOf("hq-gold-ring") !== -1);
+  check("G4. TmxChatGuide: the mist a " + TM.MIST.SIZE + " px button (the desktop's " + TM.MIST.DESK_SIZE + " px mist scaled), " + TM.MIST.RIGHT + " px from the right, " + TM.MIST.ABOVE_BAR + " px above the bar, \"" + TM.MIST.LABEL + "\", z-index " + TM.MIST.Z,
+    Number(mistScale) === TM.MIST.SIZE && Number(deskMist) === TM.MIST.DESK_SIZE &&
+    phoneCss.indexOf("right: " + px(TM.MIST.RIGHT) + " !important; bottom: calc(" + px(TM.MIST.ABOVE_BAR) + " + env(safe-area-inset-bottom, 0px)) !important;") !== -1 &&
+    phoneCss.indexOf("html.bf-tabbar-on #tmx-presence-root { bottom: calc(" + px(DS.BAR.HEIGHT) + " + " + px(TM.MIST.ABOVE_BAR) + " + env(safe-area-inset-bottom, 0px)) !important; }") !== -1 &&
+    phoneCss.indexOf("z-index: " + TM.MIST.Z + ";") !== -1 && tp.indexOf('root.setAttribute("aria-label", "' + TM.MIST.LABEL + '");') !== -1, J([mistScale, deskMist]));
+  check("G5. the chat " + TM.CHAT.SIDE + " px from each side, " + TM.CHAT.ABOVE_MIST + " px above the mist, at most " + TM.CHAT.HEIGHT + " px (and the visible viewport less the top safe area and " + TM.CHAT.TOP_GAP + ")",
+    phoneCss.indexOf("left: " + px(TM.CHAT.SIDE) + " !important; right: " + px(TM.CHAT.SIDE) + " !important; width: auto !important;") !== -1 &&
+    phoneCss.indexOf("min(" + px(TM.CHAT.HEIGHT) + ", calc(100vh - env(safe-area-inset-top, 0px) - " + px(TM.CHAT.TOP_GAP) + "))") !== -1 &&
+    tp.indexOf("    var bottom = Math.max(0, layoutH - mistTop) + " + TM.CHAT.ABOVE_MIST + ";") !== -1 &&
+    tp.indexOf("    var height = Math.min(" + TM.CHAT.HEIGHT + ", visH - safeTop - " + TM.CHAT.TOP_GAP + ",") !== -1);
+  const G = TM.GUIDE, tabRule = block(tg, '"#tmx-guide-tab {"'), panelRule = block(tg, '"#tmx-guide-panel {"'), gPhone = block(tg, '"@media (max-width: 760px) {"');
+  check("G6. TmxGuideOpen: the tab " + G.TAB_W + " px wide, " + G.TAB_MIN_H + " px or taller, " + G.TAB_PAD + ", radius " + G.TAB_RADIUS + ", " + G.TAB_BG + ", blur " + G.TAB_BLUR + " (the desktop's look, at every width)",
+    ["width: " + px(G.TAB_W) + ";", "min-height: " + px(G.TAB_MIN_H) + ";", "padding: " + G.TAB_PAD + ";", "border-radius: " + G.TAB_RADIUS + ";", "background: " + G.TAB_BG + ";", "backdrop-filter: blur(" + px(G.TAB_BLUR) + ");", "border-left: none;"].every(s => tabRule.indexOf(s) !== -1) &&
+    !/tmx-guide-fab|tmx-guide-sheet/.test(tg.replace(/\/\*[\s\S]*?\*\//g, "")), J(tabRule.slice(0, 200)));   // the book button and its sheet gone from the code (named in comments only)
+  check("G7. the panel open: min(" + G.PANEL_W + "px, 100vw - " + G.PANEL_EDGE + "px) wide, at most " + G.PANEL_MAX_VH + "vh, scrolling, radius " + G.PANEL_RADIUS + ", " + G.PANEL_BG + ", blur " + G.PANEL_BLUR + ", the tab at its right edge, " + G.SLIDE_S + " s",
+    ["border-radius: " + G.PANEL_RADIUS + ";", "background: " + G.PANEL_BG + ";", "backdrop-filter: blur(" + px(G.PANEL_BLUR) + ");", "overflow-y: auto;", "max-height: " + G.PANEL_MAX_VH + "vh;"].every(s => panelRule.indexOf(s) !== -1) &&
+    gPhone.indexOf("flex-direction: row-reverse;") !== -1 && gPhone.indexOf("transform: translate(calc(-1 * min(" + px(G.PANEL_W) + ", 100vw - " + px(G.PANEL_EDGE) + ")), -50%); transition: transform " + G.SLIDE_S + "s ease; }") !== -1 &&
+    gPhone.indexOf("width: min(" + px(G.PANEL_W) + ", calc(100vw - " + px(G.PANEL_EDGE) + "));") !== -1 && gPhone.indexOf("max-height: min(" + G.PANEL_MAX_VH + "vh, calc(") !== -1 &&
+    panelRule.indexOf("transition: opacity " + G.SLIDE_S + "s ease, transform " + G.SLIDE_S + "s ease;") !== -1, J(gPhone));
+  check("G8. TmxChatOracle and reduced motion: every open and close is a plain " + TM.STILL_FADE_S + " s fade",
+    tp.indexOf('tr: "opacity ' + TM.STILL_FADE_S + 's ease", dur: ' + (TM.STILL_FADE_S * 1000) + " };") !== -1);
   T.finish();
 })();

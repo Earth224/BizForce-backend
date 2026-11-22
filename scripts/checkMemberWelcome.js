@@ -29,6 +29,12 @@
         never the owner or the account the owner ruled out;
      H. lib/trades.js counts the clawback as BFC issued by BizForce, so the
         trade statement still reconciles;
+     T. FX3 (Nov 22 2026): test accounts never receive BizCash. The subject
+        check account (lib/testAccounts.js ids) is refused before any read; the
+        entitled check account (the account the owner ruled out) and every
+        check or test email are refused after the users read and before the
+        ledger is read, by the lib and through the webhook and getUserPlan;
+        no users row, or one that cannot be read, grants nothing;
      L. LIVE, on the subject check account only (BIZFORCE_CHECK_USER_ID; never
         the owner, never the account the owner ruled out), and only when no mutation is applied:
         two concurrent grants pay 1,000 once, and a direct second
@@ -82,7 +88,24 @@ const MUTATIONS = {
   "claw-no-done": [["claw", "  if (rows.length === 2 && rows.filter(isSignupRow).length === 1 && rows.filter(isClawbackRow).length === 1 && balance === 0) {\n", "  if (false) {\n"]],
   "claw-dup-fails": [["claw", "    if (r.error && r.error.code === \"23505\") {", "    if (false) {"]],
   "claw-dry-writes": [["claw", "    if (!deps.apply) {", "    if (false) {"]],
-  "trades-clawback-unmatched": [["trades", " || row.description === require(\"./memberWelcome\").FREE_CLAWBACK_DESCRIPTION", ""]]
+  "trades-clawback-unmatched": [["trades", " || row.description === require(\"./memberWelcome\").FREE_CLAWBACK_DESCRIPTION", ""]],
+  // FX3: test accounts never receive BizCash.
+  "test-id-not-refused": [["lib", "  if (isUncountedAccount({ id: userId })) return { granted: false, reason: \"test_account\" };\n", "\n"]],
+  "test-email-not-refused": [["lib", "  if (isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })) return { granted: false, reason: \"test_account\" };\n", "\n"]],
+  "test-email-ignored": [["lib", "isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })", "isUncountedAccount({ id: accountRow.id || userId })"]],
+  "test-refused-after-write": [
+    ["lib", "  if (isUncountedAccount({ id: userId })) return { granted: false, reason: \"test_account\" };\n", "\n"],
+    ["lib", "  if (isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })) return { granted: false, reason: \"test_account\" };\n", "\n"],
+    ["lib", "  return { granted: true, amount: MEMBER_WELCOME_BFC };\n",
+      "  if (isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })) return { granted: false, reason: \"test_account\" };\n  return { granted: true, amount: MEMBER_WELCOME_BFC };\n"]],
+  "test-refused-after-ledger-read": [
+    ["lib", "  if (isUncountedAccount({ id: userId })) return { granted: false, reason: \"test_account\" };\n", "\n"],
+    ["lib", "  if (isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })) return { granted: false, reason: \"test_account\" };\n", "\n"],
+    ["lib", "  if (alreadyWelcomed(prior.data)) return { granted: false, reason: \"already_granted\" };\n",
+      "  if (alreadyWelcomed(prior.data)) return { granted: false, reason: \"already_granted\" };\n  if (isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })) return { granted: false, reason: \"test_account\" };\n"]],
+  "no-account-grants": [["lib", "  if (!accountRow) return { granted: false, reason: \"no_account\" };\n  if (isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })) return { granted: false, reason: \"test_account\" };\n",
+    "  if (accountRow && isUncountedAccount({ id: accountRow.id || userId, email: accountRow.email })) return { granted: false, reason: \"test_account\" };\n"]],
+  "user-read-error-ignored": [["lib", "  if (account.error) {\n", "  if (false) {\n"]]
 };
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -117,7 +140,9 @@ const TRADES = compile(SRC.trades, P.trades);
 function makeDb(opts) {
   opts = opts || {};
   const db = { rows: [], wallets: {}, calls: [], writes: [], subsLookup: opts.subsLookup || {}, readDelay: opts.readDelay || 0,
-    creditError: opts.creditError || null, debitError: opts.debitError || null, readError: opts.readError || null };
+    creditError: opts.creditError || null, debitError: opts.debitError || null, readError: opts.readError || null,
+    // FX3: the users rows the welcome reads for the email. An id not listed is an ordinary account; null is no row.
+    users: opts.users || {}, userReadError: opts.userReadError || null };
   function q(table) {
     const st = { table, op: "select", filters: [] };
     const b = {
@@ -146,6 +171,13 @@ function makeDb(opts) {
       if (db.readError) return { data: null, error: { message: db.readError } };
       for (const [k, c, v] of st.filters) rows = rows.filter(r => k === "eq" ? r[c] === v : k === "in" ? v.indexOf(r[c]) !== -1 : true);
       return { data: rows.map(r => Object.assign({}, r)), error: null };
+    }
+    if (st.table === "users") {
+      if (db.userReadError) return { data: null, error: { message: db.userReadError } };
+      const f = st.filters.find(x => x[1] === "id");
+      const id = f ? f[2] : null;
+      const row = Object.prototype.hasOwnProperty.call(db.users, id) ? db.users[id] : { id, email: "member-" + String(id).slice(-4) + "@example.com" };
+      return { data: row ? [Object.assign({}, row)] : [], error: null };
     }
     if (st.table === "user_wallets") {
       const f = st.filters.find(x => x[1] === "user_id");
@@ -346,6 +378,53 @@ const U = (n) => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
     check("F4. a ledger that cannot be read grants nothing (it throws; the callers log it)", err !== null && !failing.calls.some(c => c === "rpc:bfc_credit"));
   }
 
+  /* ── T ── */
+  section("T. test accounts never receive BizCash (FX3): refused with a reason before any write");
+  {
+    const R = require("./checkRunResidue");
+    const SUBJECT = require(path.join(REPO, "lib", "testAccounts")).TEST_ACCOUNTS.ids[0];
+    const touched = [];
+    const trap = { from: (t) => { touched.push("from:" + t); throw new Error("no read expected"); }, rpc: (n) => { touched.push("rpc:" + n); throw new Error("no write expected"); } };
+    let ans = null, err = null;
+    try { ans = await LIB.grantMemberWelcome(trap, SUBJECT); } catch (e) { err = e; }
+    check("T1. the suite's subject account (lib/testAccounts.js ids) is refused as test_account, nothing read, nothing written",
+      !err && ans && ans.granted === false && ans.reason === "test_account" && touched.length === 0, (err && err.message) || JSON.stringify(ans) + " " + touched.join(","));
+    const noLedger = (db) => !db.calls.some(c => /wallet_transactions|user_wallets|rpc:/.test(c)) && db.writes.length === 0 && db.rows.length === 0;
+    const ruled = makeDb({ users: { [RULED_OUT]: { id: RULED_OUT, email: R.ENTITLED_CHECK_EMAIL } } });
+    const r1 = await LIB.grantMemberWelcome(ruled.client, RULED_OUT);
+    check("T2. the entitled check account (the account the owner ruled out, " + R.ENTITLED_CHECK_EMAIL + ") is refused as test_account before the ledger is read",
+      r1.granted === false && r1.reason === "test_account" && noLedger(ruled) && ruled.calls.join(",") === "users:select", JSON.stringify(r1) + " " + ruled.calls.join(","));
+    const emails = [R.ENTITLED_CHECK_EMAIL, "clean-run-6@bizforceai.invalid", "hiram-test1@bizforceai.invalid", "alice+bftest@example.com", "Someone+BFTEST2@Example.com"];
+    const answers = [];
+    for (let i = 0; i < emails.length; i++) {
+      const id = U(40 + i);
+      const db = makeDb({ users: { [id]: { id, email: emails[i] } } });
+      const a = await LIB.grantMemberWelcome(db.client, id);
+      answers.push({ email: emails[i], reason: a.reason, granted: a.granted, clean: noLedger(db) });
+    }
+    check("T3. every check or test email (the .invalid check accounts, +bftest sign-ups in any case) is refused as test_account, no ledger read or write",
+      answers.every(a => a.granted === false && a.reason === "test_account" && a.clean), JSON.stringify(answers));
+    const plain = makeDb({ users: { [U(50)]: { id: U(50), email: "member@example.com" } } });
+    const p = await LIB.grantMemberWelcome(plain.client, U(50));
+    check("T4. an ordinary member is still paid exactly 1,000 once", p.granted === true && plain.welcomeRows(U(50)).length === 1 && plain.wallets[U(50)] === 1000, JSON.stringify(p));
+    const hook = makeDb({ users: { [RULED_OUT]: { id: RULED_OUT, email: R.ENTITLED_CHECK_EMAIL } } });
+    const b = buildServer(hook, { [RULED_OUT]: { id: RULED_OUT, role: "admin", email: R.ENTITLED_CHECK_EMAIL } });
+    await b.api.handleStripeEvent(checkoutEvent("evt_t1", RULED_OUT));
+    await b.api.handleStripeEvent(checkoutEvent("evt_t2", SUBJECT));
+    await b.api.getUserPlan(RULED_OUT, { id: RULED_OUT, role: "admin", email: R.ENTITLED_CHECK_EMAIL });
+    await settle();
+    check("T5. through the checkout webhook and getUserPlan's admin branch: no ledger read, no credit; the subscription is still written",
+      hook.rows.length === 0 && !hook.calls.some(c => /wallet_transactions|rpc:bfc/.test(c)) && hook.writes.some(w => w.table === "subscriptions" && w.op === "upsert"),
+      hook.calls.join(","));
+    const gone = makeDb({ users: { [U(51)]: null } });
+    const g = await LIB.grantMemberWelcome(gone.client, U(51));
+    check("T6. an account with no users row is refused (no_account) and nothing is written", g.granted === false && g.reason === "no_account" && noLedger(gone), JSON.stringify(g));
+    const down = makeDb({ userReadError: "users down" });
+    let derr = null;
+    try { await LIB.grantMemberWelcome(down.client, U(52)); } catch (e) { derr = e; }
+    check("T7. a users row that cannot be read grants nothing (it throws; the callers log it)", derr !== null && /test account/.test(derr.message) && noLedger(down), derr && derr.message);
+  }
+
   /* ── G ── */
   section("G. the clawback script");
   {
@@ -408,6 +487,10 @@ const U = (n) => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
     section("L. live, on the subject check account (BIZFORCE_CHECK_USER_ID; rows written are deleted and read back)");
     // NAMED (P3-1D): the subject check account, a free account, not the entitled one: the suite's entitled check account is the
     // account the owner ruled out, and this check never uses it. The grant does not read the tier, so a free account proves the ledger.
+    // NAMED (Nov 22 2026, FX3): BEFORE L1 and L4 had grantMemberWelcome PAY the subject account (two concurrent grants, then the
+    // welcome after a clawback). AFTER the subject account is a test account, which never receives BizCash: L1 proves the grant
+    // refuses it and writes nothing, the indexes are still proved by direct calls (L2, L5), L3/L4 prove the once-only decision on
+    // the live rows (alreadyWelcomed), and L7 reads the ruled-out account's wallet and ledger (read only) and requires both empty.
     const { resolveSubjectAccount, assertNotOwner } = require("./checkRunResidue");
     const subjectId = resolveSubjectAccount();
     const { createClient } = require("@supabase/supabase-js");
@@ -422,6 +505,12 @@ const U = (n) => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
       if (w.error || t.error) throw new Error("live read failed: " + (w.error || t.error).message);
       return { wallets: w.data, rows: t.data, balance: w.data.length ? w.data[0].balance : null };
     };
+    const ruledOut = async () => {
+      const w = await sb.from("user_wallets").select("balance").eq("user_id", RULED_OUT);
+      const t = await sb.from("wallet_transactions").select("id").eq("user_id", RULED_OUT);
+      if (w.error || t.error) throw new Error("live read of the ruled-out account failed: " + (w.error || t.error).message);
+      return { wallets: w.data.length, rows: t.data.length };
+    };
     const pre = await read();
     if (pre.wallets.length || pre.rows.length) {
       console.log("    REFUSING: the check account already has " + pre.wallets.length + " wallet(s) and " + pre.rows.length + " welcome/clawback row(s). Nothing written.");
@@ -434,36 +523,38 @@ const U = (n) => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
     try {
       const both = await Promise.all([LIB.grantMemberWelcome(sb, id), LIB.grantMemberWelcome(sb, id)]);
       const l1 = await read();
-      check("L1. two concurrent grants: one granted, one already_granted; one member_welcome row; balance 1,000",
-        both.filter(a => a.granted).length === 1 && both.filter(a => a.reason === "already_granted").length === 1 &&
-        l1.rows.filter(r => r.description === "member_welcome").length === 1 && l1.balance === 1000, JSON.stringify(both) + " " + JSON.stringify(l1));
+      check("L1. the subject check account is a test account: two concurrent grants are both refused (test_account) and nothing is written",
+        both.every(a => a.granted === false && a.reason === "test_account") && l1.wallets.length === 0 && l1.rows.length === 0, JSON.stringify(both) + " " + JSON.stringify(l1));
+      const first = await sb.rpc("bfc_credit", { p_user_id: id, p_amount: 1000, p_type: "reward", p_description: "member_welcome" });
       const dup = await sb.rpc("bfc_credit", { p_user_id: id, p_amount: 1000, p_type: "reward", p_description: "member_welcome" });
       const l1b = await read();
       check("L2. a direct second member_welcome credit is refused 23505 and the balance does not move (201a is live)",
-        dup.error && dup.error.code === "23505" && l1b.balance === 1000 && l1b.rows.length === 1, JSON.stringify(dup.error));
+        !first.error && dup.error && dup.error.code === "23505" && l1b.balance === 1000 && l1b.rows.length === 1, JSON.stringify(dup.error));
+      check("L3. on the live rows, a member_welcome counts as already welcomed, and the grant still refuses the account",
+        LIB.alreadyWelcomed(l1b.rows) === true && (await LIB.grantMemberWelcome(sb, id)).reason === "test_account" && (await read()).balance === 1000);
       await wipe();
       const signup = await sb.rpc("bfc_credit", { p_user_id: id, p_amount: 1000, p_type: "reward", p_description: "Welcome bonus" });
-      const kept = await LIB.grantMemberWelcome(sb, id);
       const l3 = await read();
-      check("L3. an uncleared signup \"Welcome bonus\": the welcome is refused, balance stays 1,000",
-        !signup.error && kept.granted === false && kept.reason === "already_granted" && l3.balance === 1000 && l3.rows.length === 1, JSON.stringify(kept));
+      const keptCounts = LIB.alreadyWelcomed(l3.rows);
       const claw = await sb.rpc("bfc_debit", { p_user_id: id, p_amount: 1000, p_description: "free_account_clawback" });
-      const joined = await LIB.grantMemberWelcome(sb, id);
-      const again = await LIB.grantMemberWelcome(sb, id);
       const l4 = await read();
-      check("L4. after the clawback, joining pays exactly one 1,000 welcome; asking again pays nothing",
-        !claw.error && joined.granted === true && joined.amount === 1000 && again.granted === false && l4.balance === 1000 &&
-        l4.rows.filter(r => r.description === "member_welcome").length === 1, JSON.stringify([claw.error, joined, again, l4.balance]));
+      check("L4. an uncleared signup \"Welcome bonus\" counts as welcomed; after the clawback it does not (balance 0)",
+        !signup.error && keptCounts === true && !claw.error && LIB.alreadyWelcomed(l4.rows) === false && l4.balance === 0, JSON.stringify([claw.error, l4.balance]));
+      // The balance is put back to 1,000 (a member_welcome row, deleted with the rest) so the second debit meets the index, not the balance.
+      const refill = await sb.rpc("bfc_credit", { p_user_id: id, p_amount: 1000, p_type: "reward", p_description: "member_welcome" });
       const claw2 = await sb.rpc("bfc_debit", { p_user_id: id, p_amount: 1000, p_description: "free_account_clawback" });
       const l5 = await read();
       check("L5. a second clawback is refused 23505 and the balance does not move (201b is live)",
-        claw2.error && claw2.error.code === "23505" && l5.balance === 1000, JSON.stringify(claw2.error));
+        !refill.error && claw2.error && claw2.error.code === "23505" && l5.balance === 1000, JSON.stringify(claw2.error));
     } finally {
       await wipe();
       const after = await read();
       console.log("    read-back: wallets " + after.wallets.length + ", welcome/clawback rows " + after.rows.length);
       check("L6. nothing this run wrote is left on the check account (read back as 0)", after.wallets.length === 0 && after.rows.length === 0);
     }
+    const ro = await ruledOut();
+    console.log("    the ruled-out account, read only: wallets " + ro.wallets + ", ledger rows " + ro.rows);
+    check("L7. the account the owner ruled out has no wallet and no ledger row (read only)", ro.wallets === 0 && ro.rows === 0, JSON.stringify(ro));
   }
 
   console.log("\n" + passes + " passed, " + failures + " failed");

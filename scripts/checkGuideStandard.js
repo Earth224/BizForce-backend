@@ -31,19 +31,20 @@
      S7  the 11 pages load the guide (settings, crm, inventory, proposals,
          prospecting, calendar, messages, mychart, self-reviews, synastry,
          your-data), and the legal pages do not;
-     S8  phones: a <button> "Guide" with aria-label, aria-haspopup,
-         aria-controls and aria-expanded; a role="dialog" sheet with
-         aria-modal and aria-labelledby, holding the same tips; it opens on
-         the button, moves focus into the sheet, keeps Tab there, and closes
-         on Close, a tap on the backdrop, Escape and a 60px downward swipe
-         (not a 30px one), handing focus back to the button; the CSS shows the
-         button and hides the panel at 860px and less, and nowhere else;
-     S9  the button's computed box, at nine phone and tablet sizes with and
-         without a 34px safe-area inset, touches none of the mist's four
-         default corners (MIST_CORNERS in termaximus-presence.js) or their chat
-         panels; its z-index is below every modal overlay on every page; and a
-         mist dragged onto it moves it to the bottom-right (placeFab, run in
-         jsdom with measured boxes stubbed).
+     S8  NAMED (Nov 22 2026, FX3): BEFORE a "Guide" button with a bottom
+         sheet at 860px and less, where the panel was hidden. AFTER no button
+         and no sheet anywhere; the Guide's tab shows at every width (no
+         media rule hides it), on every page that shows the guide; on the
+         phone (760px and less) the panel opens from the left with the tab at
+         its right edge, min(300px, 100vw - 48px), at most 70vh and clear of
+         the bar; the tab opens and closes it, and an outside tap and Escape
+         close it; a free account's guide has no Insights section and makes
+         no /api/insights/page request, a member's asks once on opening;
+     S9  NAMED (Nov 22 2026, FX3): BEFORE the button's box cleared the mist's
+         corners. AFTER the tab's box (left edge, middle, 32 x 170), at nine
+         phone and tablet sizes with and without a 34px inset, touches none
+         of the mist's four desktop corners nor the phone mist (56 px, 16 px
+         from the right, above the bar); the open chat is drawn above it.
 
    Pages and scripts are read as text; each page's guide is RUN in jsdom (its
    own scripts stripped, so nothing else runs and no request is made). No
@@ -87,8 +88,8 @@ const MUTATIONS = {
     '"Name or industry wrong? Press \\"Expand Profile\\" and edit it. For new work, open \\"Agent Hub\\" or \\"Full Directory\\"; each lists all 18 agents."']],
   // a page loads the guide and has no entry (S6)
   "page-without-entry": [["contact.html", "</body>", GUIDE_TAG + "\n</body>"]],
-  // the phone button is never added to the page (S8)
-  "mobile-button-removed": [[GUIDE, "  document.body.appendChild(fab);\n", ""]],
+  // NAMED (Nov 22 2026, FX3): BEFORE "mobile-button-removed" (the book button, gone). AFTER the tab is hidden on the phone (S8)
+  "tab-hidden-on-phone": [[GUIDE, '    "  #tmx-guide-root { flex-direction: row-reverse; align-items: center;",', '    "  #tmx-guide-root { display: none; flex-direction: row-reverse; align-items: center;",']],
   // ── further guards ──
   // the generic default comes back for a page with no entry (S6)
   "default-restored": [[GUIDE, "      if (PAGE_GUIDANCE[withExtension]) return PAGE_GUIDANCE[withExtension];\n    }\n    return null;",
@@ -106,21 +107,19 @@ const MUTATIONS = {
     '      "Tick \\"Recurring annually\\" for a birthday or an anniversary, and it repeats every year from one save."\n']],
   // one of the 11 pages stops loading the guide (S7)
   "unguided-again": [["crm.html", GUIDE_TAG + "\n", ""]],
-  // the button is moved up into the mist's bottom-left corner (S9)
-  "fab-over-mist": [[GUIDE, '    "  bottom: calc(16px + env(safe-area-inset-bottom, 0px));",\n    "  width: 88px;",', '    "  bottom: calc(130px + env(safe-area-inset-bottom, 0px));",\n    "  width: 88px;",']],
-  // the button is raised over every modal overlay (S9)
-  "fab-over-modals": [[GUIDE, '    "  z-index: 40;",\n    "  align-items: center;",', '    "  z-index: 999990;",\n    "  align-items: center;",']],
-  // the sheet loses its dialog role (S8)
-  "sheet-not-dialog": [[GUIDE, '  sheet.setAttribute("role", "dialog");\n', ""]],
-  // closing the sheet leaves focus where it was (S8)
-  "focus-not-returned": [[GUIDE, "    if (next) sheetClose.focus();\n    else fab.focus();\n", "    if (next) sheetClose.focus();\n"]],
-  // a swipe no longer closes the sheet (S8)
-  "swipe-ignored": [[GUIDE, "    if (dy >= 60) setSheet(false);\n", "    if (dy >= 6000) setSheet(false);\n"]],
-  // the button shows on desktops too (S8)
-  "fab-on-desktop": [[GUIDE, '    "#tmx-guide-fab {",\n    "  display: none;",', '    "#tmx-guide-fab {",\n    "  display: inline-flex;",']],
-  // a dragged mist no longer moves the button aside (S9)
-  // NAMED (Nov 13 2026, S2): re-anchored on the class's new name, tmx-guide-fab--moved (the corner it moves to depends on the width)
-  "fab-never-moves": [[GUIDE, "    if (touching) fab.classList.add(\"tmx-guide-fab--moved\");\n", ""]]
+  // NAMED (Nov 22 2026, FX3): BEFORE fab-over-mist, fab-over-modals, sheet-not-dialog, focus-not-returned, swipe-ignored, fab-on-desktop
+  // and fab-never-moves (the book button and its sheet, gone). AFTER the Guide's tab and panel at every width (S8, S9)
+  "panel-not-beside-tab": [[GUIDE, '    "  #tmx-guide-root { flex-direction: row-reverse; align-items: center;",', '    "  #tmx-guide-root { align-items: center;",']],
+  "panel-too-wide": [[GUIDE, "width: min(300px, calc(100vw - 48px)); margin-left: 0;", "width: 300px; margin-left: 0;"]],
+  "panel-over-bar": [[GUIDE, "    max-height: min(70vh, calc(100vh - 2 * (64px + env(safe-area-inset-bottom, 0px)))); }", "    max-height: 92vh; }"]],
+  "escape-ignored": [[GUIDE, '    if (isOpen && e.key === "Escape") setOpen(false);\n', ""]],
+  "outside-tap-ignored": [[GUIDE, "    if (isOpen && !root.contains(e.target)) setOpen(false);\n", ""]],
+  "free-asks-insights": [[GUIDE, "  function ensureInsight() {\n    if (guideFree()) return;\n", "  function ensureInsight() {\n"]],
+  "free-keeps-insights": [[GUIDE, "    if (s && s.parentNode) s.parentNode.removeChild(s);\n", ""]],
+  "member-loses-insights": [[GUIDE, "    accessKnown = true;\n    if (!guideFree()) return;\n", "    accessKnown = true;\n"]],
+  "book-button-back": [[GUIDE, "  var accessKnown = false;\n", "  var accessKnown = false;\n  var fab = document.createElement(\"button\"); fab.id = \"tmx-guide-fab\"; document.body.appendChild(fab);\n"]],
+  "tab-at-the-bottom": [[GUIDE, '    "#tmx-guide-root {",\n    "  position: fixed;",\n    "  top: 50%;",', '    "#tmx-guide-root {",\n    "  position: fixed;",\n    "  top: 88%;",']],
+  "mist-on-the-tab": [[PRESENCE, "right: 16px !important; bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;", "right: calc(100vw - 72px) !important; bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -347,93 +346,76 @@ check("S7. the legal pages do not load it", LEGAL.every(f => FILES[f] && !loadsG
 check("S7. the guide displays on 59 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html, plus media.html, plus mailbox.html",
   SHOWN.length === 59 && HTML_PAGES.filter(loadsGuide).length === 60 && SHOWN.indexOf("media.html") !== -1 && SHOWN.indexOf("mailbox.html") !== -1, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
 
-/* ── S8. phones: the button and the sheet ───────────────────────────────── */
-console.log("\n══ S8. phones: the Guide button and the bottom sheet ══");
+/* ── S8. the Guide's tab at every width ────────────────────────────────── */
+// NAMED (Nov 22 2026, FX3): BEFORE "S8. phones: the Guide button and the bottom sheet" (a button and a sheet at 860px and less, the panel
+// hidden there). AFTER the book button and its sheet are gone; the tab is the desktop's at every width, and on the phone the panel opens
+// from the left with the tab at its right edge (the owner's board TmxGuideOpen).
+(async () => {
+console.log("\n══ S8. the Guide's tab at every width ══");
 const CSS = (() => {
   const i = G.indexOf("  style.textContent = ["), j = G.indexOf('  ].join("\\n");', i);
   try { return vm.runInNewContext(G.slice(i + "  style.textContent = ".length, j + 3)).join("\n"); } catch (e) { return ""; }
 })();
-const rule = sel => { const i = CSS.indexOf("\n" + sel + " {"); return i === -1 ? "" : CSS.slice(i, CSS.indexOf("\n}", i)); };
-const media = (() => { const i = CSS.indexOf("@media (max-width: 860px) {"); return i === -1 ? "" : CSS.slice(i, CSS.indexOf("\n}", i)); })();
-check("S8. the CSS was read", CSS.length > 2000 && !!rule("#tmx-guide-fab"), CSS.length);
-check("S8. the button is hidden by default and shown only at 860px and less, where the panel is hidden",
-  /\n  display: none;/.test(rule("#tmx-guide-fab")) && /#tmx-guide-root \{ display: none; \}/.test(media) && /#tmx-guide-fab \{ display: inline-flex; \}/.test(media) &&
-  // NAMED (Nov 13 2026, S2): a second @media, (max-width: 639px), sizes and places the button on phones; it never shows it
-  // (display stays with the 860px rule above, the only one that shows it)
-  (CSS.match(/#tmx-guide-fab \{ display: inline-flex; \}/g) || []).length === 1 && (CSS.match(/@media/g) || []).length === 2 &&
-  (CSS.match(/@media \(max-width: 639px\) \{/g) || []).length === 1 && !/@media \(max-width: 639px\) \{[^@]*#tmx-guide-fab \{[^}]*display/.test(CSS), media);
-const D = RENDERED["dashboard.html"];
-const dd = D.doc, fab = dd.getElementById("tmx-guide-fab"), sheet = dd.getElementById("tmx-guide-sheet"), backdrop = dd.getElementById("tmx-guide-sheet-backdrop");
-const closeBtn = dd.getElementById("tmx-guide-sheet-close");
-check("S8. the button exists: a <button type=button> reading \"Guide\", with aria-label, aria-haspopup=dialog, aria-controls=tmx-guide-sheet and aria-expanded=false",
-  // NAMED (Nov 13 2026, S2): its accessible name is now the word it shows, "Guide" (an icon below 640px); the longer
-  // description moved to its title
-  !!fab && fab.tagName === "BUTTON" && fab.type === "button" && fab.textContent === "Guide" && fab.getAttribute("aria-label") === "Guide" &&
-  /Termaximus Guide/.test(fab.getAttribute("title") || "") &&
-  fab.getAttribute("aria-haspopup") === "dialog" && fab.getAttribute("aria-controls") === "tmx-guide-sheet" && fab.getAttribute("aria-expanded") === "false");
-check("S8. the sheet exists, closed: role=dialog, aria-modal=true, aria-labelledby naming its title, hidden with its backdrop",
-  !!sheet && sheet.getAttribute("role") === "dialog" && sheet.getAttribute("aria-modal") === "true" &&
-  !!dd.getElementById(sheet.getAttribute("aria-labelledby") || "x") && sheet.hidden === true && !!backdrop && backdrop.hidden === true);
-check("S8. the sheet holds the same tips as the panel, on every page", SHOWN.every(f => JSON.stringify(listOf(RENDERED[f].doc, "#tmx-guide-sheet")) === JSON.stringify(listOf(RENDERED[f].doc, "#tmx-guide-panel")) &&
-  RENDERED[f].doc.querySelectorAll("#tmx-guide-sheet [data-tmx-guide-common]").length === RENDERED[f].doc.querySelectorAll("#tmx-guide-panel [data-tmx-guide-common]").length),
-  SHOWN.filter(f => JSON.stringify(listOf(RENDERED[f].doc, "#tmx-guide-sheet")) !== JSON.stringify(listOf(RENDERED[f].doc, "#tmx-guide-panel"))).join(", "));
-check("S8. the close control is a labelled button inside the sheet", !!closeBtn && closeBtn.tagName === "BUTTON" && sheet.contains(closeBtn) && !!closeBtn.getAttribute("aria-label"));
+const rule = sel => { const C = "\n" + CSS, i = C.indexOf("\n" + sel + " {"); return i === -1 ? "" : C.slice(i, C.indexOf("\n}", i)); };   // the first rule starts the text
+const medias = CSS.split("@media").slice(1).map(x => "@media" + x.slice(0, x.indexOf("\n}")));
+check("S8. the CSS was read: the tab, the panel and one phone rule", CSS.length > 2000 && !!rule("#tmx-guide-tab") && !!rule("#tmx-guide-panel") && medias.length === 1 && /^@media \(max-width: 760px\) \{/.test(medias[0]), CSS.length + " " + medias.length);
+check("S8. no media rule hides the tab or the guide (it shows at every width), and nothing names a book button or a sheet",
+  medias.every(m => !/#tmx-guide-(root|tab|panel)[^{]*\{[^}]*display:\s*none/.test(m)) && !/tmx-guide-fab|tmx-guide-sheet/.test(CSS) && !/tmx-guide-fab|tmx-guide-sheet/.test(G.replace(/\/\*[\s\S]*?\*\//g, "")), medias.join(" | "));
+const ph = medias[0] || "";
+check("S8. on the phone the panel opens from the left, the tab at its right edge: min(300px, 100vw - 48px), at most 70vh and clear of the bar, 0.3 s",
+  /#tmx-guide-root \{ flex-direction: row-reverse; align-items: center;/.test(ph) && ph.indexOf("transform: translate(calc(-1 * min(300px, 100vw - 48px)), -50%); transition: transform 0.3s ease; }") !== -1 &&
+  ph.indexOf("#tmx-guide-root.tmx-guide-open { transform: translate(0, -50%); }") !== -1 && ph.indexOf("width: min(300px, calc(100vw - 48px)); margin-left: 0;") !== -1 &&
+  ph.indexOf("max-height: min(70vh, calc(100vh - 2 * (64px + env(safe-area-inset-bottom, 0px)))); }") !== -1 && /\n  overflow-y: auto;/.test(rule("#tmx-guide-panel")), ph);
+const noTab = SHOWN.filter(f => !RENDERED[f].doc.getElementById("tmx-guide-tab") || !RENDERED[f].doc.getElementById("tmx-guide-panel") || RENDERED[f].doc.getElementById("tmx-guide-fab") || RENDERED[f].doc.getElementById("tmx-guide-sheet"));
+check("S8. every page that shows the guide gets the tab and the panel, and no book button or sheet (" + SHOWN.length + " pages)", SHOWN.length > 40 && noTab.length === 0, noTab.join(", "));
+const D = RENDERED["dashboard.html"], dd = D.doc, root = dd.getElementById("tmx-guide-root"), tab = dd.getElementById("tmx-guide-tab");
 const W = D.w;
-const key = (el, k) => el.dispatchEvent(new W.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
-function touch(el, type, y) {
-  const ev = new W.Event(type, { bubbles: true, cancelable: true });
-  const pt = [{ clientY: y }];
-  Object.defineProperty(ev, type === "touchend" ? "changedTouches" : "touches", { value: pt });
-  if (type === "touchend") Object.defineProperty(ev, "touches", { value: [] });
-  el.dispatchEvent(ev);
-}
-const isOpen = () => sheet && sheet.hidden === false && backdrop.hidden === false && fab.getAttribute("aria-expanded") === "true" &&
-  dd.documentElement.classList.contains("tmx-guide-sheet-open");
-const isClosed = () => sheet && sheet.hidden === true && backdrop.hidden === true && fab.getAttribute("aria-expanded") === "false" &&
-  !dd.documentElement.classList.contains("tmx-guide-sheet-open");
+const opened = () => root.classList.contains("tmx-guide-open") && tab.getAttribute("aria-expanded") === "true";
 const steps = [];
-if (fab && sheet && closeBtn) {
-  fab.focus(); fab.click();
-  steps.push(["opens on the button, focus moves into the sheet", isOpen() && dd.activeElement === closeBtn]);
-  key(closeBtn, "Tab");
-  steps.push(["Tab keeps focus in the sheet", isOpen() && dd.activeElement === closeBtn]);
-  key(closeBtn, "Escape");
-  steps.push(["Escape closes it, focus back on the button", isClosed() && dd.activeElement === fab]);
-  fab.click(); closeBtn.click();
-  steps.push(["Close closes it, focus back on the button", isClosed() && dd.activeElement === fab]);
-  fab.click(); backdrop.click();
-  steps.push(["a tap on the backdrop closes it, focus back on the button", isClosed() && dd.activeElement === fab]);
-  const head = sheet.querySelector(".tmx-guide-sheet-head");
-  fab.click(); touch(head, "touchstart", 300); touch(head, "touchmove", 330); touch(head, "touchend", 330);
-  steps.push(["a 30px swipe springs back and leaves it open", isOpen() && sheet.style.transform === ""]);
-  touch(head, "touchstart", 300); touch(head, "touchmove", 380); touch(head, "touchend", 380);
-  steps.push(["a 80px downward swipe closes it, focus back on the button", isClosed() && dd.activeElement === fab]);
+if (root && tab) {
+  tab.click(); steps.push(["the tab opens it", opened()]);
+  tab.click(); steps.push(["the tab closes it", !opened()]);
+  tab.click(); dd.body.click(); steps.push(["a tap outside closes it", !opened()]);
+  tab.click(); root.querySelector("#tmx-guide-panel").click(); steps.push(["a tap inside keeps it open", opened()]);
+  dd.dispatchEvent(new W.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); steps.push(["Escape closes it", !opened()]);
 }
-check("S8. the sheet runs: " + steps.map(x => x[0]).join("; "), steps.length === 7 && steps.every(x => x[1]), steps.filter(x => !x[1]).map(x => x[0]).join(" | "));
-check("S8. the sheet makes no request: the Insights section is only in the desktop panel", !!sheet && !sheet.querySelector("#tmx-guide-insight-text") && !!dd.querySelector("#tmx-guide-panel #tmx-guide-insight-text"));
-check("S8. while the sheet is open, the mist and its chat are hidden (their z-index is above the sheet's)",
-  /html\.tmx-guide-sheet-open #tmx-presence-root, html\.tmx-guide-sheet-open #tmx-chat, html\.tmx-guide-sheet-open #tmx-chat-glow-wrap \{\n  visibility: hidden !important;/.test(CSS));
-const fabMissing = SHOWN.filter(f => !RENDERED[f].doc.getElementById("tmx-guide-fab") || !RENDERED[f].doc.getElementById("tmx-guide-sheet"));
-check("S8. every page that shows the guide gets the button and the sheet", fabMissing.length === 0, fabMissing.join(", "));
+check("S8. the panel runs: " + steps.map(x => x[0]).join("; "), steps.length === 5 && steps.every(x => x[1]), steps.filter(x => !x[1]).map(x => x[0]).join(" | "));
+// a free account and a member (scripts/bf-access.js's API: ready, tier()); fetch counted
+async function accessRun(tier, withReady) {
+  const asked = [];
+  const r = render("dashboard.html", { before: w => {
+    w.fetch = u => { asked.push(String(u)); const p = Promise.reject(new Error("no network in this check")); p.catch(() => {}); return p; };
+    w.bfAccess = { tier: () => tier }; if (withReady) w.bfAccess.ready = Promise.resolve({ tier: tier });
+  } });
+  await new Promise(res => setTimeout(res, 20));
+  const tb = r.doc.getElementById("tmx-guide-tab"); if (tb) tb.click();
+  await new Promise(res => setTimeout(res, 20));
+  return { error: r.error, asked: asked.filter(u => /\/api\/insights\/page/.test(u)).length, insights: !!r.doc.querySelector("#tmx-guide-panel .tmx-guide-section--insights"),
+    free: r.doc.getElementById("tmx-guide-root").classList.contains("tmx-guide-free"), tips: listOf(r.doc, "#tmx-guide-panel").length };
+}
+const free = await accessRun("free", true), freeNoReady = await accessRun("free", false), member = await accessRun("member", true);
+check("S8. a free account: the page's tips only (no Insights section, the panel marked free) and no /api/insights/page request on opening",
+  !free.error && free.tips >= 4 && !free.insights && free.free && free.asked === 0 && freeNoReady.asked === 0, JSON.stringify([free, freeNoReady]));
+check("S8. a member: the Insights section kept, and one /api/insights/page request on opening", !member.error && member.insights && !member.free && member.asked === 1, JSON.stringify(member));
 
-/* ── S9. the button clears the mist and every page control ──────────────── */
-console.log("\n══ S9. the button's box clears the mist, its chat, and every modal ══");
+/* ── S9. the tab clears the mist ───────────────────────────────────────── */
+// NAMED (Nov 22 2026, FX3): BEFORE "S9. the button's box clears the mist, its chat, and every modal" (the book button, bottom-left). AFTER the
+// tab: the left edge, in the middle, 32 x 170 at least, at every width; the desktop mist's four corners and the phone's mist never touch it.
+console.log("\n══ S9. the tab's box clears the mist and its chat ══");
 const px = (r, prop) => { const m = new RegExp("\\n  " + prop + ": (?:calc\\()?(\\d+)px").exec(r); return m ? +m[1] : null; };
-const FR = rule("#tmx-guide-fab");
-const FAB = { left: px(FR, "left"), bottom: px(FR, "bottom"), width: px(FR, "width"), height: px(FR, "height"),
-  safeArea: /\n  bottom: calc\(\d+px \+ env\(safe-area-inset-bottom, 0px\)\);/.test(FR) };
-check("S9. the button's box was read: left 16, bottom 16 (plus the safe-area inset), 88 × 44",
-  FAB.left === 16 && FAB.bottom === 16 && FAB.width === 88 && FAB.height === 44 && FAB.safeArea, JSON.stringify(FAB));
+const RR = rule("#tmx-guide-root"), TR = rule("#tmx-guide-tab");
+const TAB = { left: px(RR, "left") === null && /\n  left: 0;/.test(RR) ? 0 : px(RR, "left"), middle: /\n  top: 50%;/.test(RR) && /\n  transform: translateY\(-50%\);/.test(RR), width: px(TR, "width"), height: px(TR, "min-height") };
+check("S9. the tab's box was read: the left edge, in the middle, 32 wide, 170 tall at least", TAB.left === 0 && TAB.middle && TAB.width === 32 && TAB.height === 170, JSON.stringify(TAB));
 const P = FILES[PRESENCE];
 const CORNERS = (() => {
   const m = /var MIST_CORNERS = (\{[\s\S]*?\n  \});/.exec(P);
   try { return m ? vm.runInNewContext("(" + m[1] + ")") : {}; } catch (e) { return {}; }
 })();
 const MIST = { w: +((/#tmx-presence-root \{[\s\S]*?width: (\d+)px;/.exec(P) || [])[1]), h: +((/#tmx-presence-root \{[\s\S]*?height: (\d+)px;/.exec(P) || [])[1]) };
-const CHAT = { w: 288, h: +((/"#tmx-chat \{",[\s\S]*?"  height: (\d+)px;"/.exec(P) || [])[1]) };
-check("S9. the mist's four corners and its size were read from termaximus-presence.js (110 × 110; the chat 288 wide, 340 tall)",
-  Object.keys(CORNERS).sort().join(",") === "bottom-left,bottom-right,top-left,top-right" && MIST.w === 110 && MIST.h === 110 && CHAT.h === 340 &&
-  /width: min\(288px, calc\(100vw - 16px\)\);/.test(P), JSON.stringify([Object.keys(CORNERS), MIST, CHAT]));
+const PHONE_MIST = (() => { const m = /\n  var TMX_PHONE_MIST = (\d+), TMX_DESK_MIST = (\d+);/.exec(P); const r = /#tmx-presence-root \{ top: auto !important; left: auto !important; right: (\d+)px !important; bottom: calc\((\d+)px \+ env\(safe-area-inset-bottom, 0px\)\) !important;/.exec(P);
+  return m && r ? { size: +m[1], right: +r[1], bottom: +r[2] } : null; })();
+check("S9. the mist was read: its four desktop corners (110 x 110) and the phone's 56 px mist, 16 px from the right",
+  Object.keys(CORNERS).sort().join(",") === "bottom-left,bottom-right,top-left,top-right" && MIST.w === 110 && MIST.h === 110 && !!PHONE_MIST && PHONE_MIST.size === 56 && PHONE_MIST.right === 16, JSON.stringify([Object.keys(CORNERS), MIST, PHONE_MIST]));
 function boxFrom(spec, w, h, vw, vh) {
   const v = k => { const m = new RegExp("\\b" + k + ":\\s*(\\d+)px").exec(spec); return m ? +m[1] : null; };
   const left = v("left") !== null ? v("left") : vw - v("right") - w;
@@ -442,54 +424,19 @@ function boxFrom(spec, w, h, vw, vh) {
 }
 const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 const VIEWPORTS = [[320, 568], [360, 640], [375, 667], [390, 844], [393, 873], [412, 915], [414, 896], [768, 1024], [860, 1180]];
-const clashes = [], chatOver = [];
+const clashes = [];
 VIEWPORTS.forEach(([vw, vh]) => [0, 34].forEach(inset => {
-  const f = { left: FAB.left, right: FAB.left + FAB.width, top: vh - FAB.bottom - inset - FAB.height, bottom: vh - FAB.bottom - inset };
-  Object.keys(CORNERS).forEach(c => {
-    const mist = boxFrom(CORNERS[c].root, MIST.w, MIST.h, vw, vh), chat = boxFrom(CORNERS[c].chat, Math.min(CHAT.w, vw - 16), CHAT.h, vw, vh);
-    if (hit(f, mist)) clashes.push(vw + "x" + vh + "+" + inset + " mist " + c);
-    if (hit(f, chat)) chatOver.push(vw + "x" + vh + "+" + inset + " " + c);
-  });
+  const tb = { left: TAB.left, right: TAB.left + TAB.width, top: vh / 2 - TAB.height / 2, bottom: vh / 2 + TAB.height / 2 };
+  if (vw > 760) Object.keys(CORNERS).forEach(c => { if (hit(tb, boxFrom(CORNERS[c].root, MIST.w, MIST.h, vw, vh))) clashes.push(vw + "x" + vh + "+" + inset + " mist " + c); });
+  else { const b = vh - 56 - inset - PHONE_MIST.bottom; const m = { left: vw - PHONE_MIST.right - PHONE_MIST.size, right: vw - PHONE_MIST.right, top: b - PHONE_MIST.size, bottom: b };
+    if (hit(tb, m)) clashes.push(vw + "x" + vh + "+" + inset + " phone mist"); }
 }));
-check("S9. at " + VIEWPORTS.length + " sizes, with and without a 34px inset, the button touches none of the mist's four default corners",
-  Object.keys(CORNERS).length === 4 && clashes.length === 0, clashes.join(", "));
-// The mist's chat panel, once opened, reaches down to the button on short screens (the top corners). It is drawn above
-// the button, so it covers it while open and the button never sits on the chat.
+check("S9. at " + VIEWPORTS.length + " sizes, with and without a 34px inset, the tab touches none of the mist's places (the phone's mist at 760 px and less)", clashes.length === 0, clashes.join(", "));
 const CHAT_Z = +((/"#tmx-chat \{",[\s\S]*?"  z-index: (\d+);"/.exec(P) || [])[1]);
-check("S9. where the open chat panel reaches the button (" + chatOver.length + " of " + VIEWPORTS.length * 2 * 4 + " size and corner cases), the chat is drawn above it",
-  CHAT_Z > 40 * 1000 && chatOver.every(c => /top-/.test(c)), CHAT_Z + " " + chatOver.filter(c => !/top-/.test(c)).join(", "));
-const zOf = r => +((/\n  z-index: (\d+);/.exec(r) || [])[1]);
-const FAB_Z = zOf(FR);
-const OVERLAY_Z = [];
-HTML_PAGES.forEach(f => {
-  const re = /\.(?:modal-overlay|pf-overlay|bp-modal-overlay|quiz-overlay|pf-custom-panel)\s*\{[^}]*?z-index:\s*(\d+)/g; let m;
-  while ((m = re.exec(FILES[f]))) OVERLAY_Z.push([f, +m[1]]);
-});
-const TERMS_Z = +((/\.bf-terms-notice\{[^}]*?z-index:(\d+)/.exec(FILES["scripts/bf-legal-footer.js"] || "") || [])[1]);
-check("S9. the button's z-index (40) is below every page's modal overlays and customize panel (" + OVERLAY_Z.length + " read) and the terms notice",
-  FAB_Z === 40 && OVERLAY_Z.length >= 8 && OVERLAY_Z.every(([, z]) => z > FAB_Z) && TERMS_Z > FAB_Z,
-  FAB_Z + " vs " + OVERLAY_Z.filter(([, z]) => !(z > FAB_Z)).map(x => x.join("=")).join(", ") + " terms " + TERMS_Z);
-// placeFab, run: a mist on the button moves it right; a mist elsewhere leaves it left.
-function placed(mistBox) {
-  const r = render("dashboard.html", { before: w => {
-    const m = w.document.createElement("div"); m.id = "tmx-presence-root"; w.document.body.appendChild(m);
-    const orig = w.HTMLElement.prototype.getBoundingClientRect;
-    w.HTMLElement.prototype.getBoundingClientRect = function () {
-      if (this.id === "tmx-guide-fab") return { left: 16, right: 104, top: 607, bottom: 651, width: 88, height: 44 };
-      if (this.id === "tmx-presence-root") return mistBox;
-      return orig.call(this);
-    };
-  } });
-  return r.error ? "error " + r.error : r.doc.getElementById("tmx-guide-fab").className;
-}
-const onIt = placed({ left: 30, right: 140, top: 580, bottom: 690, width: 110, height: 110 });
-const away = placed({ left: 85, right: 195, top: 200, bottom: 310, width: 110, height: 110 });
-// NAMED (Nov 13 2026, S2): the class is tmx-guide-fab--moved (bottom-right from 640px, bottom-left below it, where the
-// button starts bottom-right); its meaning, "moved off the mist", is unchanged.
-check("S9. a mist dragged onto the button moves it to the bottom-right; one elsewhere leaves it bottom-left",
-  onIt === "tmx-guide-fab--moved" && away === "", JSON.stringify([onIt, away]));
-check("S9. the bottom-right placement keeps the same 16px inset", /#tmx-guide-fab\.tmx-guide-fab--moved \{\n  left: auto;\n  right: 16px;/.test(CSS) &&
-  /#tmx-guide-fab\.tmx-guide-fab--moved \{ right: auto; left: calc\(16px \+ env\(safe-area-inset-left, 0px\)\); \}/.test(CSS));
+const ROOT_Z = +((/\n  z-index: (\d+);/.exec(RR) || [])[1]);
+check("S9. the tab keeps the desktop's z-index (" + ROOT_Z + ") at every width, the open chat is drawn above it, and the phone's mist (46) below it",
+  ROOT_Z === 999990 && CHAT_Z > ROOT_Z && /\n    "    z-index: 46; pointer-events: auto;/.test(P), JSON.stringify([ROOT_Z, CHAT_Z]));
 
 console.log("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (passes + failures) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
 process.exit(failures ? 1 : 0);
+})().catch(e => { console.log("    FAIL  the check crashed: " + (e && e.stack || e)); process.exit(1); });

@@ -1267,6 +1267,27 @@ function withoutPhoneGuideButton(text) {
   if (!ok) return null;
   return t.slice(0, t.length - S2_GUIDE_PHONE_TAIL.length) + "\"\n";
 }
+/* NAMED BEFORE → AFTER (Nov 22 2026, FX3: Termaximus on the phone). BEFORE: the guide's CSS was frontend e3e8ce0's: the
+   phone's book button (#tmx-guide-fab), its bottom sheet and S2's 639 px rule, then the end of the array. AFTER: those
+   are gone, the common tips' selector drops the sheet, and one NAMED block takes their place: the Guide tab at every
+   width, the phone's panel opening from the left (no colour, no theme token), and the free account's rule (no
+   Insights section). This puts e3e8ce0's text back in those two places only, word for word, and returns it, so H3
+   then holds every other line exactly as before; FX3_GUIDE_BLOCK holds the new block's own text, which carries no
+   colour literal and no theme token. Anything else changed leaves the text unequal (null). */
+const FX3_GUIDE_SEL = ["    \"#tmx-guide-panel .tmx-guide-common {\",", "    \"#tmx-guide-panel .tmx-guide-common, #tmx-guide-sheet .tmx-guide-common {\","];
+const FX3_GUIDE_START = "    /* NAMED (Nov 22 2026, FX3): BEFORE, at 860 px and below, this panel was hidden and a book button (#tmx-guide-fab)";
+const FX3_HEAD_START = "    /* ── phones: a \"Guide\" button and a bottom sheet ──";
+let FX3_GUIDE_BLOCK = null;
+function withoutFx3Guide(text, headText) {
+  if (text === null || text === undefined || headText === null || headText === undefined) return null;
+  let cur = String(text);
+  if (cur.split(FX3_GUIDE_SEL[0]).length !== 2) return null;
+  cur = cur.replace(FX3_GUIDE_SEL[0], () => FX3_GUIDE_SEL[1]);
+  const a = cur.indexOf(FX3_GUIDE_START), h = String(headText).indexOf(FX3_HEAD_START);
+  if (a < 0 || h < 0 || cur.indexOf(FX3_GUIDE_START, a + 1) !== -1) return null;
+  FX3_GUIDE_BLOCK = cur.slice(a);
+  return cur.slice(0, a) + String(headText).slice(h);
+}
 function withoutScrollbarBlock(text) {
   if (text === null || text === undefined) return text;
   return String(text).replace(/<style id="bf-scrollbars">\n\/\* BF-SCROLLBARS:BEGIN[\s\S]*?\/\* BF-SCROLLBARS:END \*\/\n<\/style>\n/g, "");
@@ -1397,7 +1418,13 @@ async function elements() {
     pick(setWas, /^\.btn$/).length > 0);
   const oldMist = gitShow(ELEMENTS_BEFORE, PRESENCE) || "", oldGuide = gitShow(ELEMENTS_BEFORE, GUIDE) || "";
   check("H3. the mist's and the chat glow's CSS, resolved, is exactly today's (scripts/termaximus-presence.js)", !!styleArray(oldMist) && resolved4d(styleArray(FILES[PRESENCE]) || "") === withoutOwnScrollbars(styleArray(oldMist)));   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
-  check("H3. the guide's CSS, resolved, is exactly today's (scripts/termaximus-guide.js)", !!styleArray(oldGuide) && resolved4d(withoutPhoneGuideButton(styleArray(FILES[GUIDE])) || "") === withoutOwnScrollbars(styleArray(oldGuide)));   // NAMED (Nov 13 2026, S2): the NEW text without its phone button rules (withoutPhoneGuideButton)   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
+  // NAMED (Nov 22 2026, FX3): BEFORE the guide's CSS went through withoutPhoneGuideButton alone. AFTER first withoutFx3Guide
+  // (e3e8ce0's book button, sheet and S2 rule put back, word for word, over FX3's one NAMED block), then the same.
+  const headGuide = styleArray(gitShow("e3e8ce0", GUIDE) || "");
+  const fx3Back = withoutFx3Guide(styleArray(FILES[GUIDE]), headGuide);
+  check("H3. the guide's CSS, resolved, is exactly today's (scripts/termaximus-guide.js)", !!styleArray(oldGuide) && fx3Back === headGuide && resolved4d(withoutPhoneGuideButton(fx3Back) || "") === withoutOwnScrollbars(styleArray(oldGuide)));
+  check("H3. ... and FX3's own block (the tab at every width, the phone's panel, the free account's rule) carries no colour and no theme token",
+    !!FX3_GUIDE_BLOCK && !BARE.test(FX3_GUIDE_BLOCK.replace(/\/\*[\s\S]*?\*\//g, "")) && !/var\(--/.test(FX3_GUIDE_BLOCK), FX3_GUIDE_BLOCK && FX3_GUIDE_BLOCK.slice(0, 200));   // NAMED (Nov 13 2026, S2): the NEW text without its phone button rules (withoutPhoneGuideButton)   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
   const oldStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(oldMist); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
   const newStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(FILES[PRESENCE]); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
   const tones = (() => { const m = /var STAR_TONES = (\{[\s\S]*?\});/.exec(FILES[PRESENCE]); try { return vm.runInNewContext("(" + m[1] + ")"); } catch (e) { return null; } })();
@@ -1443,11 +1470,13 @@ async function elements() {
   check("H4. every primary button gradient on every themed page reads --bf-btn-a / --bf-btn-b, and its lettering --bf-btn-text (" + btnRules + " button rules)",
     btnRules >= 50 && btnLeft.length === 0, btnLeft.join(", "));
   const guideCss = (() => { try { return vm.runInNewContext("[" + styleArray(FILES[GUIDE]) + "]").join("\n"); } catch (e) { return ""; } })();
-  const GUIDE_RULES = /^(#tmx-guide-tab-text|#tmx-guide-panel \.tmx-guide-header-text|#tmx-guide-panel \.tmx-guide-label|#tmx-guide-panel \.tmx-guide-section--insights \.tmx-guide-label|#tmx-guide-panel \.tmx-guide-list li::marker|#tmx-guide-sheet-title|#tmx-guide-sheet \.tmx-guide-list li::marker)$/;
+  // NAMED (Nov 22 2026, FX3): BEFORE seven rules, the phone sheet's title and its markers among them. AFTER five: the sheet is gone (the
+  // phone shows the same panel), and none of the five may be lost.
+  const GUIDE_RULES = /^(#tmx-guide-tab-text|#tmx-guide-panel \.tmx-guide-header-text|#tmx-guide-panel \.tmx-guide-label|#tmx-guide-panel \.tmx-guide-section--insights \.tmx-guide-label|#tmx-guide-panel \.tmx-guide-list li::marker)$/;
   const gRules = ruleBodies(guideCss, GUIDE_RULES);
   const gBad = gRules.filter(r => BARE.test(r.body.replace(ELEMENT_VAR, "")) || !/var\(--bf-guide-[ab], /.test(r.body));
-  check("H4. the guide's lettering (tab, heading, labels, markers, the phone sheet's title) reads --bf-guide-a / --bf-guide-b, with no colour of its own (" + gRules.length + " rules)",
-    gRules.length === 7 && gBad.length === 0, gBad.map(r => r.sel).join(", "));
+  check("H4. the guide's lettering (tab, heading, labels, markers) reads --bf-guide-a / --bf-guide-b, with no colour of its own (" + gRules.length + " rules)",
+    gRules.length === 5 && gBad.length === 0, gBad.map(r => r.sel).join(", "));
   const mc = mistCss(FILES[PRESENCE]);
   const MIST_RULES = /^(#tmx-core|#tmx-core::after|#tmx-soul|\.tmx-blob-[abc]|#tmx-gold-[abc]|#tmx-shoot|#tmx-whisper|#tmx-chat-glow|\d+%(, ?\d+%)?)$/;
   const mRules = ruleBodies(mc.replace(/@keyframes tmx-soul-cycle \{/, ""), MIST_RULES).filter(r => /background|color|box-shadow/.test(r.body) && !/translate|transform|opacity: 0\.\d+; transform/.test(r.body));
@@ -1463,7 +1492,10 @@ async function elements() {
   const drawnText = FILES[PRESENCE] + guideCss + Object.keys(FILES).filter(f => /\.html$|\.css$|\.js$/.test(f)).map(f => FILES[f]).join("\n");
   const used = (drawnText.match(/var\(--(?:bf-btn-a|bf-btn-b|bf-btn-text|bf-mark-a|bf-mark-b|bf-guide-a|bf-guide-b|bf-(?:btn|mark|guide|accent)-mid|bf-accent-[ab][23]?(?:-rgb)?|tmx-[a-z0-9-]+),/g) || [])
     .concat((drawnText.match(/BFTheme\.color\("--bf-accent-[a-z0-9-]+",/g) || []).map(x => "var(" + x.slice(15, -2) + ","));
-  const usedNames = Array.from(new Set(used.map(u => u.slice(4, -1)))).concat(["--tmx-star-1", "--tmx-star-2", "--tmx-spark-1", "--tmx-spark-2"]);
+  // NAMED (Nov 22 2026, FX3): BEFORE every var(--tmx-...) was a colour token. AFTER the phone chat's two layout variables
+  // (--tmx-chat-bottom and --tmx-chat-h, its place and height, set by the presence's tmxPhoneFit) are no colour and no theme's
+  const FX3_LAYOUT_VARS = ["--tmx-chat-bottom", "--tmx-chat-h"];
+  const usedNames = Array.from(new Set(used.map(u => u.slice(4, -1)))).filter(n => FX3_LAYOUT_VARS.indexOf(n) === -1).concat(["--tmx-star-1", "--tmx-star-2", "--tmx-spark-1", "--tmx-spark-2"]);
   check("H4. every element token a theme can set is drawn somewhere, and every one drawn is a token a theme sets (" + declared.length + ")",
     declared.every(t => usedNames.indexOf(t) !== -1) && usedNames.every(t => declared.indexOf(t) !== -1), declared.filter(t => usedNames.indexOf(t) === -1).concat(usedNames.filter(t => declared.indexOf(t) === -1)).join(","));
   const rr = RULE;
@@ -1546,7 +1578,7 @@ async function elements() {
   const stillSel = (/@media \(prefers-reduced-motion: reduce\) \{\s*([^{]+)\{ animation: none !important; \}/.exec(still) || [])[1] || "";
   const notStilled = Array.from(new Set(animated)).filter(sel => sel !== "#tmx-chat" && stillSel.indexOf(sel) === -1 && !(sel === ".tmx-blob" && /\.tmx-blob\b/.test(stillSel)));
   check("H7. under prefers-reduced-motion every animated part of the mist and the chat glow stops (" + Array.from(new Set(animated)).length + " animated selectors), the shooting star stays hidden",
-    /style\.textContent = \[[\s\S]*?\]\.join\("\\n"\) \+ MIST_STILL;/.test(FILES[PRESENCE]) && notStilled.length === 0 && /#tmx-shoot \{ animation: none !important; opacity: 0 !important; \}/.test(still), notStilled.join(","));
+    /style\.textContent = \[[\s\S]*?\]\.join\("\\n"\) \+ MIST_STILL( \+ TMX_PHONE)?;/.test(FILES[PRESENCE]) /* NAMED (Nov 22 2026, FX3): + TMX_PHONE, the phone's rules, after */ && notStilled.length === 0 && /#tmx-shoot \{ animation: none !important; opacity: 0 !important; \}/.test(still), notStilled.join(","));
   check("H7. ... and the stars stop wandering (the 35 s regrouping is skipped)", /setInterval\(function \(\) \{\n    \/\* Under reduced motion the stars stay where they are\. \*\/\n    if \(window\.matchMedia && window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)\.matches\) return;/.test(FILES[PRESENCE]));
   check("H7. the mist and the chat glow keep their animations otherwise (the same keyframes and timings as today, H3), and the alive corners are as built (B7)",
     /animation: tmx-chat-glow-breathe 5s ease-in-out infinite;/.test(mc) && /animation: tmx-core-glow 5\.5s ease-in-out infinite;/.test(mc));

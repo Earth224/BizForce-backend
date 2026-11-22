@@ -15,6 +15,10 @@
       file-type rule stays as the disabled Prepare button's reason.
    F8-F10 (NAMED Nov 15 2026, S4): an empty, blank or missing description on a proposal card reads "None" in the
       site's muted text colour (.exec-block.pf-none); a real one is unchanged, and no other field changes.
+   NAMED (Nov 22 2026, FX3): BEFORE G (below) held the phone's Guide button. AFTER the button, its sheet, its spacer and its
+      resting logic are gone: G proves the Guide's tab is the desktop's at every width (a named button at the left edge, in
+      the middle, 32 x 170, its z-index unchanged on the phone), that nothing is added at the page's end, and that the
+      phone's panel opens beside it. The old text, kept for the record:
    G. scripts/termaximus-guide.js: below 640 px the Guide button is a 48 px round icon button,
       named "Guide", bottom-right inside the safe-area insets, z-index 40 (over the page, under
       every dialog), and a spacer pads the page's end (kept last, after a footer appended later)
@@ -72,10 +76,11 @@ const MUTATIONS = {
   // S: listing the videos writes a row
   "videos-route-writes": [[MV, "  return rows.map(function (row) { return publicView(row, social[row.id]); });\n}",
     "  await deps.supabase.from(\"member_videos\").update({ listed_at: new Date(deps.now()).toISOString() }).eq(\"user_id\", userId);\n  return rows.map(function (row) { return publicView(row, social[row.id]); });\n}"]],
-  // G: no padding at the page's end on phones: the button covers the last content
-  "guide-overlaps-content": [[GUIDE, "    \"  #tmx-guide-fab-spacer { display: block; height: calc(80px + env(safe-area-inset-bottom, 0px)); }\",\n", ""]],
-  // G: the phone button shrinks below a 44 px tap target
-  "guide-tap-target-small": [[GUIDE, "width: 48px; height: 48px; padding: 0; gap: 0; border-radius: 50%; }", "width: 32px; height: 32px; padding: 0; gap: 0; border-radius: 50%; }"]],
+  // NAMED (Nov 22 2026, FX3): BEFORE "guide-overlaps-content" and "guide-tap-target-small" (the phone button and its spacer, gone). AFTER:
+  // G: the book button comes back
+  "book-button-back": [[GUIDE, "  var accessKnown = false;\n", "  var accessKnown = false;\n  var fab = document.createElement(\"button\"); fab.id = \"tmx-guide-fab\"; document.body.appendChild(fab);\n"]],
+  // G: the tab is hidden on the phone
+  "tab-hidden-on-phone": [[GUIDE, '    "  #tmx-guide-root { flex-direction: row-reverse; align-items: center;",', '    "  #tmx-guide-root { display: none; flex-direction: row-reverse; align-items: center;",']],
   // S (extra): an unbounded read of a platform table
   "social-read-unbounded": [[MV, "var r = await supabase.from(P.table).select(P.columns).eq(\"user_id\", userId).in(\"video_id\", videoIds)\n        .order(\"created_at\", { ascending: false }).limit(SOCIAL_ROWS_MAX);",
     "var r = await supabase.from(P.table).select(P.columns).eq(\"user_id\", userId)\n        .order(\"created_at\", { ascending: false });"]],
@@ -83,12 +88,19 @@ const MUTATIONS = {
   "failed-reason-lost": [[MV, "list[0].error.trim().slice(0, 200) : \"not posted\" };", "\"not posted\" : \"not posted\" };"]],
   // C (extra): a posted chip without the link
   "posted-link-lost": [[IG, "      if (s === \"posted\" && typeof v.instagram_post_url === \"string\" && PERMALINK_RE.test(v.instagram_post_url)) row.link(v.instagram_post_url);\n", ""]],
-  // G (extra): a footer appended after the Guide ends the page under the button again
-  "spacer-not-kept-last": [[GUIDE, "      if (!/^tmx-guide-/.test(n.id || \"\")) { document.body.appendChild(fabSpacer); return; }\n", ""]],
-  // G (extra): links are no longer avoided at rest
-  "guide-rests-on-links": [[GUIDE, "select,button,a[href],.btn,#videosCard\";", "select,button,.btn,#videosCard\";"]],
-  // G (extra): the phone button loses its name
-  "guide-name-lost": [[GUIDE, "fab.setAttribute(\"aria-label\", \"Guide\");", "fab.setAttribute(\"aria-label\", \"\");"]]
+  // NAMED (Nov 22 2026, FX3): BEFORE "spacer-not-kept-last", "guide-rests-on-links" and "guide-name-lost" (the phone button). AFTER:
+  // G (extra): a spacer is added at the page's end again
+  "spacer-back": [[GUIDE, "  document.body.appendChild(root);\n", "  document.body.appendChild(root);\n  var sp = document.createElement(\"div\"); sp.id = \"tmx-guide-fab-spacer\"; document.body.appendChild(sp);\n"]],
+  // G (extra): the tab loses its name
+  "tab-name-lost": [[GUIDE, '  tab.setAttribute("aria-label", "Open Termaximus Guide");', '  tab.setAttribute("aria-label", "");']],
+  // G (extra): the tab leaves the middle of the left edge
+  "tab-off-middle": [[GUIDE, '    "#tmx-guide-root {",\n    "  position: fixed;",\n    "  top: 50%;",', '    "#tmx-guide-root {",\n    "  position: fixed;",\n    "  top: 88%;",']],
+  // G (extra): the phone lowers the tab's z-index
+  "tab-z-on-phone": [[GUIDE, '    "  #tmx-guide-root.tmx-guide-open { transform: translate(0, -50%); }",', '    "  #tmx-guide-root.tmx-guide-open { transform: translate(0, -50%); }",\n    "  #tmx-guide-root { z-index: 40; }",']],
+  // G (extra): the phone's panel opens wider than the screen allows
+  "panel-too-wide": [[GUIDE, "width: min(300px, calc(100vw - 48px)); margin-left: 0;", "width: 300px; margin-left: 0;"]],
+  // G (extra): the resting logic comes back
+  "rest-logic-back": [[GUIDE, "  var accessKnown = false;\n", "  var accessKnown = false;\n  var AVOID = \"header,nav\"; function restFab() {}\n"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -460,56 +472,42 @@ const leadPx = v => { const m = /calc\((\d+(?:\.\d+)?)px \+ env\(safe-area-inset
   check("C12. only Instagram connected: its chip alone on each row", $(sd, "#ytVideoList .sf-chip").length === CHIP_VIDEOS.length &&
     $(sd, "#ytVideoList .sf-chip").every(c => c.getAttribute("data-platform") === "instagram"), J($(sd, "#ytVideoList .sf-chip").map(c => c.textContent)));
 
-  /* ── G ── */
-  console.log("\n══ G. the Guide button on phones ══");
+  /* ── G ── NAMED (Nov 22 2026, FX3): BEFORE "the Guide button on phones" (G1 to G10: the 48 px round button bottom-right, its
+     z-index 40, its spacer kept last, its resting place). AFTER the button, its sheet, its spacer and its resting logic are gone,
+     and the Guide's tab is the desktop's at every width (the owner's board TmxGuideOpen). */
+  console.log("\n══ G. the Guide's tab at every width (no phone button) ══");
   const g = await runGuide("social.html");
   check("G0. the Guide script runs in jsdom", !g.err, g.err && g.err.message);
-  const fab = g.doc.getElementById("tmx-guide-fab"), spacer = g.doc.getElementById("tmx-guide-fab-spacer");
-  check("G1. the button's accessible name is \"Guide\", and its visible word is kept for screen readers", !!fab && fab.getAttribute("aria-label") === "Guide" &&
-    !!fab.querySelector(".tmx-guide-fab-text") && fab.querySelector(".tmx-guide-fab-text").textContent === "Guide" &&
-    !!fab.querySelector("svg.tmx-guide-fab-icon[aria-hidden=\"true\"]"));
-  const rules = cssRules(g.doc);
-  const phone = rules.filter(r => /max-width:\s*639px/.test(r.media));
-  const pr1 = sel => phone.filter(r => r.sel === sel)[0];
-  const base = sel => rules.filter(r => !r.media && r.sel === sel)[0];
-  const fp = pr1("#tmx-guide-fab");
-  check("G2. below 640 px it is a round button of at least 44 x 44 px", !!fp && px(fp.style.width) >= 44 && px(fp.style.height) >= 44 && fp.style.borderRadius === "50%",
-    fp && J([fp.style.width, fp.style.height, fp.style.borderRadius]));
-  check("G3. ...bottom-right inside the safe-area insets", !!fp && fp.style.left === "auto" && leadPx(fp.style.right) >= 8 && leadPx(fp.style.bottom) >= 8 &&
-    /safe-area-inset-right/.test(fp.style.right) && /safe-area-inset-bottom/.test(fp.style.bottom), fp && J([fp.style.left, fp.style.right, fp.style.bottom]));
-  const fb0 = base("#tmx-guide-fab");
-  const dialogs = rules.filter(r => !r.media && /#tmx-guide-(sheet|panel|tab|mist)|tmx-guide-sheet/.test(r.sel) && r.style.zIndex).map(r => Number(r.style.zIndex));
-  check("G4. above the page (z-index 40, not changed on phones), below every dialog", !!fb0 && fb0.style.zIndex === "40" && !(fp && fp.style.zIndex) &&
-    dialogs.length > 0 && dialogs.every(z => z > 40), J(dialogs));
-  const spRule = pr1("#tmx-guide-fab-spacer");
-  const spH = spRule ? leadPx(spRule.style.height) : NaN;
-  check("G5. the page gets bottom padding on phones: a spacer at least the button plus its gap (" + spH + " px)",
-    !!spacer && spacer.getAttribute("aria-hidden") === "true" && spacer.parentNode === g.doc.body && !!spRule && spRule.style.display === "block" &&
-    !!fp && spH >= px(fp.style.height) + leadPx(fp.style.bottom) + 8 && /safe-area-inset-bottom/.test(spRule.style.height), spRule && J([spRule.style.display, spRule.style.height]));
-  // a later script appends the legal footer; once the page has loaded the spacer is after it again
-  const foot = g.doc.createElement("footer");
+  const gd = g.doc, tab = gd.getElementById("tmx-guide-tab"), groot = gd.getElementById("tmx-guide-root");
+  check("G1. no phone button, no sheet and no spacer; the tab is a named button controlling the panel", !gd.getElementById("tmx-guide-fab") && !gd.getElementById("tmx-guide-sheet") &&
+    !gd.getElementById("tmx-guide-fab-spacer") && !!tab && tab.tagName === "BUTTON" && tab.type === "button" && tab.getAttribute("aria-label") === "Open Termaximus Guide" &&
+    tab.getAttribute("aria-controls") === "tmx-guide-panel" && tab.getAttribute("aria-expanded") === "false" && !!groot && groot.contains(tab),
+    J([!!gd.getElementById("tmx-guide-fab"), !!gd.getElementById("tmx-guide-sheet"), tab && tab.getAttribute("aria-label")]));
+  const gsrc = FILES[GUIDE];
+  const style = (gd.querySelector("style") || {}).textContent || "";
+  const media = style.split("@media").slice(1).map(x => "@media" + x.slice(0, x.indexOf("\n}") + 2));   // each media block alone
+  check("G2. the tab shows at every width: no media rule hides the guide, the tab or its panel",
+    media.length >= 1 && media.every(m => !/#tmx-guide-(root|tab|panel)[^{]*\{[^}]*display:\s*none/.test(m)), J(media.map(m => m.slice(0, 80))));
+  const rootRule = (/(?:^|\n)#tmx-guide-root \{([^}]*)\}/.exec(style) || ["", ""])[1], tabRule = (/\n#tmx-guide-tab \{([^}]*)\}/.exec(style) || ["", ""])[1];
+  check("G3. at the left edge, in the middle, 32 px wide and 170 px tall at least (a tap target well over 44 x 44)",
+    /\n  top: 50%;/.test(rootRule) && /\n  left: 0;/.test(rootRule) && /\n  transform: translateY\(-50%\);/.test(rootRule) && /\n  width: 32px;/.test(tabRule) && /\n  min-height: 170px;/.test(tabRule), J([rootRule, tabRule]));
+  check("G4. its z-index is the desktop's (999990) and no phone rule changes it", /\n  z-index: 999990;/.test(rootRule) && media.every(m => !/z-index/.test(m)), J(media));
+  // a later script appends the legal footer: nothing of the Guide's follows it, so the page's end needs no padding
+  const foot = gd.createElement("footer");
   foot.id = "bf-legal-footer";
   foot.innerHTML = "<nav><a href=\"/terms.html\">Terms</a></nav>";
-  g.doc.body.appendChild(foot);
+  gd.body.appendChild(foot);
   g.w.dispatchEvent(new g.w.Event("load"));
   await flush(5);
-  const after = $(g.doc.body, ":scope > *").filter(e => e !== spacer && (e.compareDocumentPosition(spacer) & 2));
-  check("G6. ...after every page element, a footer appended later included (only the Guide's own fixed layers may follow it)", !!spacer &&
-    !!(foot.compareDocumentPosition(spacer) & 4) && after.every(e => /^tmx-guide-/.test(e.id)), J(after.map(e => e.tagName + "#" + e.id)));
-  const hid = rules.filter(r => !r.media && /#tmx-guide-fab-spacer/.test(r.sel || ""))[0];
-  check("G7. desktop unchanged: the spacer and the icon are hidden outside the phone rule, the label button keeps its word",
-    !!hid && hid.style.display === "none" && !!pr1("#tmx-guide-fab .tmx-guide-fab-text") && !rules.some(r => !r.media && r.sel === "#tmx-guide-fab .tmx-guide-fab-text"));
-  const moved = pr1("#tmx-guide-fab.tmx-guide-fab--moved");
-  check("G8. a moved button on a phone stays inside the safe area on the left", !!moved && moved.style.right === "auto" && /safe-area-inset-left/.test(moved.style.left));
-  // G9: the rest position (jsdom draws no layout; scripts/browserCheckSocial.js measures it at 390 px on six pages)
-  const gsrc = FILES[GUIDE];
-  const avoid = (/var AVOID = "([^"]*)";/.exec(gsrc) || ["", ""])[1].split(",");
-  check("G9. at rest on a phone the button avoids headers, navs, tabs, headings, form fields, buttons, links and the Your videos card",
-    ["header", "nav", "[role=tablist]", "[role=tab]", "h1", "h2", "h3", "input:not([type=hidden])", "textarea", "select", "button", "a[href]", "#videosCard"].every(x => avoid.indexOf(x) !== -1), J(avoid));
-  check("G10. ...phones only (desktop untouched), raised at most 45% of the screen, re-placed on load, resize, tap and when scrolling stops",
-    /if \(!PHONE \|\| !PHONE\.matches\) return;/.test(gsrc) && /window\.matchMedia\("\(max-width: 639px\)"\)/.test(gsrc) && /Math\.round\(window\.innerHeight \* 0\.45\)/.test(gsrc) &&
-    /addEventListener\("scroll", function \(\) \{ restSoon\(150\); \}/.test(gsrc) && /addEventListener\("load", function \(\) \{ keepSpacerLast\(\);/.test(gsrc) &&
-    /addEventListener\("pointerup", function \(\) \{ restSoon\(50\); \}\)/.test(gsrc));
+  const kids = $(gd.body, ":scope > *");
+  check("G5. nothing is added at the page's end: a footer appended later stays last, and the Guide adds only its fixed root",
+    kids[kids.length - 1] === foot && kids.filter(e => /^tmx-guide-/.test(e.id)).map(e => e.id).join(",") === "tmx-guide-root", J(kids.map(e => e.tagName + "#" + e.id)));
+  check("G6. on the phone (760 px and less) the panel opens beside the tab: min(300px, 100vw - 48px), at most 70vh and clear of the bar",
+    /@media \(max-width: 760px\) \{/.test(style) && style.indexOf("#tmx-guide-root { flex-direction: row-reverse; align-items: center;") !== -1 &&
+    style.indexOf("width: min(300px, calc(100vw - 48px)); margin-left: 0;") !== -1 && style.indexOf("max-height: min(70vh, calc(100vh - 2 * (64px + env(safe-area-inset-bottom, 0px)))); }") !== -1);
+  const code = gsrc.replace(/\/\*[\s\S]*?\*\//g, "");
+  check("G7. the phone button's resting logic is gone (no AVOID list, restFab, placeFab, 639 px query or spacer keeping)",
+    !/var AVOID =|restFab|placeFab|max-width: 639px|keepSpacerLast|fabSpacer/.test(code));
 
   windows.forEach(w => { try { w.close(); } catch (e) {} });
   console.log("\n" + passes + " passed, " + failures + " failed");
