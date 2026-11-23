@@ -24,7 +24,7 @@
         "BizForce member" only for a paid member; Reviews opens Coming soon;
         the page's old header hidden on a phone; desktop parts hidden.
      // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "fx3" (NAMED, FX3: BEFORE "p31c"; NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
+     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "fx3b" (NAMED, FX3B: BEFORE "fx3"; NAMED, FX3: BEFORE "p31c"; NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
      F. FX2 (Nov 21 2026): Tip BFC for a paid member; the product strip, built and linked (lib/posts.js
         sends a post's active listing, run here over the P2-3 test database); the tabs on one line; the
         Profile's banner (added, changed, removed in Edit profile) and its ring; the Agent Directory's
@@ -80,7 +80,8 @@ const MUTATIONS = {
   "grid-gap": [[SHELL, "\".pfs-grid{gap:2px}\",", "\".pfs-grid{gap:8px}\","]],
   "old-header": [[SHELL, "\"body:not(.edit-mode) .pf-nav,body:not(.edit-mode) .pf-banner,body:not(.edit-mode) .pf-header-wrap{display:none}\",\n", ""]],
   "no-soon-script": [[PROFILE, "<script src=\"/scripts/bf-feed.js\"></script>", ""]],
-  "shell-rev": [[SW, "var SHELL_REV = \"fx3\";", "var SHELL_REV = \"p31c\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
+  // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
+  "shell-rev": [[SW, "var SHELL_REV = \"fx3b\";", "var SHELL_REV = \"p31c\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
     // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
@@ -101,7 +102,8 @@ const MUTATIONS = {
   "agents-row-tall": [[AGV, "gap:12px;min-height:58px;padding:0 12px;", "gap:12px;min-height:72px;padding:0 12px;"]],
   "agents-grid-three": [[AGV, ".ag-list{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}", ".ag-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}"]],
   "agents-on-desktop": [[AGV, "    \".ag-view-row,.ag-list{display:none}\",\n    \"@media (max-width: 760px){\",\n", "    \"@media (max-width: 760px){\",\n"]],
-  "settle-jumps": [[ORB, "openPortal(firstPortal(state.top), \"settle\"); }", "openPortal(firstPortal(state.top), false); }"]],
+  // NAMED (Nov 22 2026, FX3B): BEFORE anchored on openPortal(firstPortal(state.top), "settle"); }. AFTER the first portal is held in first
+  "settle-jumps": [[ORB, "if (!awaitFront(first)) openPortal(first, \"settle\");", "if (!awaitFront(first)) openPortal(first, false);"]],
   "settle-jerks": [[ORB, "return D * (1 - Math.pow(1 - t, 3)) + (V - 3 * D) * t * (1 - t) * (1 - t);", "return D * (1 - Math.pow(1 - t, 3));"]],
   "settle-slow": [[ORB, "  var SETTLE_MS = 1300;", "  var SETTLE_MS = 2400;"]],
   // NAMED (Nov 22 2026, FX3): the four boards of row 5
@@ -302,7 +304,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
 // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
 // NAMED (Nov 22 2026, FX3): BEFORE "p31c". AFTER "fx3".
-check("E1. sw.js SHELL_REV is \"fx3\"", /\nvar SHELL_REV = "fx3";\n/.test(FILES[SW] || ""));
+// NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+check("E1. sw.js SHELL_REV is \"fx3b\"", /\nvar SHELL_REV = "fx3b";\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
@@ -379,7 +382,9 @@ check("E1. sw.js SHELL_REV is \"fx3\"", /\nvar SHELL_REV = "fx3";\n/.test(FILES[
   check("F14. the first settle takes " + O.SETTLE_MS + " ms (" + O.SETTLE_MIN_MS + " to " + O.SETTLE_MAX_MS + "): it starts where the drift is at the drift's own speed, ends on the rest place with its speed 0, no step bigger than its pace",
     ms === O.SETTLE_MS && ms >= O.SETTLE_MIN_MS && ms <= O.SETTLE_MAX_MS && !!curve && bad.length === 0, J([ms, !!curve, bad]));
   check("F15. it is the page's first opening (no jump to rest), the short way round; under reduced motion it is placed at once (no drift, no settle)",
-    orb.indexOf("openPortal(firstPortal(state.top), \"settle\"); }") !== -1 && orb.indexOf("if (turn === \"settle\") settleTo(key, v0);") !== -1 &&
+    // NAMED (Nov 22 2026, FX3B): BEFORE one line, openPortal(firstPortal(state.top), "settle"); }. AFTER the first portal is held in
+    // first, settled at once when it is not just ahead, else its boxes are built while the ring drifts (prepareGrid).
+    orb.indexOf("          if (!awaitFront(first)) openPortal(first, \"settle\");\n          else prepareGrid(first);") !== -1 && orb.indexOf("if (turn === \"settle\") settleTo(key, v0);") !== -1 &&
     orb.indexOf("var delta = ((target - state.base) % 360 + 540) % 360 - 180;   // the short way round") !== -1 &&
     orb.indexOf("    if (reduced()) { state.turn = null; state.base += delta; place(); flushSparks(); return; }\n") !== -1 &&
     orb.indexOf("var v0 = drifting() ? 360 / DRIFT_MS : 0;") !== -1 && /function drifting\(\) \{ return [^}]*!reduced\(\)/.test(orb));

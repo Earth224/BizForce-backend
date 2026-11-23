@@ -114,7 +114,8 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx3\";", "var SHELL_REV = \"\";"]],
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx3b\";",   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+    "var SHELL_REV = \"\";"]],
   // bf-phone.css is not cached for offline (S)
   "sw-without-phone-css": [[SW, "  \"/css/bf-phone.css\",", ""]],
   // an emoji slips into the phone stylesheet (N)
@@ -292,7 +293,8 @@ const W = FILES[SW] || "";
 // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
 // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
 // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
-check("S1. the shell's cache version is bumped: SHELL_REV \"fx3\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"fx3\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+// NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+check("S1. the shell's cache version is bumped: SHELL_REV \"fx3b\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"fx3b\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
 check("S2. css/bf-phone.css is cached with the shell, for a page opened offline", /\n  "\/css\/bf-phone\.css",/.test(W));
 
 /* ── N. no emoji ── */

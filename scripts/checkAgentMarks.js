@@ -41,6 +41,8 @@ const HUB = "agents-hub.html", UI = "css/bizforce-ui.css", ORDER = "scripts/bf-a
 const BEFORE = "e3e8ce0";   // the frontend before FX3: the dashboard's five icons drawn inline, coloured by bizforce-ui.css
 
 const MUTATIONS = {
+  // FX3B (Nov 22 2026): one of the five unused agent rules back in css/bizforce-ui.css (E3)
+  "fx3b-rule-back": [[UI, ".bf-hq-icon.analytics {\n", ".bf-hq-icon.analytics,\n.bf-hq-icon.analytics-agent {\n"]],
   "map-colour-changed": [[MARKS, "content:            { colour: \"#34d399\",", "content:            { colour: \"#34d39a\","]],
   "map-icon-swapped": [[MARKS, "influencer:         { colour: \"#e879f9\", icon: '<polygon", "influencer:         { colour: \"#e879f9\", icon: '<circle cx=\"12\" cy=\"12\" r=\"3\"/><polygon"]],
   "map-token-lost": [[MARKS, "sales:              { colour: \"var(--bf-accent-b, #a855f7)\",", "sales:              { colour: \"#a855f7\","]],
@@ -72,6 +74,9 @@ const readF = f => { try { return fs.readFileSync(path.join(FRONTEND, f), "utf8"
 [MARKS, AGV, AGP, DASH, HUB, UI, ORDER, DESC].forEach(f => { FILES[f] = readF(f); });
 const gitShow = (rev, f) => { try { return execFileSync("git", ["show", rev + ":" + f], { cwd: FRONTEND, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).replace(/\r\n/g, "\n"); } catch (e) { return null; } };
 const OLD_DASH = gitShow(BEFORE, DASH);
+// NAMED (Nov 22 2026, FX3B): BEFORE B3 read the five old colour rules from today's css/bizforce-ui.css. AFTER FX3B removed
+// them (unused since FX3), so B3 reads them from the stylesheet as it was at BEFORE, where the five old icons used them.
+const OLD_UI = gitShow(BEFORE, UI);
 if (MUTATE) {
   for (const [file, from, to] of MUTATIONS[MUTATE]) FILES[file] = s.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
   console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
@@ -151,7 +156,7 @@ function svgText(inner) { return norm(('<svg viewBox="0 0 24 24" fill="none" str
   const oldAt = OLD_DASH ? OLD_DASH.indexOf(TPL_OPEN) : -1;
   const oldTpl = oldAt === -1 ? "" : OLD_DASH.slice(oldAt, OLD_DASH.indexOf("</template>", oldAt));
   const oldRe = /<li class="orbit-dir-agent"><span class="bf-neon-icon bf-hq-icon orbit-dir-icon ([a-z-]+)" aria-hidden="true">(<svg[\s\S]*?<\/svg>)<\/span>/g;
-  const ui = FILES[UI] || "";
+  const ui = OLD_UI || "";   // NAMED (Nov 22 2026, FX3B): BEFORE FILES[UI]
   const ruleFor = cls => { const re = new RegExp("(?:^|\\n)([^{}\\n]*(?:,\\n[^{}\\n]*)*)\\{([^}]*)\\}", "g"); let m;
     while ((m = re.exec(ui))) { if (m[1].split(",").map(x => x.trim()).indexOf(".bf-hq-icon." + cls) !== -1) return m[2]; } return null; };
   const decl = (body, prop) => { const m = new RegExp("(?:^|;|\\n)\\s*" + prop.replace(/-/g, "\\-") + ":\\s*([^;]+);").exec(body || ""); return m ? norm(m[1]) : null; };
@@ -238,6 +243,11 @@ function svgText(inner) { return norm(('<svg viewBox="0 0 24 24" fill="none" str
   check("E1. neither page nor bf-agents-views.js holds an agent's drawing of its own (the map is the only copy)", bodies.length === 18 && copies.length === 0, copies.join(", "));
   check("E2. the dashboard's five no longer carry the agent classes that coloured them (bizforce-ui.css .bf-hq-icon.seo and the rest)",
     !/orbit-dir-icon (seo|sales|content|analytics-agent|social)"/.test(dash) && (dash.match(/data-bf-agent-mark="/g) || []).length === 5);
+  // FX3B (Nov 22 2026): and the five rules that coloured them are gone from css/bizforce-ui.css (comments aside)
+  const uiNow = (FILES[UI] || "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const left = ["seo", "sales", "content", "analytics-agent", "social"].filter(c => new RegExp("\\.bf-hq-icon\\." + c + "(?![\\w-])").test(uiNow));
+  check("E3. css/bizforce-ui.css holds none of the five agent rules (.bf-hq-icon.seo, .sales, .content, .analytics-agent, .social); .bf-hq-icon.analytics stays",
+    !!FILES[UI] && left.length === 0 && /\n\.bf-hq-icon\.analytics \{\n/.test(uiNow), J(left));
 
   if (failures) { console.log("\nCHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("\nALL " + passes + " CHECKS PASSED");

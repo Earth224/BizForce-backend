@@ -1,0 +1,42 @@
+[
+ [
+  "scripts/bf-orbit.js",
+  "  var SETTLE_DIST = 360 / DRIFT_MS * SETTLE_MS / 2;\n  /* FX3B (Nov 22 2026): NAMED BEFORE SETTLE_AHEAD = SETTLE_DIST + 0.2, so the drift ran about 70 ms before the settle took\n     over: the settle began while the page was still drawing the figures that had just arrived, and a slow frame then\n     made the ring catch up in one jump. AFTER the ring waits FIRST_LEAD_MS of drift further back, so the figures are\n     drawn (and the first portal's boxes built, prepareGrid) while it drifts, and the settle starts on a quiet page. The\n     settle itself (SETTLE_DIST, SETTLE_MS, settleCurve, the drift's speed at its start) is unchanged. */\n  var FIRST_LEAD_MS = 1200;\n  var SETTLE_AHEAD = SETTLE_DIST + 360 / DRIFT_MS * FIRST_LEAD_MS;\n  var STEP_DEG = 72;\n",
+  "  var SETTLE_DIST = 360 / DRIFT_MS * SETTLE_MS / 2;\n  var SETTLE_AHEAD = SETTLE_DIST + 0.2;\n  var STEP_DEG = 72;\n"
+ ],
+ [
+  "scripts/bf-orbit.js",
+  "    top: null, open: null, mains: readMains(), base: 0, turn: null, hover: false, focus: false, last: 0, frame: 0,\n    allOpen: false, active: -1, matches: [], prepared: null   // FX3B: the first portal's boxes built ahead (prepareGrid)\n  };\n",
+  "    top: null, open: null, mains: readMains(), base: 0, turn: null, hover: false, focus: false, last: 0, frame: 0,\n    allOpen: false, active: -1, matches: []\n  };\n"
+ ],
+ [
+  "scripts/bf-orbit.js",
+  "  }\n  /* FX3B (Nov 22 2026): NAMED BEFORE drawGridBoxes always cleared and rebuilt the grid, so the frame that opened the first\n     portal (the settle's first) also built its boxes. AFTER, while the ring drifts towards the first portal, prepareGrid\n     builds that portal's boxes into the grid while it is still hidden; the open then only reveals them, provided the\n     portal, the figures (state.top) and the main boxes are the ones they were built from. Any other draw (a tap on a\n     portal, Refresh, a main box swapped) clears and rebuilds as before. */\n  function portalFor(key) { var portal = null; PORTALS.forEach(function (p) { if (p.key === key) portal = p; }); return portal; }\n  function fillGrid(portal) {\n    var slugs = portal.tools.filter(function (s) { return state.mains.indexOf(s) === -1 && TOOL[s]; });\n",
+  "  }\n  function drawGridBoxes() {\n    clear(grid);\n    var portal = null;\n    PORTALS.forEach(function (p) { if (p.key === state.open) portal = p; });\n    if (!portal) { grid.hidden = true; grid.removeAttribute(\"data-portal\"); return; }\n    grid.hidden = false;\n    grid.setAttribute(\"data-portal\", portal.key);\n    grid.setAttribute(\"aria-label\", portal.title + \" tools\");\n    var slugs = portal.tools.filter(function (s) { return state.mains.indexOf(s) === -1 && TOOL[s]; });\n"
+ ],
+ [
+  "scripts/bf-orbit.js",
+  "  }\n  function prepareGrid(key) {\n    var portal = portalFor(key);\n    state.prepared = null;\n    if (!portal || state.open || !grid.hidden) return;\n    clear(grid);\n    fillGrid(portal);\n    state.prepared = { key: key, top: state.top, mains: state.mains.join(\"|\") };\n  }\n  function drawGridBoxes() {\n    var portal = portalFor(state.open), pr = state.prepared;\n    state.prepared = null;\n    var ready = !!portal && !!pr && pr.key === portal.key && pr.top === state.top && pr.mains === state.mains.join(\"|\");\n    if (!ready) clear(grid);\n    if (!portal) { grid.hidden = true; grid.removeAttribute(\"data-portal\"); return; }\n    grid.hidden = false;\n    grid.setAttribute(\"data-portal\", portal.key);\n    grid.setAttribute(\"aria-label\", portal.title + \" tools\");\n    if (!ready) fillGrid(portal);\n  }\n\n",
+  "  }\n\n"
+ ],
+ [
+  "scripts/bf-orbit.js",
+  "        // NAMED (Nov 21 2026, FX2): BEFORE openPortal(..., false), a jump to rest; AFTER \"settle\", the drift eased to rest\n        if (!state.open && !readSession() && !state.chosen) {\n          state.chosen = true;\n          var first = firstPortal(state.top);\n          if (!awaitFront(first)) openPortal(first, \"settle\");\n          else prepareGrid(first);   // FX3B: its boxes are built now, while the ring drifts; the open only reveals them\n        }\n        else drawGrid();\n",
+  "        // NAMED (Nov 21 2026, FX2): BEFORE openPortal(..., false), a jump to rest; AFTER \"settle\", the drift eased to rest\n        if (!state.open && !readSession() && !state.chosen) { state.chosen = true; if (!awaitFront(firstPortal(state.top))) openPortal(firstPortal(state.top), \"settle\"); }\n        else drawGrid();\n"
+ ],
+ [
+  "scripts/bf-orbit.js",
+  "    SETTLE_MS: SETTLE_MS, settleCurve: settleCurve,   // NAMED (Nov 21 2026, FX2)\n    FIRST_LEAD_MS: FIRST_LEAD_MS, SETTLE_DIST: SETTLE_DIST, prepareGrid: prepareGrid,   // NAMED (Nov 22 2026, FX3B)\n    ORACLE_STAR: ORACLE_STAR, STAR_TINTS: STAR_TINTS, STAR_LAYERS: STAR_LAYERS, starLooks: starLooks, starReach: starReach, starLayout: starLayout, starGeometry: starGeometry, drawStars: drawStars,\n",
+  "    SETTLE_MS: SETTLE_MS, settleCurve: settleCurve,   // NAMED (Nov 21 2026, FX2)\n    ORACLE_STAR: ORACLE_STAR, STAR_TINTS: STAR_TINTS, STAR_LAYERS: STAR_LAYERS, starLooks: starLooks, starReach: starReach, starLayout: starLayout, starGeometry: starGeometry, drawStars: drawStars,\n"
+ ],
+ [
+  "css/bizforce-ui.css",
+  "\n/* NAMED (Nov 22 2026, FX3B): BEFORE this rule also held .bf-hq-icon.analytics-agent, and four rules after .directory\n   coloured .bf-hq-icon.seo, .sales, .content and .social: the dashboard's five agents' icons. AFTER FX3 they draw from\n   scripts/bf-agent-marks.js, so nothing carries those classes; the five are gone. */\n.bf-hq-icon.analytics {\n  --bf-icon-stroke: #60a5fa;\n",
+  "\n.bf-hq-icon.analytics,\n.bf-hq-icon.analytics-agent {\n  --bf-icon-stroke: #60a5fa;\n"
+ ],
+ [
+  "css/bizforce-ui.css",
+  "  box-shadow: 0 0 24px rgba(var(--bf-accent-a-rgb, 34, 211, 238), 0.18);\n}\n",
+  "  box-shadow: 0 0 24px rgba(var(--bf-accent-a-rgb, 34, 211, 238), 0.18);\n}\n\n.bf-hq-icon.seo {\n  --bf-icon-stroke: var(--bf-accent-a, #22d3ee);\n  border-color: rgba(var(--bf-accent-a-rgb, 34, 211, 238), 0.45);\n  box-shadow: 0 0 24px rgba(var(--bf-accent-a-rgb, 34, 211, 238), 0.18);\n}\n\n.bf-hq-icon.sales {\n  --bf-icon-stroke: var(--bf-accent-b, #a855f7);\n  border-color: rgba(var(--bf-accent-b-rgb, 168, 85, 247), 0.45);\n  box-shadow: 0 0 24px rgba(var(--bf-accent-b-rgb, 168, 85, 247), 0.18);\n}\n\n.bf-hq-icon.content {\n  --bf-icon-stroke: #34d399;\n  border-color: rgba(52, 211, 153, 0.45);\n  box-shadow: 0 0 24px rgba(52, 211, 153, 0.18);\n}\n\n.bf-hq-icon.social {\n  --bf-icon-stroke: #f472b6;\n  border-color: rgba(244, 114, 182, 0.45);\n  box-shadow: 0 0 24px rgba(244, 114, 182, 0.18);\n}\n"
+ ]
+]

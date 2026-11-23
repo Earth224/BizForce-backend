@@ -130,6 +130,8 @@ let OPEN_STUDIO = null;  // C's studio page opener, for I
 const NETLIFY_404 = () => ({ ok: false, status: 404, json: async () => { throw new SyntaxError("Unexpected token '<'"); } });
 
 const MUTATIONS = {
+  // FX3B (Nov 22 2026): a theme-bearing rule other than the four FX3B removed is gone too (H3 must still see it)
+  "fx3b-other-rule-gone": [[UI, ".bf-hq-icon.directory {\n  --bf-icon-stroke: var(--bf-accent-a, #22d3ee);\n", ".bf-hq-icon.directory {\n"]],
   // an inline backdrop left on one page (A)
   "inline-backdrop-left": [["crm.html", "/* The backdrop is the token rule in scripts/bf-theme.js. */",
     "body::before{content:\"\";position:fixed;inset:0;background:radial-gradient(circle at 15% 10%,rgba(0,229,255,.14),transparent 38%),#070b18;z-index:0;pointer-events:none}"]],
@@ -1354,6 +1356,11 @@ async function elements() {
     off.btn_a === "#ff7a18" && off.mist_haze === "#ff2e63" && off.guide_a === "#abcdef");
 
   // H3: today's look
+  // NAMED (Nov 22 2026, FX3B): the four blocks css/bizforce-ui.css lost, as they stood at THEMES_DONE (plain colours; see cutFx3b below)
+  const FX3B_GONE = ["seo|#22d3ee|34, 211, 238", "sales|#a855f7|168, 85, 247", "content|#34d399|52, 211, 153", "social|#f472b6|244, 114, 182"].map(x => {
+    const [c, stroke, rgb] = x.split("|");
+    return ".bf-hq-icon." + c + " {\n  --bf-icon-stroke: " + stroke + ";\n  border-color: rgba(" + rgb + ", 0.45);\n  box-shadow: 0 0 24px rgba(" + rgb + ", 0.18);\n}\n\n";
+  });
   const pageFiles = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
   const changed = [], wrongText = [];
   const THEME_LINE = /--bf-|--tmx-|bf-wordmark|bf-theme/;
@@ -1373,7 +1380,17 @@ async function elements() {
       const a = t.indexOf(".ts-pv-middle, .ts-pv-glows {"), m = t.indexOf("@media (prefers-reduced-motion: reduce) { .ts-preview[data-alive=\"1\"] .ts-pv-glows", a), b = t.indexOf("\n", m);
       return a === -1 || m === -1 ? t : t.slice(0, a) + t.slice(b);
     };
-    const now = themeLines(cutPreview(require("./_unthemed").unthemed(FILES[f]))).split("\n"), was = themeLines(cutPreview(done)).split("\n").filter(Boolean);
+    /* NAMED (Nov 22 2026, FX3B): css/bizforce-ui.css lost the five unused agent icon rules (.bf-hq-icon.seo, .sales, .content,
+       .social, and .analytics-agent from the .analytics rule; nothing has carried those classes since FX3 drew the five
+       from scripts/bf-agent-marks.js, and checkAgentMarks E3 holds them gone). Exactly those four blocks are cut from the
+       stylesheet as built, each found once; every other theme line of it stays pinned. */
+    const cutFx3b = t => {
+      if (f !== UI) return t;
+      let out = t;
+      FX3B_GONE.forEach(b => { const i = out.indexOf(b); if (i === -1 || out.indexOf(b, i + 1) !== -1) drift.push(f + ": FX3B block not found once " + JSON.stringify(b.slice(0, 40))); else out = out.slice(0, i) + out.slice(i + b.length); });
+      return out;
+    };
+    const now = themeLines(cutPreview(require("./_unthemed").unthemed(FILES[f]))).split("\n"), was = themeLines(cutPreview(cutFx3b(done))).split("\n").filter(Boolean);
     let j = 0; const added = [];
     now.forEach(l => { if (j < was.length && l === was[j]) j++; else if (l) added.push(l); });
     if (j < was.length) drift.push(f + ": lost or changed " + JSON.stringify(was[j].slice(0, 140)));

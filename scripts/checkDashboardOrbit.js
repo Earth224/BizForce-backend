@@ -108,6 +108,14 @@ const MUTATIONS = {
   // FX3: the settle starts on the wall clock (performance.now), not the frames' (checkOrbitStage2 F16's cause)
   "fx3-settle-wall-clock": [[ORBIT, "start: state.last || 0, ms: SETTLE_MS", "start: state.last || (window.performance.now() + 5000), ms: SETTLE_MS"]],
   // a tile left out of every portal (O1)
+  // FX3B (Nov 22 2026): the first portal's boxes are not built ahead (the open builds them, in the settle's first frame)
+  "fx3b-no-prepare": [[ORBIT, "          else prepareGrid(first);   // FX3B", "          else void 0;   // FX3B"]],
+  // FX3B: the open clears and builds the boxes again, though the ones built ahead are ready
+  "fx3b-rebuild-on-open": [[ORBIT, "    if (!ready) clear(grid);\n", "    clear(grid);\n"], [ORBIT, "    if (!ready) fillGrid(portal);\n", "    fillGrid(portal);\n"]],
+  // FX3B: the boxes built ahead are shown at once, before the portal opens
+  "fx3b-prepared-shown": [[ORBIT, "    clear(grid);\n    fillGrid(portal);\n    state.prepared = {", "    clear(grid);\n    fillGrid(portal);\n    grid.hidden = false;\n    state.prepared = {"]],
+  // FX3B: the drift's lead back to FX3's (the settle begins while the figures are still being drawn)
+  "fx3b-short-lead": [[ORBIT, "  var FIRST_LEAD_MS = 1200;", "  var FIRST_LEAD_MS = 67;"]],
   "tile-dropped": [[ORBIT, "\"prospecting\", \"sms-drip\"] },", "\"prospecting\"] },"]],
   // a tile's link changed (O1)
   "tile-link-changed": [[DASH, "  <a href=\"crm.html\" class=\"bf-btn\" onclick=\"event.stopPropagation()\">Open CRM</a>", "  <a href=\"crm-new.html\" class=\"bf-btn\" onclick=\"event.stopPropagation()\">Open CRM</a>"]],
@@ -673,7 +681,10 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     Q.run(500);
     check("FX3 the ring is still until the figures arrive (the drift's clock has not started)", QO.state.base === b00 && !QO.state.open, JSON.stringify([b00, QO.state.base]));
     await settle();
-    const rec = []; for (let i = 0; i < 130; i++) { Q.run(16); rec.push([QO.state.base, QO.state.open]); }
+    // NAMED (Nov 22 2026, FX3B): BEFORE 130 frames (2080 ms: the drift's 0.2 deg lead and the settle). AFTER the drift runs
+    // FIRST_LEAD_MS before the settle (bf-orbit.js), so the frames cover the lead, the settle and 400 ms after.
+    const nRec = Math.ceil((QO.FIRST_LEAD_MS + QO.SETTLE_MS + 400) / 16);
+    const rec = []; for (let i = 0; i < nRec; i++) { Q.run(16); rec.push([QO.state.base, QO.state.open]); }
     const oi = rec.findIndex(r => r[1]), back = rec.slice(1).filter((r, i) => r[0] < rec[i][0] - 1e-9);
     const v = oi > 1 ? (rec[oi + 1][0] - rec[oi][0]) / 0.016 : NaN, vDrift = (rec[1][0] - rec[0][0]) / 0.016;
     const restOff = ((rec[rec.length - 1][0] - QO.frontBase("sell")) % 360 + 360) % 360;
@@ -687,6 +698,27 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     const aOff = ((AO.state.base - AO.frontBase("agents")) % 360 + 360) % 360;
     check("FX3 a first portal further round (Agents) settles at once and is at rest on its front place within SETTLE_MS of frames", AO.state.open === "agents" && AO.state.turn === null && (aOff < 0.01 || aOff > 359.99), JSON.stringify([AO.state.open, !!AO.state.turn, aOff]));
     A.w.close();
+  }
+  /* FX3B (Nov 22 2026): THE FIRST PORTAL'S BOXES ARE BUILT BEFORE THE SETTLE. While the ring drifts towards Sell its boxes
+     are built into the hidden grid (prepareGrid), and Sell's open only shows them, so the settle's first frame builds
+     nothing. The drift runs FIRST_LEAD_MS (1.2 s) after the figures before the settle takes over. A tap builds as before. */
+  {
+    const Q = page({ top: QUIET() }), QO = Q.w.BFOrbit, g = Q.d.getElementById("orbitGrid");
+    await settle();
+    const pre = { hidden: g.hidden, open: QO.state.open, portal: g.getAttribute("data-portal"), n: g.querySelectorAll(":scope > .orbit-box").length };
+    const firstBox = g.firstElementChild, preHtml = Array.prototype.map.call(g.children, c => c.outerHTML).join("\n");
+    check("FX3B while the ring drifts towards Sell, the grid is hidden (no portal named) and already holds Sell's boxes", pre.hidden && !pre.open && pre.portal === null && pre.n > 0 && !!QO.state.prepared && QO.state.prepared.key === "sell", JSON.stringify(pre));
+    let openedAt = -1; const nRun = Math.ceil((QO.FIRST_LEAD_MS + QO.SETTLE_MS + 400) / 16);
+    for (let i = 0; i < nRun; i++) { Q.run(16); if (openedAt < 0 && QO.state.open) openedAt = (i + 1) * 16; }
+    check("FX3B Sell's open only shows them: the very same box nodes, the grid now shown and named Sell", QO.state.open === "sell" && !g.hidden && g.getAttribute("data-portal") === "sell" && g.firstElementChild === firstBox && g.children.length === pre.n, JSON.stringify([QO.state.open, g.hidden, g.children.length]));
+    check("FX3B the drift runs FIRST_LEAD_MS (1200 ms) after the figures before Sell opens", QO.FIRST_LEAD_MS === 1200 && Math.abs(openedAt - 1200) <= 64, JSON.stringify([QO.FIRST_LEAD_MS, openedAt]));
+    const sellBtn = Q.d.querySelector(".orbit-portal[data-portal=\"sell\"]");
+    sellBtn.click(); const folded = g.hidden && g.children.length === 0; sellBtn.click();
+    const tapHtml = Array.prototype.map.call(g.children, c => c.outerHTML).join("\n");
+    check("FX3B the boxes built ahead are exactly the ones a tap on Sell builds (folding clears them)", folded && tapHtml === preHtml && g.firstElementChild !== firstBox, JSON.stringify([folded, tapHtml.length, preHtml.length]));
+    Q.d.querySelector(".orbit-portal[data-portal=\"connect\"]").click();
+    check("FX3B a tap on another portal builds its own boxes as before", QO.state.open === "connect" && !g.hidden && g.getAttribute("data-portal") === "connect" && g.children.length > 0 && QO.state.prepared === null, JSON.stringify([QO.state.open, g.getAttribute("data-portal")]));
+    Q.w.close();
   }
   const hover = (d, k) => { const b = d.querySelector(".orbit-portal[data-portal=\"" + k + "\"]"); b.dispatchEvent(new d.defaultView.MouseEvent("mouseenter")); return d.getElementById("orbitPreview"); };
   const pv = hover(T.d, "agents");

@@ -132,7 +132,14 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-2): BEFORE "p31". AFTER "p32": the Verified badge (bf-verified.js), and the members panel on media and business ID.
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx3\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
+  // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx3b\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
+  // FX3B (Nov 22 2026): a moon whose photo failed shows again (drawn whole) at every repaint, until the error hides it
+  "fx3b-moon-reveal": [[MOON, "    el.hidden = failed;\n", "    el.hidden = false;\n"]],
+  // FX3B: no probe, so a moon whose photo failed never shows again
+  "fx3b-moon-no-probe": [[MOON, "    if (img && failed) {\n", "    if (false) {\n"]],
+  // FX3B: the probe shows the moon though its own photo failed after it
+  "fx3b-moon-probe-blind": [[MOON, "if (!lost && img.parentNode && el.contains(img))", "if (img.parentNode && el.contains(img))"]],
   // (a crescent moon, built from its code point so this file holds none: checkNoEmoji N2)
   "emoji": [[VIEWS, "  var VIEW_KEY = \"bf_hq_view\"", "  /* " + String.fromCodePoint(0x1F319) + " */ var VIEW_KEY = \"bf_hq_view\""]]
 };
@@ -497,6 +504,29 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   const ids = q(PM.d, "[data-hq-moon] [id]").map(n => n.id);
   check("M6. every moon has its own SVG ids (no two masks share one), and every url(#) points inside its own moon",
     ids.length >= 18 && new Set(ids).size === ids.length   /* NAMED (Nov 21 2026, FX2): BEFORE >= 27 (three moons); AFTER two */ && moons.every(m => (m.innerHTML.match(/url\(#([^)]+)\)/g) || []).every(u => !!m.querySelector("#" + u.slice(5, -1)))), J(ids.length));
+  /* FX3B (Nov 22 2026): NAMED BEFORE every repaint showed a moon again (drawn whole, its masks and blurs) until its photo's
+     error hid it once more. AFTER a moon whose photo failed stays hidden while it is drawn again, a probe of the photo
+     shows it once the photo loads, and a moon whose photo had not failed is painted as before. */
+  {
+    const MO = PM.w.BFOracleMoon, node = moons[0], chip = moons[1], RealImage = PM.w.Image, made = [];
+    MO.paint();
+    const shown = !!node && !node.hidden && !chip.hidden;
+    node.querySelector("svg image").dispatchEvent(new PM.w.Event("error"));
+    const failedNow = node.hidden && node.getAttribute("data-hq-moon-failed") === "true" && !chip.hidden;
+    PM.w.Image = function () { const im = new RealImage(); made.push(im); return im; };
+    MO.paint();
+    const kept = node.hidden && !!node.querySelector("svg image") && node.getAttribute("data-moon-angle") === "101.5" && !chip.hidden;
+    const probe = made[0], href = node.querySelector("svg image").getAttribute("href");
+    if (probe && probe.onload) probe.onload();
+    const back = !node.hidden && !node.hasAttribute("data-hq-moon-failed");
+    node.querySelector("svg image").dispatchEvent(new PM.w.Event("error")); made.length = 0; MO.paint();
+    node.querySelector("svg image").dispatchEvent(new PM.w.Event("error"));
+    if (made[0] && made[0].onload) made[0].onload();
+    const staysLost = node.hidden && node.getAttribute("data-hq-moon-failed") === "true";
+    PM.w.Image = RealImage;
+    check("M11. a moon whose photo failed stays hidden when it is drawn again (its drawing renewed); a probe of the photo shows it once the photo loads, and not if its own photo failed; the other moon is painted as before",
+      shown && failedNow && kept && made.length >= 1 && !!probe && probe.src === href && back && staysLost, J([shown, failedNow, kept, made.length, probe && probe.src === href, back, staysLost]));
+  }
   const cent = PM.d.getElementById("orbitTop").getAttribute("data-hq-open");
   // NAMED (Nov 21 2026, FX2): BEFORE "M7. the centre's moon shows only while ORACLE is open". AFTER the Sun, M7 to M10.
   // NAMED (Nov 22 2026, FX3): BEFORE the Sun (NASA SDO's photograph, its glow, its shimmer, its credit). AFTER the abyss sun, M7 to M10.
@@ -602,7 +632,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
-  check("W1. SHELL_REV \"fx3\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"fx3\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+  check("W1. SHELL_REV \"fx3b\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"fx3b\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js (NAMED, Nov 22 2026, FX3: bf-abyss.js, the abyss sun's stars, just before bf-oracle-moon.js)", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-abyss\.js"><\/script>\n<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

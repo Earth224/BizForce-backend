@@ -708,7 +708,8 @@ const goalCols = g => ({ goal_metric: g.metric, goal_weekly_target: g.target, go
   P = page({ top: TOP() }); await settle();
   // NAMED (Nov 21 2026, FX2): the first portal now opens with a settle (bf-orbit.js SETTLE_MS, the drift eased to rest),
   // which is a turn, and sparks never fly during a turn (F18), so the clock runs past it first. BEFORE it opened with no turn.
-  P.run(P.O.SETTLE_MS + 100);
+  // NAMED (Nov 22 2026, FX3B): BEFORE P.run(SETTLE_MS + 100). AFTER the drift runs FIRST_LEAD_MS before the settle, so the clock runs past both.
+  P.run(P.O.FIRST_LEAD_MS + P.O.SETTLE_MS + 100);
   await P.O.pulse(); await settle();
   const old ={ type: "card_lead", agent: null, portal_from: "core", portal_to: "connect", at: new Date(Date.now() - 3600000).toISOString() };
   P.O.sparkFor(old);
