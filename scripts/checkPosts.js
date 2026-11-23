@@ -50,6 +50,12 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 const H = require("./_p21Harness");
 const { memDb } = require("./_p23Db");
+/* NAMED (Nov 23 2026, P3-3): every post names its intent and a category on the one list (lib/categories.js over the categories
+   table, seeded here from migration 200 by scripts/_categories.js). A body that names neither is sent as a share in Art; one that
+   names them keeps its own. checkPostIntent holds the intent and category rules themselves. */
+const CATEGORY_ROWS = require("./_categories").rows();
+const withIntent = b => Object.assign({ intent: "share", category: "art" }, b || {});
+const createPost = (d, u, b) => P.createPost(d, u, withIntent(b));
 
 const SERVER = "@server.js", POSTS = "@lib/posts.js";
 const MUTATIONS = {
@@ -106,7 +112,7 @@ function world(extra) {
   const users = [ME, THEM, OTHER, PRIV, MUTED, FAN, BLOCKER].map(id => ({ id, created_at: OLD, email_verified_at: OLD })).concat([{ id: NEWBIE, created_at: "2026-11-19T12:00:00.000Z", email_verified_at: OLD }]);
   const names = { [ME]: "rose", [THEM]: "tom", [OTHER]: "olga", [NEWBIE]: "nell", [PRIV]: "pat", [MUTED]: "mo", [NOBODY]: "nobody", [FAN]: "fay", [BLOCKER]: "bea" };
   const seed = Object.assign({
-    users, posts: [], post_media: [], post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
+    categories: CATEGORY_ROWS, users, posts: [], post_media: [], post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
     follows: [], member_blocks: [], member_mutes: [], member_media: [], profiles: [],
     bf_profiles: Object.keys(names).map((id, i) => ({ user_id: id, username: names[id], display_name: names[id].toUpperCase(), avatar_url: null, updated_at: new Date(Date.UTC(2026, 10, 1 + i)).toISOString(),
       place_city: "Leeds", place_region: "West Yorkshire", place_country: "GB", local_opt_in: id === THEM }))
@@ -127,7 +133,7 @@ const pid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
 (async function main() {
   /* ── A ── */
   console.log("\n══ A. a new post's shape ══");
-  const v = P.validateNew;
+  const v = b => P.validateNew(withIntent(b));   // NAMED (Nov 23 2026, P3-3)
   check("A1. text and photo only: a video post is refused with the sentence that says the other kinds come later",
     v({ kind: "video", body: "x" }).error === P.MESSAGES.kind && v({ kind: "text", body: "x" }).kind === "text" && J(P.KINDS_NOW) === J(["text", "photo"]));
   check("A2. public or followers; public when not given", v({ body: "x" }).audience === "public" && v({ body: "x", audience: "followers" }).audience === "followers" &&
@@ -141,41 +147,41 @@ const pid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
   /* ── B ── */
   console.log("\n══ B. making one ══");
   let w = world();
-  let r = await P.createPost(w.deps, ME, { body: "  Fresh bread today.  " });
+  let r = await createPost(w.deps, ME, { body: "  Fresh bread today.  " });
   const mine = w.db.t.posts[0];
   check("B1. published at once: 201, \"Your post is up.\", status published with published_at, the text trimmed", r.status === 201 && r.body.message === "Your post is up." &&
     mine && mine.status === "published" && mine.published_at === NOW0 && mine.body === "Fresh bread today." && r.body.post.mine === true && r.body.post.link === "/p/" + mine.id, J(r));
   check("B2. no place without \"Show my posts in Local\"", mine && mine.place_city === null && mine.place_country === null);
-  r = await P.createPost(w.deps, THEM, { body: "Market day." });
+  r = await createPost(w.deps, THEM, { body: "Market day." });
   const theirs = w.db.t.posts.find(p => p.author_id === THEM);
   check("B3. with it on, the place is copied from the profile", theirs && theirs.place_city === "Leeds" && theirs.place_region === "West Yorkshire" && theirs.place_country === "GB");
   const before = w.db.t.posts.length;
-  r = await P.createPost(w.deps, ME, { body: "Selling recalled cribs" });
+  r = await createPost(w.deps, ME, { body: "Selling recalled cribs" });
   check("B4. the content policy refuses with its one sentence, and nothing is saved", r.status === 400 && r.body.reason === "content_policy" && w.db.t.posts.length === before, J(r.body));
-  r = await P.createPost(w.deps, ME, { body: "Our new wine list" });
+  r = await createPost(w.deps, ME, { body: "Our new wine list" });
   const held = w.db.t.posts.find(p => p.body === "Our new wine list");
   check("B5. an unclear match is held for review: pending, no published_at, a queue item, the waiting sentence", r.status === 201 && held && held.status === "pending" && held.published_at === null &&
     r.body.message === P.MESSAGES.pending && w.db.t.moderation_queue.some(q => q.object_type === "post" && q.object_id === held.id), J(r.body));
   /* NAMED (Nov 20 2026, P3-1): BEFORE B6 "an account younger than the BizCash hold posts as pending, queued as new_member" and
      B7 "an account whose age is unknown is held, never waved through" (H5). AFTER instant use: a new account posts at once, and a
      public post needs a confirmed email instead. B8 now holds an unclear match from the new account. */
-  r = await P.createPost(w.deps, NEWBIE, { body: "Hi all" });
+  r = await createPost(w.deps, NEWBIE, { body: "Hi all" });
   const nb = w.db.t.posts.find(p => p.author_id === NEWBIE);
   check("B6. a one-day-old account posts at once: 201, published, held false, no new_member queue item", r.status === 201 && nb && nb.status === "published" && r.body.held === false &&
     !w.db.t.moderation_queue.some(q => q.source === "new_member"), J([r.body.held, w.db.t.moderation_queue.map(q => q.source)]));
   const nBefore = w.db.t.posts.length;
-  r = await P.createPost(w.deps, NOBODY, { body: "Who am I" });
+  r = await createPost(w.deps, NOBODY, { body: "Who am I" });
   check("B7. an author whose email is not confirmed: a public post is 403 email_unverified with the resend link, and nothing is saved",
     r.status === 403 && r.body.reason === "email_unverified" && r.body.blocked === "post_public" && typeof r.body.resend_url === "string" && w.db.t.posts.length === nBefore, J(r.body));
-  r = await P.createPost(w.deps, NOBODY, { body: "Just for my followers", audience: "followers" });
+  r = await createPost(w.deps, NOBODY, { body: "Just for my followers", audience: "followers" });
   check("B7. ...a followers-only post from the same author goes up", r.status === 201 && w.db.t.posts.some(p => p.author_id === NOBODY && p.audience === "followers"), J(r.body));
   w.db.failOn("moderation_queue", "insert");
   const n0 = w.db.t.posts.length;
-  r = await quiet(() => P.createPost(w.deps, NEWBIE, { body: "Our new wine list, again" }));
+  r = await quiet(() => createPost(w.deps, NEWBIE, { body: "Our new wine list, again" }));
   check("B8. a queue that cannot be written leaves no post: 503 queue_unavailable", r.status === 503 && r.body.reason === "queue_unavailable" && w.db.t.posts.length === n0, J(r.body));
   w = world();
   for (let i = 0; i < 10; i++) w.db.t.posts.push(post(pid(100 + i), ME, { created_at: "2026-11-20T0" + (i % 10) + ":00:00.000Z" }));
-  r = await P.createPost(w.deps, ME, { body: "Eleventh" });
+  r = await createPost(w.deps, ME, { body: "Eleventh" });
   check("B9. ten a day: the eleventh in 24 hours is 429", r.status === 429 && r.body.reason === "rate_limited" && w.db.t.posts.length === 10, J(r));
 
   /* ── C ── */
@@ -351,42 +357,42 @@ const pid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
   const LST = "bbbbbbbb-0000-4000-8000-000000000001", LST_THEIRS = "bbbbbbbb-0000-4000-8000-000000000002", LST_PAUSED = "bbbbbbbb-0000-4000-8000-000000000003";
   const listings = () => [{ id: LST, seller_id: ME, status: "active" }, { id: LST_THEIRS, seller_id: THEM, status: "active" }, { id: LST_PAUSED, seller_id: ME, status: "paused" }];
   w = tiered({ marketplace_listings: listings() });
-  r = await P.createPost(w.deps, FAN, { body: "Just words" });
+  r = await createPost(w.deps, FAN, { body: "Just words" });
   check("J1. a free account's text-only share post: 403 photo_required, the owner's sentence and the members panel, nothing saved",
     r.status === 403 && r.body.reason === "photo_required" && r.body.error === FR.share_photo && J(r.body.members_panel) === J(PANEL) && w.db.t.posts.length === 0, J(r));
-  r = await P.createPost(w.deps, FAN, { kind: "photo", media: [{ media_id: pid(9) }] });
+  r = await createPost(w.deps, FAN, { kind: "photo", media: [{ media_id: pid(9) }] });
   check("J2. ...a free account's photo share is not stopped by the photo rule (it reaches the photo check)",
     !(r.body && (r.body.reason === "photo_required" || r.body.reason === "members_only")), J(r));
-  r = await P.createPost(w.deps, FAN, { body: "Need a plumber in Leeds this week", intent: "need" });
+  r = await createPost(w.deps, FAN, { body: "Need a plumber in Leeds this week", intent: "need" });
   const need = w.db.t.posts[0];
   check("J3. ...a free account's Need may be text: published, intent need, search_visible false",
     r.status === 201 && !!need && need.intent === "need" && need.search_visible === false && need.status === "published", J([r.status, need]));
   const postsBefore = w.db.t.posts.length;
-  r = await P.createPost(w.deps, FAN, { kind: "photo", media: [{ media_id: pid(9) }], listing_id: LST });
-  const r2 = await P.createPost(w.deps, FAN, { body: "Selling bread", intent: "offer" });
-  const r3 = await P.createPost(w.deps, FAN, { body: "Need help", intent: "need", search_visible: true, seo_title: "Help" });
+  r = await createPost(w.deps, FAN, { kind: "photo", media: [{ media_id: pid(9) }], listing_id: LST });
+  const r2 = await createPost(w.deps, FAN, { body: "Selling bread", intent: "offer" });
+  const r3 = await createPost(w.deps, FAN, { body: "Need help", intent: "need", search_visible: true, seo_title: "Help" });
   check("J4. ...linking a listing, an offer post and the search fields are members only (403 with the members panel), nothing saved",
     r.status === 403 && r.body.error === FR.listing_link && r2.status === 403 && r2.body.error === P.MESSAGES.offerMembers &&
     r3.status === 403 && r3.body.error === P.MESSAGES.searchMembers && J(r3.body.members_panel) === J(PANEL) && w.db.t.posts.length === postsBefore, J([r.body, r2.body, r3.body]));
   w = tiered({ marketplace_listings: listings() });
-  r = await P.createPost(w.deps, ME, { body: "Fresh sourdough, baked this morning in Leeds." });
+  r = await createPost(w.deps, ME, { body: "Fresh sourdough, baked this morning in Leeds." });
   const m1 = w.db.t.posts[0];
   check("J5. a member's text post is fine, and Show in Google is on by default (search_visible true, no title or description)",
     r.status === 201 && m1 && m1.intent === "share" && m1.search_visible === true && !m1.seo_title && !m1.seo_description, J(m1));
-  r = await P.createPost(w.deps, ME, { body: "Rye loaves", seo_title: "  Rye   loaves in Leeds ", seo_description: "Baked daily.", search_visible: false });
+  r = await createPost(w.deps, ME, { body: "Rye loaves", seo_title: "  Rye   loaves in Leeds ", seo_description: "Baked daily.", search_visible: false });
   const m2 = w.db.t.posts[1];
   check("J6. ...their search title and description are stored tidied (spaces collapsed), and they can turn it off",
     r.status === 201 && m2.seo_title === "Rye loaves in Leeds" && m2.seo_description === "Baked daily." && m2.search_visible === false, J(m2));
-  const long1 = await P.createPost(w.deps, ME, { body: "x", seo_title: "t".repeat(71) });
-  const long2 = await P.createPost(w.deps, ME, { body: "x", seo_description: "d".repeat(161) });
-  const okLen = await P.createPost(w.deps, ME, { body: "x", seo_title: "t".repeat(70), seo_description: "d".repeat(160) });
-  const badType = await P.createPost(w.deps, ME, { body: "x", search_visible: "yes" });
+  const long1 = await createPost(w.deps, ME, { body: "x", seo_title: "t".repeat(71) });
+  const long2 = await createPost(w.deps, ME, { body: "x", seo_description: "d".repeat(161) });
+  const okLen = await createPost(w.deps, ME, { body: "x", seo_title: "t".repeat(70), seo_description: "d".repeat(160) });
+  const badType = await createPost(w.deps, ME, { body: "x", search_visible: "yes" });
   check("J7. ...70 characters for the title and 160 for the description, not more; Show in Google is true or false",
     long1.status === 400 && long1.body.field === "seo_title" && long2.status === 400 && long2.body.field === "seo_description" && okLen.status === 201 &&
     badType.status === 400 && badType.body.field === "search_visible" && P.SEO_TITLE_MAX === 70 && P.SEO_DESCRIPTION_MAX === 160, J([long1.body, long2.body, okLen.status, badType.body]));
-  const theirs = await P.createPost(w.deps, ME, { body: "Mine?", listing_id: LST_THEIRS });
-  const paused = await P.createPost(w.deps, ME, { body: "Paused one", listing_id: LST_PAUSED });
-  const own = await P.createPost(w.deps, ME, { body: "My loaf, in the Market", listing_id: LST });
+  const theirs = await createPost(w.deps, ME, { body: "Mine?", listing_id: LST_THEIRS });
+  const paused = await createPost(w.deps, ME, { body: "Paused one", listing_id: LST_PAUSED });
+  const own = await createPost(w.deps, ME, { body: "My loaf, in the Market", listing_id: LST });
   const linked = w.db.t.posts.filter(p => p.listing_id).map(p => p.listing_id);
   check("J8. a member links only their own active listing: someone else's or a paused one is 400 listing_id, nothing saved",
     theirs.status === 400 && theirs.body.field === "listing_id" && paused.status === 400 && own.status === 201 && J(linked) === J([LST]), J([theirs.body, paused.body, own.status, linked]));

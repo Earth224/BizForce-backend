@@ -48,7 +48,8 @@ const MUTATIONS = {
   "route-no-400": [[SERVER, "if (req.body.agents_card_view !== null && AGENTS_CARD_VIEWS.indexOf(req.body.agents_card_view) === -1) {", "if (false) {"]],
   "route-get-unchecked": [[SERVER, "agents_card_view: AGENTS_CARD_VIEWS.indexOf(row.agents_card_view) !== -1 ? row.agents_card_view : null,", "agents_card_view: row.agents_card_view,"]],
   "route-null-dropped": [[SERVER, "      updates.agents_card_view = req.body.agents_card_view;", "      if (req.body.agents_card_view !== null) updates.agents_card_view = req.body.agents_card_view;"]],
-  "route-get-not-read": [[SERVER, "hq_card_view, hq_orbit, agents_card_view\")", "hq_card_view, hq_orbit\")"]],
+  // NAMED (Nov 23 2026, P3-3): need_alerts (migration 202b) now follows agents_card_view, last
+  "route-get-not-read": [[SERVER, "hq_card_view, hq_orbit, agents_card_view, need_alerts\")", "hq_card_view, hq_orbit, need_alerts\")"]],
   "yourdata-drops": [[YOURDATA, "hq_orbit, agents_card_view, updated_at", "hq_orbit, updated_at"]],
   "default-large": [[AGV, "DEFAULT_VIEW = \"compact\"", "DEFAULT_VIEW = \"large\""]],
   "no-device-copy": [[AGV, "    state.view = value; writeView(value); apply();", "    state.view = value; apply();"]],

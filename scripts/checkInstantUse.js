@@ -24,6 +24,11 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 const H = require("./_p21Harness");
 const { memDb } = require("./_p23Db");
+/* NAMED (Nov 23 2026, P3-3): every post names its intent and a category on the one list (lib/categories.js over the categories
+   table, seeded here from migration 200 by scripts/_categories.js). A body that names neither is sent as a share in Art; one that
+   names them keeps its own. checkPostIntent holds the intent and category rules themselves. */
+const CATEGORY_ROWS = require("./_categories").rows();
+const withIntent = b => Object.assign({ intent: "share", category: "art" }, b || {});
 
 const SERVER = "@server.js", POSTS = "@lib/posts.js", LIMITS = "@lib/bfcTransferLimits.js";
 const MUTATIONS = {
@@ -51,7 +56,7 @@ const NOW0 = "2026-11-20T12:00:00.000Z";
 
 function world() {
   const users = [{ id: NEW, created_at: "2026-11-20T11:59:00.000Z", email_verified_at: "2026-11-20T11:59:30.000Z" }, { id: AGELESS, created_at: null, email_verified_at: "2026-11-01T00:00:00.000Z" }];
-  const db = memDb({ users, posts: [], post_media: [], post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
+  const db = memDb({ categories: CATEGORY_ROWS, users, posts: [], post_media: [], post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
     follows: [], member_blocks: [], member_mutes: [], member_media: [], profiles: [],
     bf_profiles: [NEW, AGELESS].map((id, i) => ({ user_id: id, username: "u" + i, display_name: "U" + i, avatar_url: null, updated_at: NOW0, place_city: null, place_region: null, place_country: null, local_opt_in: false })) });
   const reads = [];
@@ -70,12 +75,12 @@ function fnText(src, sig) {
 (async function main() {
   console.log("\n══ A. posting is instant ══");
   let w = world();
-  let r = await P.createPost(w.deps, NEW, { body: "Opened my shop a minute ago." });
+  let r = await P.createPost(w.deps, NEW, withIntent({ body: "Opened my shop a minute ago." }));
   const p1 = w.db.t.posts.find(p => p.author_id === NEW);
   check("A1. an account opened a minute ago: 201, published at once, held false", r.status === 201 && r.body.held === false && p1 && p1.status === "published" && p1.published_at === NOW0, J([r.status, r.body && r.body.held, p1 && p1.status]));
   check("A2. ...no moderation queue item, and none with source new_member", w.db.t.moderation_queue.length === 0, J(w.db.t.moderation_queue));
   check("A3. ...the account's age is never read to make a post", !w.reads.some(([t, c]) => t === "users" && /created_at/.test(String(c))), J(w.reads.filter(x => x[0] === "users")));
-  r = await P.createPost(w.deps, AGELESS, { body: "Age unknown, still posting." });
+  r = await P.createPost(w.deps, AGELESS, withIntent({ body: "Age unknown, still posting." }));
   const p2 = w.db.t.posts.find(p => p.author_id === AGELESS);
   check("A4. an account whose age cannot be read posts and is published too", r.status === 201 && p2 && p2.status === "published", J([r.status, r.body]));
 

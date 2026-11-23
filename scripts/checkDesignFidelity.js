@@ -24,7 +24,7 @@
         "BizForce member" only for a paid member; Reviews opens Coming soon;
         the page's old header hidden on a phone; desktop parts hidden.
      // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
-     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "fx3b" (NAMED, FX3B: BEFORE "fx3"; NAMED, FX3: BEFORE "p31c"; NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
+     E. THE SHELL'S VERSION (sw.js): SHELL_REV is "p33" (NAMED, P3-3: BEFORE "fx3b"; NAMED, FX3B: BEFORE "fx3"; NAMED, FX3: BEFORE "p31c"; NAMED, P3-1B: BEFORE "fx2"; NAMED, P3-1: BEFORE "fx1"; NAMED, P3-2: BEFORE "p31"; NAMED, FX2: BEFORE "p32").
      F. FX2 (Nov 21 2026): Tip BFC for a paid member; the product strip, built and linked (lib/posts.js
         sends a post's active listing, run here over the P2-3 test database); the tabs on one line; the
         Profile's banner (added, changed, removed in Edit profile) and its ring; the Agent Directory's
@@ -47,6 +47,8 @@ const HOME = "home.html", FEED = "scripts/bf-feed.js", SHELL = "scripts/bf-profi
 const POSTS = "@lib/posts.js", AGV = "scripts/bf-agents-views.js", AGP = "ai-agents.html", ORB = "scripts/bf-orbit.js";
 // NAMED (Nov 22 2026, FX3)
 const TMXP = "scripts/termaximus-presence.js", TMXG = "scripts/termaximus-guide.js", ABY = "scripts/bf-abyss.js", DASHB = "dashboard.html";
+// NAMED (Nov 23 2026, P3-3): the owner's canvas row 4, the composer and the Need post
+const COMP = "scripts/bf-composer.js", COMPOSE = "compose.html";
 const MUTATIONS = {
   "tab-font": [[HOME, "color:#c9d1e6;font:600 16px/1 system-ui", "color:#c9d1e6;font:600 15px/1 system-ui"]],
   "underline-thin": [[HOME, "bottom:1px;height:3px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}", "bottom:1px;height:2px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}"]],
@@ -81,14 +83,15 @@ const MUTATIONS = {
   "old-header": [[SHELL, "\"body:not(.edit-mode) .pf-nav,body:not(.edit-mode) .pf-banner,body:not(.edit-mode) .pf-header-wrap{display:none}\",\n", ""]],
   "no-soon-script": [[PROFILE, "<script src=\"/scripts/bf-feed.js\"></script>", ""]],
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
-  "shell-rev": [[SW, "var SHELL_REV = \"fx3b\";", "var SHELL_REV = \"p31c\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
+  // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter): the anchor "p33", the mutant "fx3b"
+  "shell-rev": [[SW, "var SHELL_REV = \"p33\";", "var SHELL_REV = \"fx3b\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
     // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
   "tip-for-free": [[FEED, "setMember(!!a && a.tier === \"member\");", "setMember(!!a);"]],
   "tip-not-watched": [[FEED, "    watchAccess(40);   // NAMED (Nov 21 2026, FX2)", "   // NAMED (Nov 21 2026, FX2)"]],
   "strip-unlinked": [[FEED, "    return '<a class=\"bfp-buy\" href=\"' + esc(href) + '\"", "    return '<a class=\"bfp-buy\" data-href=\"' + esc(href) + '\""]],
-  "strip-not-drawn": [[FEED, "status + stripHtml(p) + '</div></div>'", "status + '</div></div>'"]],
+  "strip-not-drawn": [[FEED, "status + stripHtml(p) + helpHtml(p) + '</div></div>'", "status + helpHtml(p) + '</div></div>'"]],   // NAMED (Nov 23 2026, P3-3): + helpHtml(p)
   "listing-any-status": [[POSTS, ".in(\"id\", ids).eq(\"status\", \"active\");", ".in(\"id\", ids);"]],
   "listing-not-sent": [[POSTS, "      listing: (p.listing_id && got[4][p.listing_id]) || null", "      listing: null"]],
   "tab-wraps": [[HOME, "font:600 16px/1 system-ui,-apple-system,\"Segoe UI\",Arial,sans-serif;white-space:nowrap;cursor:pointer;", "font:600 16px/1 system-ui,-apple-system,\"Segoe UI\",Arial,sans-serif;cursor:pointer;"]],
@@ -120,9 +123,30 @@ const MUTATIONS = {
   "fx3-fade-slow": [[TMXP, "tr: \"opacity 0.2s ease\", dur: 200 };", "tr: \"opacity 0.4s ease\", dur: 400 };"]],
   "fx3-abyss-dense": [[ABY, "  var BASE_COUNTS = [70, 35, 16];", "  var BASE_COUNTS = [90, 35, 16];"]],
   "fx3-green-ring": [[DASHB, "{display:none}\n    #orbitTop[data-hq-open=\"oracle\"] .orbit-core > :not(.hq-core-moon)", "{display:block}\n    #orbitTop[data-hq-open=\"oracle\"] .orbit-core > :not(.hq-core-moon)"]],
-  "settle-when-reduced": [[ORB, "    if (reduced()) { state.turn = null; state.base += delta; place(); flushSparks(); return; }\n", ""]]
+  "settle-when-reduced": [[ORB, "    if (reduced()) { state.turn = null; state.base += delta; place(); flushSparks(); return; }\n", ""]],
+  // NAMED (Nov 23 2026, P3-3): the owner's canvas row 4 (section H)
+  "p33-header-tall": [[COMPOSE, "height:64px;margin:0 -16px 16px;padding:0 12px;border-bottom:1px solid #1e2848}", "height:56px;margin:0 -16px 16px;padding:0 12px;border-bottom:1px solid #1e2848}"]],
+  "p33-post-pill": [[COMP, "\".bfc-pill{display:inline-flex;align-items:center;height:40px;padding:0 18px;border-radius:20px;", "\".bfc-pill{display:inline-flex;align-items:center;height:36px;padding:0 18px;border-radius:20px;"]],
+  "p33-tile-radius": [[COMP, "gap:2px;height:64px;box-sizing:border-box;padding:0 4px;border-radius:10px;", "gap:2px;height:64px;box-sizing:border-box;padding:0 4px;border-radius:14px;"]],
+  "p33-tile-order": [[COMP, "var INTENTS = [[\"share\", \"Share\", \"Show your work\"], [\"offer\", \"Offer\", \"Sell or book\"], [\"need\", \"Need\", \"Ask for help\"]];", "var INTENTS = [[\"share\", \"Share\", \"Show your work\"], [\"need\", \"Need\", \"Ask for help\"], [\"offer\", \"Offer\", \"Sell or book\"]];"]],
+  "p33-label-font": [[COMP, "\".bfc-lab{display:block;margin:0;font-size:13px;line-height:16px;", "\".bfc-lab{display:block;margin:0;font-size:12px;line-height:16px;"]],
+  "p33-need-label": [[COMP, "need: \"What do you need?\" };", "need: \"Ask for help\" };"]],
+  "p33-chip-tall": [[COMP, "\".bfc-chip .bfc-face{display:flex;align-items:center;height:40px;", "\".bfc-chip .bfc-face{display:flex;align-items:center;height:36px;"]],
+  "p33-chips-wrap": [[COMP, "\".bfc-chips{display:flex;gap:8px;margin-top:-3px;overflow-x:auto;", "\".bfc-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:-3px;overflow-x:auto;"]],
+  "p33-box-for-followers": [[COMP, "needBox.hidden = !(it === \"need\" && audienceNow() === \"public\");", "needBox.hidden = !(it === \"need\");"]],
+  "p33-box-words": [[COMP, "var NEED_BOX = \"Members who offer this nearby will be told about your post.\";", "var NEED_BOX = \"Members nearby will be told.\";"]],
+  "p33-slots": [[COMP, "grid-template-columns:repeat(4,minmax(0,78px));gap:8px;", "grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;"]],
+  "p33-when-off-screen": [[COMP, "\".bfc-where{flex:1;min-width:0;", "\".bfc-where{flex:none;width:241px;min-width:0;"]],
+  "p33-tag-tall": [[FEED, "justify-content:center;height:24px;box-sizing:border-box;padding:0 9px;border-radius:12px;", "justify-content:center;height:28px;box-sizing:border-box;padding:0 9px;border-radius:12px;"]],
+  "p33-meta-font": [[FEED, "\".bfp-kmeta{min-width:0;font:400 14px/16px ", "\".bfp-kmeta{min-width:0;font:400 13px/16px "]],
+  "p33-help-pill": [[FEED, "height:34px;padding:0 12px;border-radius:17px;background:var(--bf-accent-a, #22d3ee);color:#04121a;", "height:34px;padding:0 12px;border-radius:8px;background:var(--bf-accent-a, #22d3ee);color:#04121a;"]],
+  "p33-help-for-poster": [[FEED, "if (!p || p.intent !== \"need\" || p.can_help !== true || p.mine || isFound(p)) return \"\";", "if (!p || p.intent !== \"need\" || p.can_help !== true || isFound(p)) return \"\";"]],
+  "p33-help-when-found": [[FEED, "if (!p || p.intent !== \"need\" || p.can_help !== true || p.mine || isFound(p)) return \"\";", "if (!p || p.intent !== \"need\" || p.can_help !== true || p.mine) return \"\";"]],
+  "p33-help-words": [[FEED, "var HELP = { title: \"You offer this nearby\", sub: \"Reply privately with your work\", go: \"I can help\" };", "var HELP = { title: \"You offer this\", sub: \"Reply privately with your work\", go: \"Help\" };"]],
+  "p33-backdrop": [[FEED, "radial-gradient(circle at 77% 28%,#123a4a 0,", "radial-gradient(circle at 50% 50%,#123a4a 0,"]],
+  "p33-found-tag": [[FEED, "(isFound(p) ? \"FOUND\" : \"NEED\")", "\"NEED\""]]
 };
-const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB]);   // NAMED (Nov 22 2026, FX3): + the four boards' files
+const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB, COMP, COMPOSE]);   // NAMED (Nov 23 2026, P3-3): + the composer and its page   // NAMED (Nov 22 2026, FX3): + the four boards' files
 const { FILES, check, J } = T;
 
 /* The text of the block that opens at `marker` (its "{"), to the matching "}". The CSS in a .js file is an array of
@@ -305,7 +329,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
 // NAMED (Nov 22 2026, FX3): BEFORE "p31c". AFTER "fx3".
 // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
-check("E1. sw.js SHELL_REV is \"fx3b\"", /\nvar SHELL_REV = "fx3b";\n/.test(FILES[SW] || ""));
+// NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
+check("E1. sw.js SHELL_REV is \"p33\"", /\nvar SHELL_REV = "p33";\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
@@ -318,7 +343,8 @@ check("E1. sw.js SHELL_REV is \"fx3b\"", /\nvar SHELL_REV = "fx3b";\n/.test(FILE
   check("F3. tapping it (a member) opens the Coming soon sheet: sending BizCash is not built yet", feed.indexOf("else if (kind === \"tip\") { if (MEMBER === true) soon(\"tip\", act); }") !== -1 &&
     /\n    tip: \["Tip BFC", "Send the author BizCash to say thanks\. Sending BizCash is for members\."\]/.test(feed));
   check("F4. the strip is drawn in the bottom-left block whenever a post carries a listing, as one link to the listing",
-    feed.indexOf("status + stripHtml(p) + '</div></div>'") !== -1 && feed.indexOf("if (!L || typeof L.id !== \"string\" || !L.id) return \"\";") !== -1 &&
+    // NAMED (Nov 23 2026, P3-3): BEFORE the strip ended the block; AFTER a Need's I can help strip follows it (helpHtml, section H)
+    feed.indexOf("status + stripHtml(p) + helpHtml(p) + '</div></div>'") !== -1 && feed.indexOf("if (!L || typeof L.id !== \"string\" || !L.id) return \"\";") !== -1 &&
     feed.indexOf("    return '<a class=\"bfp-buy\" href=\"' + esc(href) + '\"") !== -1 && feed.indexOf("/^\\/listing\\/[^\\/?#]+$/.test(L.link) ? L.link : \"/listing/\" + encodeURIComponent(L.id);") !== -1);
   {
     // the server: lib/posts.js over the P2-3 test database (scripts/_p23Db.js)
@@ -423,5 +449,93 @@ check("E1. sw.js SHELL_REV is \"fx3b\"", /\nvar SHELL_REV = "fx3b";\n/.test(FILE
     panelRule.indexOf("transition: opacity " + G.SLIDE_S + "s ease, transform " + G.SLIDE_S + "s ease;") !== -1, J(gPhone));
   check("G8. TmxChatOracle and reduced motion: every open and close is a plain " + TM.STILL_FADE_S + " s fade",
     tp.indexOf('tr: "opacity ' + TM.STILL_FADE_S + 's ease", dur: ' + (TM.STILL_FADE_S * 1000) + " };") !== -1);
+
+  /* ── H ── NAMED (Nov 23 2026, P3-3) */
+  console.log("\n══ H. P3-3: the owner's canvas row 4 (" + DS.COMPOSER.BOARD + ", " + DS.NEEDPOST.BOARD + ") ══");
+  const CO = DS.COMPOSER, NP = DS.NEEDPOST;
+  // the CSS arrays' strings joined, so a rule split over two strings reads as one
+  const flat = t => t.replace(/",\s*\n\s*"/g, "");
+  const cp = flat(FILES[COMP] || ""), cpage = FILES[COMPOSE] || "", fd = flat(feed);
+  const sys = 'system-ui,-apple-system,"Segoe UI",Arial,sans-serif';
+  ruleCheck("H1. " + CO.BOARD + ": the header " + CO.HEADER.HEIGHT + " px over a 1 px " + CO.HEADER.DIVIDER + " line, the page's " + CO.SIDE + " px sides", cpage, "    .compose-top",
+    { height: px(CO.HEADER.HEIGHT), "border-bottom": "1px solid " + CO.HEADER.DIVIDER, padding: "0 12px", margin: "0 -" + px(CO.SIDE) + " " + px(CO.SECTION_GAP) });
+  ruleCheck("H2. ...\"" + CO.HEADER.TITLE + "\" centred, " + CO.HEADER.TITLE_FONT + " px " + CO.HEADER.TITLE_WEIGHT, cpage, "    .compose-top h1",
+    { flex: "1", "text-align": "center", "font-size": px(CO.HEADER.TITLE_FONT), "font-weight": String(CO.HEADER.TITLE_WEIGHT) });
+  check("H3. ...Close a plain " + CO.HEADER.X_ICON + " px X in a 44 px target; Post in the header, a " + CO.HEADER.POST.H + " px pill (radius " + CO.HEADER.POST.RADIUS + ", " + CO.HEADER.POST.FONT + " px) in a " + CO.HEADER.POST.HIT + " px button",
+    holds(rule(cpage, "    .compose-close"), { width: "44px", height: "44px" }) && holds(rule(cpage, "    .compose-close svg"), { width: "24px", height: "24px" }) &&
+    cpage.indexOf('<span class="compose-post" id="composePost"></span>') !== -1 && cpage.indexOf('{ postSlot: document.getElementById("composePost") }') !== -1 &&
+    holds(rule(cp, ".bfc-pill"), { height: px(CO.HEADER.POST.H), "border-radius": px(CO.HEADER.POST.RADIUS), font: "800 " + px(CO.HEADER.POST.FONT) + "/1 " + sys }) &&
+    holds(rule(cp, ".bfc-post"), { "min-width": px(CO.HEADER.POST.HIT), "min-height": px(CO.HEADER.POST.HIT) }));
+  const T0 = CO.TILES;
+  check("H4. the tiles: " + T0.ITEMS.map(x => x[1] + " \"" + x[2] + "\"").join(", ") + ", in that order, " + T0.H + " px tall, " + T0.GAP + " px apart, radius " + T0.RADIUS + ", " + T0.BORDER + " px " + T0.LINE + " on " + T0.FILL + "; chosen " + T0.ON_FILL + " with a cyan edge and words",
+    cp.indexOf("  var INTENTS = " + J(T0.ITEMS).replace(/","/g, '", "').replace(/\],\[/g, "], [") + ";") !== -1 &&
+    holds(rule(cp, ".bfc-tiles"), { display: "grid", "grid-template-columns": "repeat(3,minmax(0,1fr))", gap: px(T0.GAP) }) &&
+    holds(rule(cp, ".bfc-tile .bfc-face"), { height: px(T0.H), "border-radius": px(T0.RADIUS), border: T0.BORDER + "px solid " + T0.LINE, background: T0.FILL }) &&
+    holds(rule(cp, ".bfc-tile b"), { "font-size": px(T0.TITLE_FONT), color: T0.TITLE }) && holds(rule(cp, ".bfc-tile small"), { "font-size": px(T0.SUB_FONT), color: T0.SUB }) &&
+    holds(rule(cp, ".bfc-tile input:checked+.bfc-face"), { background: T0.ON_FILL, "border-color": ACC }) && holds(rule(cp, ".bfc-tile input:checked+.bfc-face b"), { color: ACC }) &&
+    holds(rule(cp, ".bfc-tile input:checked+.bfc-face small"), { color: T0.ON_SUB }), J(rule(cp, ".bfc-tile .bfc-face")));
+  check("H5. a free account's Offer tile carries the \"" + T0.MEMBERS_TAG + "\" tag and opens the members panel (bf-access.js [data-members-only]); offers are members only",
+    cp.indexOf('t.setAttribute("data-members-only", "");') !== -1 && cp.indexOf('tag.className = "bfc-mtag"; tag.textContent = "' + T0.MEMBERS_TAG + '";') !== -1 &&
+    cp.indexOf("if (window.bfAccess && window.bfAccess.showPanel) window.bfAccess.showPanel();") !== -1 && cp.indexOf("      if (membersOffer()) { rules(); return; }") !== -1);
+  const L0 = CO.LABEL;
+  check("H6. the labels " + L0.FONT + "/" + L0.LINE + " px, " + L0.WEIGHT + ", spaced " + L0.SPACING + " px, upper case, " + L0.COLOR + "; " + L0.GAP + " px over their control, sections " + CO.SECTION_GAP + " px apart; the box's label by intent: " + J(CO.LABELS),
+    holds(rule(cp, ".bfc-lab"), { "font-size": px(L0.FONT), "line-height": px(L0.LINE), "font-weight": String(L0.WEIGHT), "letter-spacing": px(L0.SPACING), "text-transform": "uppercase", color: L0.COLOR }) &&
+    holds(rule(cp, ".bfc-sec"), { gap: px(L0.GAP) }) && holds(rule(cp, ".bfc-form"), { gap: px(CO.SECTION_GAP) }) &&
+    cp.indexOf("  var TEXT_LABEL = { share: " + J(CO.LABELS.share) + ", offer: " + J(CO.LABELS.offer) + ", need: " + J(CO.LABELS.need) + " };") !== -1 &&
+    cp.indexOf("need: " + J(CO.NEED_HINT) + " };") !== -1 && cp.indexOf("      textL.textContent = TEXT_LABEL[it];") !== -1);
+  const X0 = CO.TEXT;
+  ruleCheck("H7. the box " + X0.H + " px tall, radius " + X0.RADIUS + ", " + X0.FILL + " with a " + X0.LINE + " line, " + X0.FONT + "/" + X0.LINE_H + " px, padded " + X0.PAD, cp, ".bfc-text",
+    { height: px(X0.H), "border-radius": px(X0.RADIUS), background: X0.FILL, border: "1px solid " + X0.LINE, font: px(X0.FONT) + "/" + px(X0.LINE_H) + " " + sys, padding: "12px " + px(X0.PAD) });
+  const C0 = CO.CHIPS;
+  check("H8. the category chips: one row that swipes (no wrapping), " + C0.H + " px pills (radius " + C0.RADIUS + ", " + C0.GAP + " px apart, padded " + C0.PAD + ", " + C0.FONT + " px), chosen cyan; the note \"" + C0.NOTE + "\"; the list from GET /api/categories, never typed",
+    holds(rule(cp, ".bfc-chips"), { display: "flex", gap: px(C0.GAP), "overflow-x": "auto" }) && !/flex-wrap/.test(JSON.stringify(rule(cp, ".bfc-chips"))) &&
+    holds(rule(cp, ".bfc-chip .bfc-face"), { height: px(C0.H), "border-radius": px(C0.RADIUS), padding: "0 " + px(C0.PAD), "font-size": px(C0.FONT), background: C0.FILL, border: "1px solid " + C0.LINE, color: C0.TEXT }) &&
+    holds(rule(cp, ".bfc-chip input:checked+.bfc-face"), { background: C0.ON_FILL, "border-color": ACC, color: ACC }) && holds(rule(cp, ".bfc-chip"), { height: "44px" }) &&
+    cp.indexOf("  var CAT_NOTE = " + J(C0.NOTE) + ";") !== -1 && cp.indexOf('getJson("/api/categories")') !== -1 && !/tattoo_body_art|Hair & Beauty/.test(cp), J(rule(cp, ".bfc-chips")));
+  const W0 = CO.WHERE, N0 = CO.WHEN;
+  check("H9. a Need's Where (" + W0.H + " px, radius " + W0.RADIUS + ", at most " + W0.MAX + " characters, filling the row) and When (" + N0.ITEMS.join(", ") + ": " + N0.PILL_H + " px pills, radius " + N0.PILL_RADIUS + ", the chosen one cyan), inside the margins (the board's control ran off the screen)",
+    holds(rule(cp, ".bfc-in"), { height: px(W0.H), "border-radius": px(W0.RADIUS), background: W0.FILL, border: "1px solid " + W0.LINE }) && cp.indexOf("  var NEED_PLACE_MAX = " + W0.MAX + ";") !== -1 &&
+    holds(rule(cp, ".bfc-where"), { flex: "1", "min-width": "0" }) && holds(rule(cp, ".bfc-when"), { flex: "none" }) && holds(rule(cp, ".bfc-need"), { gap: px(N0.GAP) }) &&
+    cp.indexOf('  var WHENS = [["today", "Today"], ["week", "Week"], ["any", "Any"]];') !== -1 && J(N0.ITEMS) === J(["Today", "Week", "Any"]) &&
+    holds(rule(cp, ".bfc-seg"), { height: "44px", padding: "0 3px", background: N0.FILL, "box-shadow": "inset 0 0 0 1px " + N0.LINE }) && holds(rule(cp, ".bfc-opt"), { padding: "3px 0", "min-width": "44px" }) &&
+    holds(rule(cp, ".bfc-opt .bfc-face"), { "border-radius": px(N0.PILL_RADIUS) }) && 44 - 2 * 3 === N0.PILL_H &&
+    holds(rule(cp, ".bfc-when .bfc-opt input:checked+.bfc-face"), { background: ACC, color: "#070b18" }) && N0.FIT === true &&
+    cp.indexOf('      needSec.hidden = it !== "need";') !== -1, J([rule(cp, ".bfc-where"), rule(cp, ".bfc-when")]));
+  const PH = CO.PHOTOS;
+  check("H10. photos: " + PH.COUNT + " slots of " + PH.SLOT + " px, " + PH.GAP + " px apart, radius " + PH.RADIUS + ", dashed " + PH.DASH + " on " + PH.FILL + "; the next free one adds",
+    holds(rule(cp, ".bfc-photos"), { "grid-template-columns": "repeat(" + PH.COUNT + ",minmax(0," + px(PH.SLOT) + "))", gap: px(PH.GAP) }) &&
+    holds(rule(cp, ".bfc-slot,.bfc-ph"), { "border-radius": px(PH.RADIUS), "aspect-ratio": "1/1" }) && holds(rule(cp, ".bfc-slot"), { border: "1.5px dashed " + PH.DASH, background: PH.FILL }) &&
+    cp.indexOf("html.push(j === photos.length ? '<li class=\"bfc-slot\"><label class=\"bfc-add\" id=\"bfcAddLabel\" for=\"bfcFile\"") !== -1);
+  const B0 = CO.BOX;
+  check("H11. the Need box: \"" + B0.TEXT + "\" (" + B0.H + " px, radius " + B0.RADIUS + ", " + B0.FILL + ", a " + B0.ICON + " px cyan target), only on a public Need (lib/needAlerts.js tells members only of those)",
+    cp.indexOf("  var NEED_BOX = " + J(B0.TEXT) + ";") !== -1 && cp.indexOf('      needBox.hidden = !(it === "need" && audienceNow() === "public");') !== -1 &&
+    holds(rule(cp, ".bfc-info"), { "min-height": px(B0.H), "border-radius": px(B0.RADIUS), background: B0.FILL, border: "1px solid " + B0.LINE, "font-size": px(B0.FONT), gap: "14px", padding: "12px 16px 12px 15px" }) &&
+    cp.indexOf('<svg viewBox="0 0 24 24" width="' + B0.ICON + '" height="' + B0.ICON + '"') !== -1 && 16 + 15 + B0.ICON + 14 === B0.TEXT_LEFT - 1 + 1);
+  const A0 = CO.AUDIENCE;
+  check("H12. Public / Followers: a " + A0.H + " px segment, the chosen " + A0.PILL_H + " px pill " + A0.ON_FILL,
+    holds(rule(cp, ".bfc-aud .bfc-opt input:checked+.bfc-face"), { background: A0.ON_FILL }) && holds(rule(cp, ".bfc-aud .bfc-opt"), { flex: "1" }) &&
+    cp.indexOf('radios("bfcAud", [["public", "Public"], ["followers", "Followers"]], "bfc-opt", "public")') !== -1);
+  const G0 = NP.TAG, M0 = NP.META, S0 = NP.STRIP;
+  check("H13. " + NP.BOARD + ": the " + G0.WORD + " tag " + G0.H + " px (radius " + G0.RADIUS + ", " + G0.FONT + " px, " + G0.FILL + " with " + G0.TEXT + "), \"" + G0.FOUND + "\" once Found",
+    holds(rule(fd, ".bfp-tag"), { height: px(G0.H), "border-radius": px(G0.RADIUS), background: ACC, color: G0.TEXT, font: "800 " + px(G0.FONT) + "/1 " + sys }) &&
+    fd.indexOf('(isFound(p) ? "' + G0.FOUND + '" : "' + G0.WORD + '")') !== -1 && G0.FILL === C.ACCENT);
+  check("H14. ...then \"Category · Place · When\" " + M0.GAP + " px after it, " + M0.FONT + "/" + M0.LINE + " px " + M0.COLOR + " (When: " + J(M0.WHEN) + ", Any left out); a Share post's category a small " + NP.SHARE_CATEGORY_FONT + " px line",
+    holds(rule(fd, ".bfp-kind"), { gap: px(M0.GAP), "align-items": "center" }) && holds(rule(fd, ".bfp-kmeta"), { font: "400 " + px(M0.FONT) + "/" + px(M0.LINE) + " " + sys, color: M0.COLOR }) &&
+    fd.indexOf("  var WHEN_WORDS = { today: " + J(M0.WHEN.today) + ", week: " + J(M0.WHEN.week) + " };") !== -1 &&fd.indexOf('esc(parts.join(" \\u00b7 "))') !== -1 &&
+    holds(rule(fd, ".bfp-kind.is-share .bfp-kmeta"), { "font-size": px(NP.SHARE_CATEGORY_FONT) }) && fd.indexOf("kindHtml(p) + head") !== -1);
+  check("H15. the strip: \"" + S0.TITLE + "\" / \"" + S0.SUB + "\" / \"" + S0.BUTTON + "\" (radius " + S0.RADIUS + ", " + S0.LINE + ", padded " + S0.PAD + "; a " + S0.ICON + " px " + S0.ICON_FILL + " tile; " + S0.TITLE_FONT + " and " + S0.SUB_FONT + " px; a " + S0.BUTTON_H + " px pill, radius " + S0.BUTTON_RADIUS + "); the whole strip the tap target",
+    fd.indexOf("  var HELP = { title: " + J(S0.TITLE) + ", sub: " + J(S0.SUB) + ", go: " + J(S0.BUTTON) + " };") !== -1 &&
+    holds(rule(fd, ".bfp-help"), { "border-radius": px(S0.RADIUS), border: "1px solid " + S0.LINE, padding: px(S0.PAD), "min-height": "44px" }) &&
+    holds(rule(fd, ".bfp-help-i"), { width: px(S0.ICON), height: px(S0.ICON), background: S0.ICON_FILL }) &&
+    holds(rule(fd, ".bfp-help-t"), { font: "700 " + px(S0.TITLE_FONT) + "/1.3 " + sys }) && holds(rule(fd, ".bfp-help-s"), { font: "400 " + px(S0.SUB_FONT) + "/1.3 " + sys }) &&
+    holds(rule(fd, ".bfp-help-go"), { height: px(S0.BUTTON_H), "border-radius": px(S0.BUTTON_RADIUS), font: "700 " + px(S0.BUTTON_FONT) + "/1 " + sys, background: ACC }) &&
+    fd.indexOf("'<button type=\"button\" class=\"bfp-help\"") !== -1 && fd.indexOf('width="' + S0.TARGET + '" height="' + S0.TARGET + '"') !== -1);
+  check("H16. the strip only for a signed-in member who offers in the category (the server's can_help), never for the poster, never on a Found Need",
+    fd.indexOf('    if (!p || p.intent !== "need" || p.can_help !== true || p.mine || isFound(p)) return "";') !== -1 &&
+    (FILES[POSTS] || "").indexOf("can_help") !== -1);
+  const K0 = NP.BACKDROP;
+  check("H17. a Need without a photo: the board's backdrop, a " + K0.GLOW + " glow at " + K0.GLOW_AT + " over " + K0.TOP + " to " + K0.BOTTOM + ", its text in the caption",
+    fd.indexOf("radial-gradient(circle at " + K0.GLOW_AT + "," + K0.GLOW + " 0,rgba(18,58,74,0) 52%),linear-gradient(180deg," + K0.TOP + " 0%,#080d22 50%," + K0.BOTTOM + " 100%)") !== -1 &&
+    fd.indexOf("(textPost && !needText ? \"\" : (p.body ?") !== -1);
   T.finish();
 })();

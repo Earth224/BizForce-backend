@@ -7673,7 +7673,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
     const { data: row, error } = await supabase
       .from("user_preferences")
       // NAMED (Nov 11 2026, orbit stage 2): and the weekly goal (migration 183).
-      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view")   // NAMED (Nov 21 2026, FX2): + agents_card_view (migration 200e)
+      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view, need_alerts")   // NAMED (Nov 21 2026, FX2): + agents_card_view (migration 200e). NAMED (Nov 23 2026, P3-3): + need_alerts (202b)
       .eq("user_id", req.user.id)
       .maybeSingle();
 
@@ -7708,6 +7708,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
         hq_card_view: null,
         hq_orbit: null,
         agents_card_view: null,   // NAMED (Nov 21 2026, FX2)
+        need_alerts: true,   // NAMED (Nov 23 2026, P3-3): never chosen reads as on
         available_languages: LANGUAGE_NAMES
       });
     }
@@ -7724,6 +7725,8 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
       hq_orbit: HQ_ORBIT_CHOICES.indexOf(row.hq_orbit) !== -1 ? row.hq_orbit : null,
       // NAMED (Nov 21 2026, FX2, migration 200e): the phone Agent Directory's view; null is "never chosen" (the page reads compact).
       agents_card_view: AGENTS_CARD_VIEWS.indexOf(row.agents_card_view) !== -1 ? row.agents_card_view : null,
+      // NAMED (Nov 23 2026, P3-3, migration 202b): "Need alerts in my categories"; NULL (never chosen) reads as on, false is off
+      need_alerts: row.need_alerts !== false,
       available_languages: LANGUAGE_NAMES
     });
   } catch (error) {
@@ -7881,6 +7884,14 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
         return res.status(400).json({ error: "agents_card_view must be null or one of large, compact, grid.", valid_agents_card_views: AGENTS_CARD_VIEWS });
       }
       updates.agents_card_view = req.body.agents_card_view;
+    }
+    /* NAMED (Nov 23 2026, P3-3, migration 202b): "Need alerts in my categories" (lib/needAlerts.js), on (true) or off (false); null
+       clears the choice, which reads as on. Anything else is a 400 and nothing is saved. */
+    if (req.body.need_alerts !== undefined) {
+      if (req.body.need_alerts !== null && typeof req.body.need_alerts !== "boolean") {
+        return res.status(400).json({ error: "need_alerts must be true, false or null." });
+      }
+      updates.need_alerts = req.body.need_alerts;
     }
 
     const { error } = await supabase
@@ -8980,7 +8991,7 @@ app.get("/api/admin/moderation/item/:id", requireAuth, requireAdmin, async funct
 app.post("/api/admin/moderation/item/:id/decide", requireAuth, requireAdmin, async function (req, res, next) {
   try {
     const body = req.body || {};
-    const r = await require("./lib/moderation").decide(supabase, { adminId: req.user.id, id: req.params.id, action: body.action, note: body.note, nowIso: nowIso() });
+    const r = await require("./lib/moderation").decide(supabase, { adminId: req.user.id, id: req.params.id, action: body.action, note: body.note, nowIso: nowIso(), postDeps: postDeps() });   // NAMED (Nov 23 2026, P3-3B): + postDeps (an approved Need's alerts)
     return res.status(r.status).json(r.body);
   } catch (error) { next(error); }
 });
@@ -9071,6 +9082,11 @@ app.post("/api/posts/photos", requireAuth, postPhotoLimiter, function (req, res,
 });
 app.post("/api/posts", requireAuth, postRoute(function (req) { return require("./lib/posts").createPost(postDeps(), req.user.id, req.body); }));
 app.get("/api/posts/saved", requireAuth, postRoute(function (req) { return require("./lib/posts").savedPosts(postDeps(), req.user.id, req.query.cursor); }));
+/* NAMED (Nov 23 2026, P3-3): the composer's own facts (the member's place for a Need's Where, their active listings and services
+   for an Offer), and a Need marked Found or reopened by its poster (posts.need_found_at, migration 202). */
+app.get("/api/posts/composer", requireAuth, postRoute(function (req) { return require("./lib/posts").composerInfo(postDeps(), req.user.id); }));
+app.post("/api/posts/:id/found", requireAuth, postRoute(function (req) { return require("./lib/posts").markFound(postDeps(), req.user.id, req.params.id, true); }));
+app.delete("/api/posts/:id/found", requireAuth, postRoute(function (req) { return require("./lib/posts").markFound(postDeps(), req.user.id, req.params.id, false); }));
 app.get("/api/posts/by/:userId", postRoute(async function (req) {
   return require("./lib/posts").postsByAuthor(postDeps(), await viewerIdFrom(req), req.params.userId, req.query.cursor);
 }));
@@ -12378,7 +12394,7 @@ const PROPOSAL_EXECUTORS = {
 
     const { data, error } = await insertListingWithSlug({
       seller_id: proposal.user_id, title, description,
-      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(payload.media, proposal.user_id), status: "active",
+      price_bfc: priceBfc, price_usd: null, category, category_slug: category, tags, media: sanitizeMedia(payload.media, proposal.user_id), status: "active",   // NAMED (Nov 23 2026, P3-3): + category_slug (the ten are on the one list)
       source_proposal_id: proposal.id,
       created_at: nowIso(), updated_at: nowIso()
     }, "id, title, status");
@@ -12487,6 +12503,7 @@ const PROPOSAL_EXECUTORS = {
         throw new Error("update_listing: '" + String(payload.category) + "' is not a valid category. Allowed: " + MARKETPLACE_CATEGORIES.join(", "));
       }
       updates.category = category;
+      updates.category_slug = category;   // NAMED (Nov 23 2026, P3-3): the agent's ten are on the one list (migration 200)
     }
 
     if (payload.status !== undefined) {
@@ -49909,23 +49926,38 @@ function sanitizeMedia(rawMedia, userId) {
    until their seller sets one (bfc_buy_listing refuses a price of 0, and the
    buy route says why first). */
 const LISTING_BFC_ONLY_MESSAGE = "Listings are priced in BizCash only.";
+// NAMED (Nov 23 2026, P3-3): a listing's category is required and must be on the one list (lib/categories.js)
+const LISTING_CATEGORY_MESSAGE = "Choose a category. It is the same list as posts.";
+const LISTING_CATEGORY_BAD_MESSAGE = "That category isn't on the list. Choose one from the list.";
 const LISTING_NOT_FOR_SALE_MESSAGE = "Not for sale until the seller sets a BizCash price";
 
 function listingPriceUsdRefused(value) {
   return value !== undefined && value !== null && value !== "" && Number(value) !== 0;
 }
 
+/* NAMED (Nov 23 2026, P3-3): THE ONE CATEGORY LIST (lib/categories.js over migration 200's categories table), for the composer,
+   the Market's filter and the listing form. Public, like the list itself: no member data. */
+app.get("/api/categories", async function (req, res, next) {
+  try {
+    const rows = await require("./lib/categories").list(supabase);
+    res.set("Cache-Control", "public, max-age=300");
+    return res.json({ categories: rows });
+  } catch (error) { next(error); }
+});
+
+/* NAMED (Nov 23 2026, P3-3): BEFORE ?category matched the free-text category column. AFTER it matches category_slug (the one
+   list), and every listing carries its category_slug; a listing with none shows under All only. */
 app.get("/api/marketplace/listings", requireAuth, async function (req, res, next) {
   try {
     const category = safeText(req.query.category, 40);
     const q = safeText(req.query.q, 120);
     let query = supabase
       .from("marketplace_listings")
-      .select("id, slug, seller_id, title, description, price_bfc, category, tags, media, status, created_at")
+      .select("id, slug, seller_id, title, description, price_bfc, category, category_slug, tags, media, status, created_at")
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(100);
-    if (category && category !== "all") query = query.eq("category", category);
+    if (category && category !== "all") query = query.eq("category_slug", category);
     if (q) query = query.or("title.ilike.%" + q + "%,description.ilike.%" + q + "%");
     const { data, error } = await query;
     if (error) throw error;
@@ -49966,7 +49998,10 @@ app.post("/api/marketplace/listings", requireAuth, requireVerifiedEmail, async f
     const isDigital = (req.body.is_digital === true && !!digitalFilePath);
     const digitalFileName = isDigital ? (safeText(req.body.digital_file_name, 200) || null) : null;
     if (!title)    return res.status(400).json({ error: "Title is required" });
-    if (!MARKETPLACE_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
+    // NAMED (Nov 23 2026, P3-3): BEFORE one of server.js's ten MARKETPLACE_CATEGORIES. AFTER a category on the one list (lib/categories.js),
+    // required; it is stored as category_slug and, as before, category.
+    if (!category) return res.status(400).json({ error: LISTING_CATEGORY_MESSAGE, field: "category" });
+    if (!(await require("./lib/categories").find(supabase, category))) return res.status(400).json({ error: LISTING_CATEGORY_BAD_MESSAGE, field: "category" });
     if (priceBfc <= 0) return res.status(400).json({ error: "Set a BizCash (BFC) price above 0. " + LISTING_BFC_ONLY_MESSAGE, field: "price_bfc" });
     /* NAMED (Nov 19 2026, P2-1): the Create sheet's "Product listing" and "Service" open this form with the kind set, so a
        listing is a product or a service (migration 051's listing_kind; absent means product, as the column's default).
@@ -49978,7 +50013,7 @@ app.post("/api/marketplace/listings", requireAuth, requireVerifiedEmail, async f
     if (!screened.ok) return policyRefused(res, screened);
     const { data, error } = await insertListingWithSlug({
       seller_id: req.user.id, title, description: description || "", listing_kind: listingKind,
-      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(req.body.media, req.user.id), status: "active",
+      price_bfc: priceBfc, price_usd: null, category, category_slug: category, tags, media: sanitizeMedia(req.body.media, req.user.id), status: "active",
       is_digital: isDigital, digital_file_path: isDigital ? digitalFilePath : null, digital_file_name: digitalFileName,
       created_at: nowIso(), updated_at: nowIso()
     }, "*");
@@ -50089,7 +50124,15 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
       if (listingPriceUsdRefused(req.body.price_usd)) return res.status(400).json({ error: LISTING_BFC_ONLY_MESSAGE, field: "price_usd" });
       updates.price_usd = null;
     }
-    if (req.body.category !== undefined && MARKETPLACE_CATEGORIES.includes(req.body.category)) updates.category = req.body.category;
+    /* NAMED (Nov 23 2026, P3-3): BEFORE a category outside the ten MARKETPLACE_CATEGORIES was silently left out. AFTER a category
+       sent must be on the one list (lib/categories.js), else 400 and nothing changes; it is stored as category_slug and category.
+       Any edit but a pause must leave the listing with a category (checked below with the price). */
+    if (req.body.category !== undefined) {
+      const editCategory = typeof req.body.category === "string" ? await require("./lib/categories").find(supabase, req.body.category) : null;
+      if (!editCategory) return res.status(400).json({ error: req.body.category ? LISTING_CATEGORY_BAD_MESSAGE : LISTING_CATEGORY_MESSAGE, field: "category" });
+      updates.category = editCategory.slug;
+      updates.category_slug = editCategory.slug;
+    }
     if (req.body.status   !== undefined && ["active","paused","sold"].includes(req.body.status)) updates.status = req.body.status;
     if (Array.isArray(req.body.tags)) updates.tags = req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
     if (req.body.media !== undefined) updates.media = sanitizeMedia(req.body.media, req.user.id);
@@ -50101,12 +50144,13 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
     if (!pauseOnly) {
       const { data: existing, error: existingError } = await supabase
         .from("marketplace_listings")
-        .select("price_bfc, status")
+        .select("price_bfc, status, category_slug")
         .eq("id", req.params.id)
         .eq("seller_id", req.user.id)
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ error: "Listing not found" });
+      if (!updates.category_slug && !existing.category_slug) return res.status(400).json({ error: LISTING_CATEGORY_MESSAGE, field: "category" });   // NAMED (Nov 23 2026, P3-3)
       const finalPriceBfc = updates.price_bfc !== undefined ? updates.price_bfc : existing.price_bfc;
       const finalStatus = updates.status !== undefined ? updates.status : existing.status;
       if (finalStatus === "active" && !(Number(finalPriceBfc) > 0)) {

@@ -1032,7 +1032,7 @@ function compare(section, label, oldRun, newRun, expect) {
     check("J2. the listing edit no longer asks G3 or the plan", !!DEFS.new && (function () { const i = NEW.indexOf(SIG); const body = i < 0 ? "" : NEW.slice(i, NEW.indexOf("\n});", i)).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, ""); return i !== -1 && body.indexOf("G3") === -1 && body.indexOf("refuseUnlessSubscribed") === -1 && body.indexOf("getUserPlan") === -1 && body.indexOf("unverifiedBody(\"list_market\")") !== -1; })());
     const run = (s) => runRoute("new", "listing", SIG, ["getUserPlan"], {
       respond: function (q) {
-        if (q.table === "marketplace_listings" && q.op === "select") return { data: { price_bfc: 10, status: "active" }, error: null };
+        if (q.table === "marketplace_listings" && q.op === "select") return { data: { price_bfc: 10, status: "active", category_slug: "food" }, error: null };   // NAMED (Nov 23 2026, P3-3): the listing has a category on the one list (an edit that leaves none is refused, checkPostIntent E4)
         if (q.table === "marketplace_listings" && q.op === "update") return { data: Object.assign({ id: "l-1" }, q.payload), error: null };
         return null;
       },

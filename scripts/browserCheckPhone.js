@@ -161,6 +161,18 @@
                        Every other element is the same or moved down below the new
                        text. privacy, refund and contact are unchanged at 1440. The
                        proof is Downloads\phone1\p31c-desktop-proof.json.
+                       NAMED (Nov 23 2026, P3-3): three pages are re-recorded in
+                       desktop-baseline-pp33-<page>.json (the names sort after pp31c):
+                       compose.html (the composer rebuilt to the owner's canvas: the 64 px
+                       header with Post, the three tiles, the category chips; 14 old
+                       elements gone, 40 new; with no fixture the categories cannot
+                       load, so its note and Try again are drawn), marketplace.html (the
+                       category menu and its pills replaced by one row of chips: 8 gone,
+                       2 new, the tab row 11 px lower) and privacy.html (the Your posts
+                       sentence names the intent and category: one item 52.8 px taller,
+                       217 elements below moved down by it). Every other page is
+                       unchanged at 1440 (Settings' Need alerts row is in Preferences, a
+                       closed section). The proof is Downloads\phone1\p33-desktop-proof.json.
      PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
@@ -190,6 +202,9 @@
                            and at 390 a member's Show in Google and indexable /p/ page;
                            the P3-1B screenshots go to Downloads\p31b.
 
+     PHONE_P33=1           only P3-3's own screens (p33Run): the composer's Share, Offer or Need, the
+                           Need post and I can help, Found, the Market's categories, Need alerts in Settings
+                           (NAMED (Nov 23 2026, P3-3)); screenshots to PHONE_P33_OUT (default Downloads\p33)
      PHONE_P32=1           only P3-2's own screens (p32Run): the Verified badge on the
                            Following feed, Talk, the profile, a storefront and the public
                            post page /p/; its tap sheet ("Verified: [kind]. This is not an
@@ -243,7 +258,7 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && PAGES.length > 15) {   // NAMED (Nov 23 2026, P3-3): and PHONE_P33   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -447,6 +462,10 @@ function api(method, u, request) {
   if (P31) { const a = p31Api(method, p); if (a !== undefined) return a; }
   // NAMED (Nov 21 2026, P3-2): with PHONE_P32=1, the profile and the storefront carry the server's verified field (p32Api)
   if (P32) { const a = p32Api(method, p); if (a !== undefined) return a; }
+  // NAMED (Nov 23 2026, P3-3): with PHONE_P33=1, P3-3's fixtures (p33Api), then P2-3's posts and P2-1's fixtures
+  if (P33) { const a = p33Api(method, u, request); if (a !== undefined) return a; }
+  // NAMED (Nov 23 2026, P3-3): the one category list (GET /api/categories) for the runs that post (the composer requires a category); the rows lib/categories.js answers
+  if ((P23 || P31 || P32) && p === "/api/categories") return { categories: P33_CATS };
   const since = "2026-11-07T10:00:00Z";
   // NAMED (Nov 20 2026, P3-1): access.tier "member" and email_verified true (Rose is a member with a confirmed email): no panel, no banner
   if (p === "/api/auth/me") return { user: ROSE, access: { active: true, reason: "subscription", tier: "member", email_verified: true }, subscription: { status: "active", plan: "all_access", current_period_end: ago(-24 * 20), cancel_at_period_end: false } };
@@ -488,9 +507,9 @@ function api(method, u, request) {
   if (P22) { const a = p22Api(method, p); if (a !== undefined) return a; }
   // NAMED (Nov 20 2026, P2-3): with PHONE_P23=1, posts, the feed, comments and follows are lib/posts.js over P23S.db
   // (p23Api, a promise; the request handler awaits every answer), then P2-1's fixtures (the profile, the counts).
-  if ((P23 || P31 || P32) && P23_IS(p)) return p23Api(method, u, request);   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
+  if ((P23 || P31 || P32 || P33) && P23_IS(p)) return p23Api(method, u, request);   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 23 2026, P3-3): and PHONE_P33
   if (P23) { const a = fx1Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 20 2026, FX1)
-  if (P21 || P22 || P23 || P31 || P32) { const a = p21Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
+  if (P21 || P22 || P23 || P31 || P32 || P33) { const a = p21Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 23 2026, P3-3): and PHONE_P33
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -792,6 +811,7 @@ const ORBIT = String.raw`(function(){
     else if (P31) { await p31Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P3-1)
     else if (P32) { await p32Run(cdp, origin); PAGES = []; }   // NAMED (Nov 21 2026, P3-2)
     else if (FX3) { await fx3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 22 2026, FX3)
+    else if (P33) { await p33Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, P3-3)
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -1488,6 +1508,7 @@ async function p23World(empty) {
     users: names.map(n => ({ id: n[0], created_at: OLD, email_verified_at: OLD })), posts, post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
     follows: empty ? [] : [{ follower_id: ROSE.id, following_id: P21_PEER, created_at: OLD }, { follower_id: ROSE.id, following_id: P21_PEER2, created_at: OLD }, { follower_id: P21_PEER, following_id: ROSE.id, created_at: OLD }],
     member_blocks: [], member_mutes: [], profiles: [],
+    categories: require("./_categories").rows(),   // NAMED (Nov 23 2026, P3-3): the one category list (migration 200), which createPost checks
     member_media: [media(1, P21_PEER2, "mug-1.png", "A blue glazed mug"), media(2, P21_PEER2, "mug-1-thumb.png", ""), media(3, P21_PEER2, "mug-2.png", "A green glazed mug"), media(4, ROSE.id, "bread.png", "A sourdough loaf")],
     post_media: [{ post_id: P23_POST.photo, media_id: uid(8101), thumb_media_id: uid(8102), idx: 0 }, { post_id: P23_POST.photo, media_id: uid(8103), thumb_media_id: null, idx: 1 },
       { post_id: P23_POST.own, media_id: uid(8104), thumb_media_id: null, idx: 0 }],
@@ -1513,6 +1534,9 @@ async function p23Api(method, u, request) {
   if (p === "/api/posts/saved") return out(await P.savedPosts(d, me, q("cursor")));
   if ((m = /^\/api\/posts\/by\/([^/]+)$/.exec(p))) return out(await P.postsByAuthor(d, me, m[1], q("cursor")));
   if (p === "/api/posts" && method === "POST") return out(await P.createPost(d, me, b));
+  // NAMED (Nov 23 2026, P3-3): the composer's place and listings, and a Need marked Found or reopened
+  if (p === "/api/posts/composer" && method === "GET") return out(await P.composerInfo(d, me));
+  if ((m = /^\/api\/posts\/([^/]+)\/found$/.exec(p))) return out(await P.markFound(d, me, m[1], method === "POST"));
   if ((m = /^\/api\/posts\/([^/]+)\/comments$/.exec(p))) return out(method === "POST" ? await P.addComment(d, me, m[1], b) : await P.listComments(d, me, m[1], q("after")));
   if ((m = /^\/api\/posts\/([^/]+)\/(like|save)$/.exec(p))) return out(await P[m[2]](d, me, m[1], method === "POST"));
   if ((m = /^\/api\/posts\/([^/]+)\/share$/.exec(p))) return out(await P.share(d, me, m[1]));
@@ -1811,6 +1835,8 @@ async function p23Run(cdp, origin) {
     check(at + "the box, the count, photos, who sees it, and Post; every control inside the screen and 44 px or more", !!cp && cp.small.length === 0 && !cp.hscroll && cp.r <= w + 1 &&
       cpInfo.text && /^0 \/ 2,?200$/.test(cpInfo.count.trim()) && cpInfo.post && /Public/.test(cpInfo.aud) && /Followers/.test(cpInfo.aud), J([cp, cpInfo]));
     await ev("(function(){var t=document.querySelector('.bfc-text');t.focus();t.value='Cinnamon buns on Friday. Twelve only.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()"); await sleep(200);
+    // NAMED (Nov 23 2026, P3-3): every post names a category (the chips from GET /api/categories); Food & Cooking
+    await ev("(function(){var r=document.querySelector('input[name=bfcCat][value=food]');if(r)(r.closest('label')||r).click();return !!r;})()"); await sleep(150);
     const count2 = await ev("(document.querySelector('.bfc-count')||{}).textContent||''");
     check(at + "the count follows the typing", /^37 \/ 2,?200$/.test(count2.trim()), count2);
     await pageChecks(at);
@@ -2219,6 +2245,7 @@ async function p31Run(cdp, origin) {
     await ev("(function(){var t=document.querySelector('.bfc-text');if(!t)return false;t.value='Open on Saturday, all welcome.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
     // NAMED (Nov 21 2026, P3-1B): as a Need (text is allowed), so the server's email rule is what refuses it
     await ev("(function(){var r=document.querySelector('input[name=bfcIntent][value=need]');if(r){r.click();}return !!r;})()");
+    await ev("(function(){var r=document.querySelector('input[name=bfcCat][value=food]');if(r)(r.closest('label')||r).click();return !!r;})()");   // NAMED (Nov 23 2026, P3-3): a category, required
     await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()");
     await sleep(900);
     const refused = await ev("document.body.innerText.indexOf('Confirm your email first') !== -1");
@@ -2252,6 +2279,7 @@ async function p31Run(cdp, origin) {
     await shotB("free-composer-photo-required");
     await ev("(function(){var r=document.querySelector('input[name=bfcIntent][value=need]');if(r)r.click();return !!r;})()"); await sleep(200);
     const noteNeed = await ev("(function(){var n=document.getElementById('bfcFreeNote');return !!n&&n.hidden;})()");
+    await ev("(function(){var r=document.querySelector('input[name=bfcCat][value=food]');if(r)(r.closest('label')||r).click();return !!r;})()");   // NAMED (Nov 23 2026, P3-3): a category, required
     await ev("(function(){var b=document.querySelector('.bfc-post');if(b)b.click();return !!b;})()");
     await sleep(3000);
     const mine = P23S.db.t.posts.filter(x => x.author_id === ROSE.id && x.body === "Open on Saturday, all welcome.");
@@ -2367,6 +2395,7 @@ async function p31Run(cdp, origin) {
     check(at + "a member gets Show in Google, on by default, with a search title (70) and description (160) filled from the post's first words; no photo note",
       sg.shown && sg.on && sg.tmax === 70 && sg.dmax === 160 && !!sg.title && sg.title.length <= 70 && BODY.indexOf(sg.title.replace(/\.\.\.$/, "")) === 0 && sg.desc === BODY && !sg.note, J(sg));
     await ev("(function(){var t=document.getElementById('bfcSeoTitle');t.value='Sourdough on Maple Street';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    await ev("(function(){var r=document.querySelector('input[name=bfcCat][value=food]');if(r)(r.closest('label')||r).click();return !!r;})()");   // NAMED (Nov 23 2026, P3-3): a category, required
     await ev("(function(){var b=document.getElementById('bfcSeo');if(b)b.scrollIntoView({block:'center'});return true;})()"); await sleep(250);
     await pageChecks(at);
     await shotB("member-composer-show-in-google");
@@ -2744,3 +2773,263 @@ const FX3_AGENTS = String.raw`(function(){var pg=document.querySelector('.page')
     if(known){probe.style.color=M.colour(p[0]);wantColor=getComputedStyle(probe).color;var d=document.createElement('div');d.innerHTML=M.svg(p[0]);var ws=d.querySelector('svg');wantIcon=ws?ws.innerHTML.replace(/\s+/g,' '):null;}
     return{agent:p[0],view:v,known:known,color:cs&&cs.color,wantColor:wantColor,ring:cs&&cs.borderTopColor,glow:cs&&cs.boxShadow,icon:s?s.innerHTML.replace(/\s+/g,' '):null,wantIcon:wantIcon,shown:!!e&&e.getBoundingClientRect().width>0};});
   probe.remove();return out;})()`;
+
+/* ══ P3-3 (Nov 23 2026): PHONE_P33=1 ═════════════════════════════════════════════════════════════════════════════
+   Share, Offer or Need at PHONE_P33_WIDTHS (default 360, 390, 430), fixtures only; the seven screenshots at 390 x 844 to
+   PHONE_P33_OUT (default Downloads\p33). The posts are lib/posts.js over P2-3's in-memory database with the categories table
+   (migration 200's 32, scripts/_categories.js); GET /api/categories answers the same rows lib/categories.js would. Rose is a
+   member (lib/posts.js is handed the tier) who sells a sourdough loaf (Food & Cooking); Pat posts a text-only Need in Food &
+   Cooking in Portland this week. The composer (Need: the label, Where prefilled, When, the box, the chips that swipe, a
+   category required; Offer: the listing picker and its category); a free account's Offer opening the members panel; the Need
+   post with "You offer this nearby" and I can help (a private message through POST /api/messages, the post linked, then the
+   Inbox); Found by the poster from the post's menu (FOUND, the strip gone) and reopened; the Market's chips (All and the 32,
+   filtering by category_slug, the owner's uncategorised listing under All with "Add a category"); Market create refused
+   without a category; and Settings' Need alerts switch (on, saved as need_alerts false when switched off). */
+const P33 = process.env.PHONE_P33 === "1";
+const P33_WIDTHS = String(process.env.PHONE_P33_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const P33_OUT = process.env.PHONE_P33_OUT || path.join(os.homedir(), "Downloads", "p33");
+const P33S = { member: true, needAlerts: null, prefPuts: [], messages: [], listingPosts: [], listings: [] };
+const P33_CATS = require("./_categories").rows().filter(c => c.active !== false).sort((a, b) => a.sort_order - b.sort_order).map(c => ({ slug: c.slug, name: c.name, group: c.parent_group || null }));
+const P33_NEED = uid(8301), P33_L = { rose: "cccccccc-0000-4000-8000-000000003301", bare: "cccccccc-0000-4000-8000-000000003302", pat: "cccccccc-0000-4000-8000-000000003303", lee: "cccccccc-0000-4000-8000-000000003304" };
+const P33_NEED_BODY = "Looking for a baker for a birthday cake for 40 people, chocolate with raspberries, ready on Saturday.";
+function p33Listings() {
+  const l = (id, seller, title, slug, price, hrs) => ({ id, slug: title.toLowerCase().replace(/[^a-z0-9]+/g, "-"), seller_id: seller, title, description: title + ".", price_bfc: price, category: slug, category_slug: slug,
+    tags: [], media: [], status: "active", listing_kind: "product", created_at: ago(hrs) });
+  return [l(P33_L.rose, ROSE.id, "Sourdough loaf", "food", 12, 2), l(P33_L.bare, ROSE.id, "Bread basket", null, 20, 4), l(P33_L.pat, P21_PEER, "Plum jam", "food", 15, 6), l(P33_L.lee, P21_PEER2, "Blue mug", "crafts_handmade", 30, 8)];
+}
+function p33Api(method, u, request) {
+  const p = u.pathname;
+  let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; }
+  if (p === "/api/auth/me") return { user: Object.assign({}, ROSE, { role: "user", email_verified_at: ago(24) }),
+    access: P33S.member ? { active: true, exempt: false, access_reason: "subscription", inactive_reason: null, tier: "member", email_verified: true, members_panel: require("../lib/membership").membersPanelFromCode() }
+      : { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: true, members_panel: require("../lib/membership").membersPanelFromCode() },
+    subscription: null, profile: { username: "rose" } };
+  if (p === "/api/categories") return { categories: P33_CATS };
+  if (p === "/api/user/preferences") {
+    if (method === "PUT") { P33S.prefPuts.push(b); if ("need_alerts" in b) P33S.needAlerts = b.need_alerts; return { saved: true }; }
+    return { ok: true, preferences: {}, termaximus_active: true, need_alerts: P33S.needAlerts !== false };
+  }
+  if (p === "/api/marketplace/listings" && method === "GET") { const c = u.searchParams.get("category"); return { listings: P33S.listings.filter(l => !c || c === "all" || l.category_slug === c) }; }
+  if (p === "/api/marketplace/listings" && method === "POST") {   // as server.js answers it (P3-3): a category on the list, required
+    P33S.listingPosts.push(b);
+    if (!b.category) return { __status: 400, __body: { error: "Choose a category. It is the same list as posts.", field: "category" } };
+    if (!P33_CATS.some(c => c.slug === b.category)) return { __status: 400, __body: { error: "That category isn't on the list. Choose one from the list.", field: "category" } };
+    const row = Object.assign({}, b, { id: uid(8390 + P33S.listings.length), seller_id: ROSE.id, category_slug: b.category, status: "active", created_at: new Date(NOW).toISOString() });
+    P33S.listings.unshift(row); return { listing: row };
+  }
+  if (p === "/api/messages" && method === "POST") { P33S.messages.push(b); return { message: { id: uid(8399), sender_id: ROSE.id, receiver_id: b.receiver_id, content: b.content, created_at: new Date(NOW).toISOString() } }; }
+  return undefined;
+}
+async function p33World() {
+  Object.assign(P23S, await p23World(false));
+  const P = require("../lib/posts"), d = P23S.deps;
+  d.tierOf = async id => (id === ROSE.id && !P33S.member ? "free" : "member");
+  d.membersPanel = () => require("../lib/membership").membersPanelFromCode();
+  const rose = P23S.db.t.bf_profiles.find(x => x.user_id === ROSE.id); rose.place_city = "Portland"; rose.place_region = "OR";
+  P23S.db.t.marketplace_listings = p33Listings().map(l => Object.assign({}, l, { seller_id: l.seller_id, updated_at: l.created_at }));
+  P23S.db.t.posts.push({ id: P33_NEED, author_id: P21_PEER, kind: "text", body: P33_NEED_BODY, audience: "public", status: "published", intent: "need", category: "food",
+    need_place: "Portland, OR", need_when: "week", need_found_at: null, place_city: null, place_region: null, place_country: null, like_count: 0, comment_count: 0, save_count: 0, share_count: 0,
+    removed_at: null, created_at: ago(0.5), published_at: ago(0.5) });
+  P33S.listings = p33Listings(); P33S.messages = []; P33S.listingPosts = []; P33S.prefPuts = []; P33S.needAlerts = null; P33S.member = true;
+  return P;
+}
+async function p33Run(cdp, origin) {
+  fs.mkdirSync(P33_OUT, { recursive: true });
+  console.log("browserCheckPhone P3-3 (the composer's Share, Offer or Need, the Need post, Found, the Market's categories, Need alerts in Settings) at " + P33_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const DSC = require("./designSpec"), CO = DSC.COMPOSER, NP = DSC.NEEDPOST;
+  const VEIL = /^div#bf-members-panel /, DLG = /^(div|section)#bfp-(dialog|talk)(-backdrop)? |^div\.bfp-(dlg|backdrop)/;
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    check(at + "no text cut off", m.clipped.length === 0, J(m.clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const deco = m.deco.filter(x => !(opts && opts.panel && VEIL.test(x)) && !(opts && opts.dialog && DLG.test(x)));
+    check(at + "decoration is under the text" + (opts && opts.panel ? " (the panel's veil aside)" : ""), deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !(opts && opts.panel && VEIL.test(x)) && !(opts && opts.dialog && DLG.test(x)));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.panel ? " (the members panel is meant to cover the page)" : ""), over.length === 0, J(over));
+  };
+  const rgb = h => { const n = parseInt(h.slice(1), 16); return "rgb(" + (n >> 16) + ", " + ((n >> 8) & 255) + ", " + (n & 255) + ")"; };
+  const CYAN = rgb("#22d3ee");
+  const tapIntent = v => ev("(function(){var r=document.querySelector('input[name=bfcIntent][value=" + v + "]');if(!r)return false;(r.closest('label')||r).click();return true;})()");
+  const tapCat = v => ev("(function(){var r=document.querySelector('input[name=bfcCat][value=" + v + "]');if(!r)return false;(r.closest('label')||r).click();return true;})()");
+  const type = t => ev("(function(){var t=document.getElementById('bfcText');if(!t)return false;t.focus();t.value=" + J(t) + ";t.dispatchEvent(new Event('input',{bubbles:true}));t.blur();return true;})()");
+  const postIt = () => ev("(function(){var b=document.getElementById('bfcPost');if(b)b.click();return !!b;})()");
+  const READ_COMPOSER = String.raw`(function(){
+    var q=function(s){return document.querySelector(s);},vis=function(e){return !!e&&!e.hidden&&e.getBoundingClientRect().height>0;};
+    var tiles=[].map.call(document.querySelectorAll('.bfc-tile'),function(t){var f=t.querySelector('.bfc-face'),cs=getComputedStyle(f),r=f.getBoundingClientRect(),i=t.querySelector('input');
+      return {v:t.getAttribute('data-v'),on:!!i&&i.checked,bg:cs.backgroundColor,edge:cs.borderTopColor,h:Math.round(r.height),tag:(t.querySelector('.bfc-mtag')||{}).textContent||null,members:t.hasAttribute('data-members-only')};});
+    var cats=q('#bfcCats'),chips=cats?cats.querySelectorAll('input[name=bfcCat]'):[],on=cats&&cats.querySelector('input:checked'),chip0=cats&&cats.querySelector('.bfc-chip .bfc-face');
+    var when=[].map.call(document.querySelectorAll('input[name=bfcWhen]'),function(i){return [i.value,i.checked];});
+    var sel=q('#bfcListing'),place=q('#bfcPlace'),box=q('#bfcNeedBox'),pr=q('#bfcPost');
+    var wr=q('.bfc-when'),wrR=wr&&wr.getBoundingClientRect();
+    return {tiles:tiles,label:(q('#bfcTextL')||{}).textContent,chips:chips.length,chipH:chip0?Math.round(chip0.getBoundingClientRect().height):0,swipes:!!cats&&cats.scrollWidth>cats.clientWidth+4,
+      wraps:!!cats&&getComputedStyle(cats).flexWrap,cat:on?on.value:null,note:(q('#bfcCatNote')||{}).textContent,need:vis(q('#bfcNeed')),place:place&&place.value,placeMax:place&&place.maxLength,when:when,
+      whenRight:wrR?Math.round(wrR.right):null,box:vis(box)?box.textContent.replace(/\s+/g,' ').trim():null,offer:vis(q('#bfcOffer')),listings:sel?[].map.call(sel.options,function(o){return o.value;}).filter(Boolean):[],
+      listing:sel&&sel.value,photos:vis(q('#bfcPhotos')),aud:vis(q('#bfcAudience')),seo:vis(q('#bfcSeo')),post:pr?Math.round(pr.getBoundingClientRect().height):0,err:(q('#bfcErr')||{}).textContent||'',
+      panel:!!document.getElementById('bf-members-panel')};})()`;
+  for (const w of P33_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P33_OUT, name + ".png"), Buffer.from(r.data, "base64")); } };
+    const P = await p33World();
+
+    // 1. the composer, a member's Need
+    await open(cdp, origin, "compose.html", w, h, true);
+    let at = "P33 composer (Need) at " + w + ": ";
+    let c = await ev(READ_COMPOSER);
+    check(at + "three tiles Share, Offer, Need, " + CO.TILES.H + " px; Share chosen first", c.tiles.map(t => t.v).join() === "share,offer,need" && c.tiles.every(t => t.h === CO.TILES.H) && c.tiles[0].on, J(c.tiles));
+    check(at + "the category chips: the 32 from the list, " + CO.CHIPS.H + " px, one row that swipes, the note \"" + CO.CHIPS.NOTE + "\"; none chosen", c.chips === 32 && c.chipH === CO.CHIPS.H && c.swipes && c.wraps === "nowrap" && c.note === CO.CHIPS.NOTE && c.cat === null, J(c));
+    await tapIntent("need"); await sleep(250);
+    c = await ev(READ_COMPOSER);
+    const need = c.tiles.find(t => t.v === "need") || {};
+    check(at + "Need chosen: its tile cyan (" + CO.TILES.ON_FILL + " with a cyan edge), the others not", need.on && need.bg === rgb(CO.TILES.ON_FILL) && need.edge === CYAN && c.tiles.filter(t => t.v !== "need").every(t => !t.on && t.edge !== CYAN), J(c.tiles));
+    check(at + "the label \"" + CO.LABELS.need + "\"; Where prefilled from the profile (Portland, OR; 80 at most); When Today / Week / Any inside the screen", c.label === CO.LABELS.need && c.need && c.place === "Portland, OR" && c.placeMax === 80 &&
+      c.when.map(x => x[0]).join() === "today,week,any" && c.whenRight !== null && c.whenRight <= w - 15, J(c));
+    check(at + "the box \"" + CO.BOX.TEXT + "\" on a public Need; photos up to 4; Public / Followers; no listing picker", c.box === CO.BOX.TEXT && c.photos && c.aud && !c.offer, J(c));
+    await ev("(function(){var r=document.querySelector('input[name=bfcAud][value=followers]');if(r)(r.closest('label')||r).click();return !!r;})()"); await sleep(150);
+    const boxFol = (await ev(READ_COMPOSER)).box;
+    await ev("(function(){var r=document.querySelector('input[name=bfcAud][value=public]');if(r)(r.closest('label')||r).click();return !!r;})()"); await sleep(150);
+    check(at + "the box goes for a followers-only Need (no alerts are sent for one) and comes back for Public", boxFol === null && (await ev(READ_COMPOSER)).box === CO.BOX.TEXT, J(boxFol));
+    const roseNeed = "Need a hand with a market stall this Saturday morning, setting up at 7.";
+    await type(roseNeed);
+    await ev("(function(){var r=document.querySelector('input[name=bfcWhen][value=week]');if(r)(r.closest('label')||r).click();return !!r;})()"); await sleep(150);
+    const n0 = P23S.db.t.posts.length;
+    await postIt(); await sleep(500);
+    c = await ev(READ_COMPOSER);
+    check(at + "Post without a category says so and sends nothing", c.err === "Choose a category. It is the same list as the Market." || (/category/i.test(c.err) && P23S.db.t.posts.length === n0), J([c.err, P23S.db.t.posts.length - n0]));
+    check(at + "...nothing saved", P23S.db.t.posts.length === n0);
+    await tapCat("food"); await sleep(200);
+    await ev("(function(){var t=document.getElementById('bfcIntent');if(t)t.scrollIntoView({block:'start'});window.scrollTo(0,0);return true;})()"); await sleep(200);
+    await pageChecks(at);
+    await shot("composer-need");
+    await postIt(); await sleep(3000);
+    const rn = P23S.db.t.posts.find(x => x.author_id === ROSE.id && x.body === roseNeed);
+    check(at + "Post stores the Need: intent need, category food, Where Portland, OR, When week, public", !!rn && rn.intent === "need" && rn.category === "food" && rn.need_place === "Portland, OR" && rn.need_when === "week" && rn.audience === "public", J(rn));
+
+    // 2. the composer, a member's Offer
+    await open(cdp, origin, "compose.html", w, h, true);
+    at = "P33 composer (Offer, a member) at " + w + ": ";
+    await tapIntent("offer"); await sleep(400);
+    c = await ev(READ_COMPOSER);
+    check(at + "the label \"" + CO.LABELS.offer + "\" and the picker of Rose's own active listings (the loaf and the basket; never Pat's or Lee's)", c.label === CO.LABELS.offer && c.offer &&
+      J(c.listings.slice().sort()) === J([P33_L.rose, P33_L.bare].sort()) && !c.need && c.box === null, J(c));
+    await ev("(function(){var s=document.getElementById('bfcListing');if(!s)return false;s.value=" + J(P33_L.rose) + ";s.dispatchEvent(new Event('change',{bubbles:true}));return true;})()"); await sleep(250);
+    c = await ev(READ_COMPOSER);
+    check(at + "the category follows the chosen listing's (Food & Cooking)", c.cat === "food", J(c.cat));
+    await type("Sourdough loaves every morning from 7, rye on Saturdays.");
+    await ev("window.scrollTo(0,0),true"); await sleep(150);
+    await pageChecks(at);
+    await shot("composer-offer-member");
+    await postIt(); await sleep(3000);
+    const ro = P23S.db.t.posts.find(x => x.author_id === ROSE.id && x.intent === "offer");
+    check(at + "Post stores the Offer with its listing and category", !!ro && ro.listing_id === P33_L.rose && ro.category === "food", J(ro));
+
+    // 3. a free account's Offer: the Members tag, the members panel
+    P33S.member = false;
+    await open(cdp, origin, "compose.html", w, h, true);
+    at = "P33 composer (Offer, a free account) at " + w + ": ";
+    c = await ev(READ_COMPOSER);
+    const off = c.tiles.find(t => t.v === "offer") || {};
+    check(at + "the Offer tile carries the \"" + CO.TILES.MEMBERS_TAG + "\" tag", off.tag === CO.TILES.MEMBERS_TAG && off.members, J(off));
+    await tapIntent("offer"); await sleep(700);
+    c = await ev(READ_COMPOSER);
+    check(at + "a tap opens the members panel; Offer is not chosen (Share stays)", c.panel && c.tiles[0].on && !(c.tiles.find(t => t.v === "offer") || {}).on, J([c.panel, c.tiles.map(t => t.on)]));
+    await pageChecks(at, { panel: true });
+    await shot("composer-free-offer-panel");
+    P33S.member = true;
+
+    // 4. Pat's Need on Home: the tag, the line, the strip, I can help
+    await open(cdp, origin, "home.html?post=" + P33_NEED, w, h, true);
+    at = "P33 Need post (a member who offers) at " + w + ": ";
+    const READ_POST = "(function(){var e=document.querySelector('.bfp-post[data-post=\"" + P33_NEED + "\"]');if(!e)return null;var t=e.querySelector('.bfp-tag'),m=e.querySelector('.bfp-kmeta'),s=e.querySelector('.bfp-help'),g=e.querySelector('.bfp-help-go'),bg=e.querySelector('.bfp-needbg');" +
+      "var tr=t&&t.getBoundingClientRect(),sr=s&&s.getBoundingClientRect(),gr=g&&g.getBoundingClientRect();" +
+      "return {intent:e.getAttribute('data-intent'),tag:t&&t.textContent,tagH:tr&&Math.round(tr.height),tagBg:t&&getComputedStyle(t).backgroundColor,meta:m&&m.textContent,strip:!!s&&sr.height>0,stripH:sr&&Math.round(sr.height),stripL:sr&&Math.round(sr.left),stripR:sr&&Math.round(sr.right)," +
+      "title:(e.querySelector('.bfp-help-t')||{}).textContent,sub:(e.querySelector('.bfp-help-s')||{}).textContent,go:g&&g.textContent,goH:gr&&Math.round(gr.height),backdrop:!!bg&&bg.getBoundingClientRect().height>0," +
+      "name:(e.querySelector('.bfp-name')||{}).textContent,text:(e.querySelector('.bfp-text')||{}).textContent};})()";
+    let np = await ev(READ_POST);
+    check(at + "the NEED tag (" + NP.TAG.H + " px, cyan), then \"Food & Cooking · Portland · This week\", the name and the text, over the board's backdrop", !!np && np.intent === "need" && np.tag === "NEED" && np.tagH === NP.TAG.H && np.tagBg === CYAN &&
+      np.meta === "Food & Cooking · Portland · This week" && /Pat/.test(np.name || "") && (np.text || "").indexOf(P33_NEED_BODY.slice(0, 40)) !== -1 && np.backdrop, J(np));
+    check(at + "the strip \"" + NP.STRIP.TITLE + "\" / \"" + NP.STRIP.SUB + "\" / \"" + NP.STRIP.BUTTON + "\" (a " + NP.STRIP.BUTTON_H + " px pill; the strip 44 px or taller), inside the screen", !!np && np.strip && np.title === NP.STRIP.TITLE && np.sub === NP.STRIP.SUB &&
+      np.go === NP.STRIP.BUTTON && np.goH === NP.STRIP.BUTTON_H && np.stripH >= 44 && np.stripL >= 0 && np.stripR <= w, J(np));
+    await pageChecks(at);
+    await shot("need-post-member");
+    await ev("(function(){var s=document.querySelector('.bfp-post[data-post=\"" + P33_NEED + "\"] .bfp-help');if(s)s.click();return !!s;})()"); await sleep(600);
+    const dlg = await ev("(function(){var b=document.getElementById('bfpHelpBody');return b?{v:b.value,send:(document.getElementById('bfpHelpSend')||{}).textContent}:null;})()");
+    check(at + "I can help opens a private message to Pat, the post's link in it", !!dlg && /^Hi Pat/.test(dlg.v) && dlg.v.indexOf("/p/" + P33_NEED) !== -1 && dlg.send === "Send privately", J(dlg));
+    await pageChecks(at + "(the message open) ", { dialog: true });
+    await ev("(function(){var b=document.getElementById('bfpHelpSend');if(b)b.click();return !!b;})()"); await sleep(1800);
+    const sent = P33S.messages[0] || {}, where = await ev("location.pathname + location.search");
+    check(at + "Send privately goes through POST /api/messages to Pat with the link, then the conversation", P33S.messages.length === 1 && sent.receiver_id === P21_PEER && String(sent.content).indexOf("/p/" + P33_NEED) !== -1 &&
+      where === "/inbox.html?with=" + P21_PEER, J([P33S.messages, where]));
+    check(at + "no Need alert, push or email was sent by the page (alerts are the server's, in-app)", P23S.db.t.notifications.filter(n => n.type === "need_alert" && n.user_id === ROSE.id).length === 0);
+
+    // 5. Found: Rose marks her own Need Found from the post's menu, then reopens it; Pat's, marked Found, loses the strip
+    await open(cdp, origin, "home.html?post=" + rn.id, w, h, true);
+    at = "P33 Found (the poster) at " + w + ": ";
+    const menuPick = label => ev("(function(){var e=document.querySelector('.bfp-post[data-post=\"" + rn.id + "\"]');if(!e)return 'no post';var a=e.querySelector('[data-act=share]');if(a)a.click();" +
+      "return new Promise(function(res){setTimeout(function(){var b=[].filter.call(document.querySelectorAll('.bf-safety-item'),function(x){return x.textContent===" + J(label) + "&&x.getBoundingClientRect().height>0;})[0];if(b){b.click();res('ok');}else res([].map.call(document.querySelectorAll('.bf-safety-item'),function(x){return x.textContent;}).join('|'));},500);});})()");
+    const pick1 = await menuPick("Mark Found"); await sleep(1200);
+    const tagNow = await ev("(function(){var t=document.querySelector('.bfp-post[data-post=\"" + rn.id + "\"] .bfp-tag');return t?t.textContent:null;})()");
+    check(at + "the post's menu marks it Found: the tag reads FOUND, stored", pick1 === "ok" && tagNow === "FOUND" && !!P23S.db.t.posts.find(x => x.id === rn.id).need_found_at, J([pick1, tagNow]));
+    const pick2 = await menuPick("Reopen Need"); await sleep(1200);
+    const tagBack = await ev("(function(){var t=document.querySelector('.bfp-post[data-post=\"" + rn.id + "\"] .bfp-tag');return t?t.textContent:null;})()");
+    check(at + "...and Reopen Need reopens it: NEED again, stored", pick2 === "ok" && tagBack === "NEED" && !P23S.db.t.posts.find(x => x.id === rn.id).need_found_at, J([pick2, tagBack]));
+    await P.markFound(P23S.deps, P21_PEER, P33_NEED, true);
+    await open(cdp, origin, "home.html?post=" + P33_NEED, w, h, true);
+    at = "P33 Need post (Found) at " + w + ": ";
+    np = await ev(READ_POST);
+    check(at + "Pat's Need, Found: the tag reads FOUND, no strip", !!np && np.tag === "FOUND" && !np.strip && np.meta === "Food & Cooking · Portland · This week", J(np));
+    await pageChecks(at);
+    await shot("need-post-found");
+
+    // 6. the Market: the chips, the filter, the owner's uncategorised listing, create without a category
+    await open(cdp, origin, "marketplace.html", w, h, true);
+    at = "P33 Market at " + w + ": ";
+    const READ_MARKET = "(function(){var row=document.getElementById('catFilter'),chips=row?[].map.call(row.querySelectorAll('.cat-chip'),function(b){var r=b.getBoundingClientRect();return [b.getAttribute('data-cat'),b.getAttribute('aria-pressed'),Math.round(r.height)];}):[];" +
+      "var cards=[].map.call(document.querySelectorAll('#listingsGrid .listing-card'),function(c){return (c.querySelector('.listing-title,.card-title,h3')||{}).textContent||'';});" +
+      "return {chips:chips,swipes:!!row&&row.scrollWidth>row.clientWidth+4,cards:cards,add:[].map.call(document.querySelectorAll('.add-cat-btn'),function(b){return b.textContent;})};})()";
+    let mk = await ev(READ_MARKET);
+    check(at + "the filter: All and the 32 from the list, All chosen, one row that swipes, each 44 px", mk.chips.length === 33 && mk.chips[0][0] === "all" && mk.chips[0][1] === "true" && mk.swipes && mk.chips.every(x => x[2] >= 44), J(mk.chips.slice(0, 3)));
+    check(at + "All shows every listing, the uncategorised one too, with \"Add a category\" on Rose's own", mk.cards.length === 4 && mk.cards.some(t => /Bread basket/.test(t)) && mk.add.length === 1, J(mk));
+    await ev("(function(){var b=document.querySelector('#catFilter .cat-chip[data-cat=food]');if(b){b.scrollIntoView({inline:'center',block:'nearest'});b.click();}return !!b;})()"); await sleep(900);
+    mk = await ev(READ_MARKET);
+    check(at + "Food & Cooking: only its two listings (by category_slug), the chip pressed", mk.cards.length === 2 && mk.cards.every(t => /Sourdough|Plum/.test(t)) && (mk.chips.find(x => x[0] === "food") || [])[1] === "true", J(mk));
+    await ev("(function(){var r=document.getElementById('catFilter');if(r)window.scrollTo(0,r.getBoundingClientRect().top+window.scrollY-12);return true;})()"); await sleep(250);   // the chips and the listings they filter
+    await pageChecks(at);
+    await shot("market-filter");
+    await ev("(function(){openCreateModal();return true;})()"); await sleep(500);
+    at = "P33 Market create at " + w + ": ";
+    await ev("(function(){document.getElementById('fTitle').value='Cinnamon buns';document.getElementById('fPrice').value='9';return true;})()");
+    const catChips = await ev("(function(){var r=document.querySelectorAll('#fCategory input[name=fCat]');return {n:r.length,on:[].filter.call(r,function(x){return x.checked;}).length};})()");
+    check(at + "the form's category chips: the 32 from the list, none chosen", catChips.n === 32 && catChips.on === 0, J(catChips));
+    const posts0 = P33S.listingPosts.length;
+    await ev("(function(){var b=document.getElementById('submitBtn');if(b)b.click();return !!b;})()"); await sleep(700);
+    const cn = await ev("(function(){var n=document.getElementById('fCategoryNote');return n?{t:n.textContent,err:n.classList.contains('is-error')}:null;})()");
+    check(at + "Save without a category says so and sends nothing", !!cn && cn.err && cn.t === "Choose a category. It is the same list as posts." && P33S.listingPosts.length === posts0, J([cn, P33S.listingPosts.length - posts0]));
+    await pageChecks(at, { panel: false });
+    await ev("(function(){var r=document.querySelector('#fCategory input[name=fCat][value=food]');if(r)(r.closest('label')||r).click();var b=document.getElementById('submitBtn');if(b)b.click();return !!r;})()"); await sleep(1500);
+    const lp = P33S.listingPosts[P33S.listingPosts.length - 1] || {};
+    check(at + "with Food & Cooking chosen it is sent with category food", P33S.listingPosts.length === posts0 + 1 && lp.category === "food", J(lp));
+
+    // 7. Settings: Need alerts in my categories
+    await open(cdp, origin, "settings.html", w, h, true);
+    at = "P33 Settings at " + w + ": ";
+    await sleep(600);
+    await ev("(function(){var b=document.querySelector('.sidebar-item[data-target=preferences]');if(b)b.click();return !!b;})()"); await sleep(400);   // the Preferences section, where the switch is
+    const st = await ev("(function(){var r=document.getElementById('needAlertsRow'),t=document.getElementById('needAlertsToggle');if(!r)return null;r.scrollIntoView({block:'center'});var b=r.getBoundingClientRect();return {shown:!r.hidden&&b.height>0,on:!!t&&t.checked,text:r.textContent.replace(/\\s+/g,' ').trim(),h:Math.round(b.height)};})()");
+    check(at + "a member sees \"Need alerts\", on by default (never chosen)", !!st && st.shown && st.on && /Need alerts/.test(st.text) && st.h >= 44, J(st));
+    await sleep(300);
+    await pageChecks(at);
+    await shot("settings-need-alerts");
+    await ev("(function(){var t=document.getElementById('needAlertsToggle');if(t)t.click();return !!t;})()"); await sleep(900);
+    check(at + "switched off, it is saved as need_alerts false", P33S.prefPuts.some(x => x.need_alerts === false) && P33S.needAlerts === false, J(P33S.prefPuts));
+    P33S.member = false;
+    await open(cdp, origin, "settings.html", w, h, true); await sleep(800);
+    await ev("(function(){var b=document.querySelector('.sidebar-item[data-target=preferences]');if(b)b.click();return !!b;})()"); await sleep(400);
+    const stFree = await ev("(function(){var r=document.getElementById('needAlertsRow');return !!r&&(r.hidden||r.getBoundingClientRect().height===0);})()");
+    check("P33 Settings (a free account) at " + w + ": no Need alerts switch (alerts go to members only)", stFree === true);
+    P33S.member = true;
+  }
+}

@@ -65,9 +65,11 @@ const BUYER = "11111111-1111-4111-8111-111111111111", SELLER = "22222222-2222-42
   // NAMED (Nov 21 2026, FX2, migration 200): BEFORE "the highest migration is 199" and "only 191 to 199 are above 190". AFTER 200
   // (200_categories_and_intent.sql, applied by hand Nov 21 2026) is the highest, and it is allowed above 190 too.
   // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
-  check("R1. the highest migration is 201 (P3-1C)", Math.max(...nums) === 201, Math.max(...nums));
+  // NAMED (Nov 23 2026, P3-3, migration 202): BEFORE 201. AFTER 202 (202_need_found_and_alerts.sql).
+  check("R1. the highest migration is 202 (P3-3)", Math.max(...nums) === 202, Math.max(...nums));
   // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
-  check("R2. only 191 to 200 are above 190", J(above) === J(["191_safety.sql", "192_buy_listing_digital.sql", "193_posts.sql", "194_social_graph.sql", "195_users_email_canonical.sql", "196_storage_account_tables.sql", "197_storage_account_functions.sql", "198_storage_account_backfill.sql", "199_verified_badge.sql", "200_categories_and_intent.sql", "201_member_welcome.sql"]), J(above));
+  // NAMED (Nov 23 2026, P3-3, migration 202): 202_need_found_and_alerts.sql (posts.need_found_at, a Need marked Found, and user_preferences.need_alerts) is allowed too, by name.
+  check("R2. only 191 to 200 are above 190", J(above) === J(["191_safety.sql", "192_buy_listing_digital.sql", "193_posts.sql", "194_social_graph.sql", "195_users_email_canonical.sql", "196_storage_account_tables.sql", "197_storage_account_functions.sql", "198_storage_account_backfill.sql", "199_verified_badge.sql", "200_categories_and_intent.sql", "201_member_welcome.sql", "202_need_found_and_alerts.sql"]), J(above));
 
   /* ── S ── */
   console.log("\n══ S. migration 192 ══");

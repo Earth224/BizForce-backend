@@ -241,8 +241,9 @@ const MUTATIONS = {
   // NAMED (Nov 11 2026, orbit stage 2): BEFORE the select ended at agent_card_order. AFTER the five goal columns follow it.
   // NAMED (Nov 19 2026, HQ1): the select now ends with hq_card_view, hq_orbit (migration 188).
   // NAMED (Nov 21 2026, FX2): and then agents_card_view, the Agent Directory's view (migration 200e).
-  "order-setting-read": [[SERVER, ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view\")",
-    ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view, dashboard_card_order, dashboard_card_custom\")"]],
+  // NAMED (Nov 23 2026, P3-3): need_alerts (migration 202b) now follows agents_card_view, last
+  "order-setting-read": [[SERVER, ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view, need_alerts\")",
+    ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view, need_alerts, dashboard_card_order, dashboard_card_custom\")"]],
   // ... and written again by PUT /api/user/preferences (O1b)
   "order-setting-written": [[SERVER, "    if (req.body.notifications_enabled !== undefined) {\n",
     "    if (req.body.dashboard_card_order !== undefined) updates.dashboard_card_order = req.body.dashboard_card_order;\n    if (req.body.notifications_enabled !== undefined) {\n"]]
@@ -383,7 +384,8 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     // NAMED (Nov 11 2026, orbit stage 2): BEFORE the five settings. AFTER the weekly goal's five columns too (migration 183), after them.
     // NAMED (Nov 19 2026, HQ1): AFTER the phone dashboard's hq_card_view and hq_orbit too (migration 188), after them.
     // NAMED (Nov 21 2026, FX2): AFTER the Agent Directory's agents_card_view too (migration 200e), last.
-    prefGet.indexOf(".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view\")") !== -1, prefGet.slice(0, 300));
+    // NAMED (Nov 23 2026, P3-3): need_alerts (migration 202b) now follows agents_card_view, last.
+    prefGet.indexOf(".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view, need_alerts\")") !== -1, prefGet.slice(0, 300));
   check("O1b PUT /api/user/preferences never writes them (an old page sending them is ignored), and no server code names them", prefPut.length > 200 && !/dashboard_card/.test(prefPut) &&
     !/dashboard_card_order|dashboard_card_custom|DASHBOARD_CARD|dashboardCardCustomProblem/.test(SV_CODE), (SV_CODE.match(/[^\n]*dashboard_card[^\n]*/g) || []).slice(0, 3).join(" | "));
   const ydEntry = (() => { try { const m = { exports: {} }; new Function("module", "exports", "require", FILES[YOURDATA])(m, m.exports, n => require(n.charAt(0) === "." ? path.join(REPO, "lib", n) : n)); return (m.exports.DATA || []).filter(e => e.table === "user_preferences")[0]; } catch (e) { return { err: e.message }; } })();

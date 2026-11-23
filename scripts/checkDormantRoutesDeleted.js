@@ -439,7 +439,13 @@ const ADDED = [
   ["get", "/api/admin/verified"],                            // admin only: the seller and official badges, and ?handle= to find one (545 -> 546)
   ["post", "/api/admin/unverify/:userId"],                    // admin only: removes the seller or official badge; a paid member keeps "member" (546 -> 547)
   // NAMED (Nov 21 2026, P3-1B): BEFORE 547 routes; AFTER 548, the posts sitemap (checkPublicPostPage, routeAccess PUBLIC)
-  ["get", "/api/sitemap/posts.xml"]                           // PUBLIC: members' public posts with Show in Google on, cached ten minutes (547 -> 548)
+  ["get", "/api/sitemap/posts.xml"],                          // PUBLIC: members' public posts with Show in Google on, cached ten minutes (547 -> 548)
+  // NAMED (Nov 23 2026, P3-3, migration 202): BEFORE 548 routes; AFTER 552, the one category list, the composer's facts and a Need marked Found
+  // (checkPostIntent, routeAccess P and F)
+  ["get", "/api/categories"],                                // PUBLIC: the one category list from the categories table (548 -> 549)
+  ["get", "/api/posts/composer"],                           // login-only: the member's place and active listings and services, for the composer (549 -> 550)
+  ["post", "/api/posts/:id/found"],                         // login-only: the poster marks their Need Found (550 -> 551)
+  ["delete", "/api/posts/:id/found"]                        // login-only: the poster reopens their Need (551 -> 552)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -195,7 +195,8 @@ const decide = (w, action, note) => M.decide(w.db.client, { adminId: ADMIN, id: 
   check("E1. all five admin routes: requireAuth and requireAdmin", open.length === 0, J(open));
   check("E2. requireAdmin answers 403 to anyone but the admin", /async function requireAdmin\(req, res, next\) \{\n  if \(!req\.user \|\| req\.user\.role !== "admin"\) \{\n    return res\.status\(403\)/.test(S));
   const dec = H.routeStatement(S, "post", "/api/admin/moderation/item/:id/decide") || "";
-  check("E3. a decision is made as the signed-in admin", has(dec, "decide(supabase, { adminId: req.user.id, id: req.params.id, action: body.action, note: body.note, nowIso: nowIso() })"));
+  // NAMED (Nov 23 2026, P3-3B): BEFORE the decision took no post deps. AFTER it is handed postDeps() too, so an approved Need sends its alerts (checkPostIntent J)
+  check("E3. a decision is made as the signed-in admin", has(dec, "decide(supabase, { adminId: req.user.id, id: req.params.id, action: body.action, note: body.note, nowIso: nowIso(), postDeps: postDeps() })"));
   const counts = H.routeStatement(S, "get", "/api/inbox/counts") || "";
   check("E4. the Inbox counts carry the waiting count for the admin only (waiting, or hidden and undecided)",
     has(counts, 'if (req.user.role === "admin") {\n      const waiting = await supabase.from("moderation_queue").select("id", { count: "exact", head: true }).or("state.eq.waiting,and(state.eq.hidden,decided_at.is.null)");\n      if (!waiting.error) counts.moderation = waiting.count || 0;'));

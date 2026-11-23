@@ -89,6 +89,8 @@ function check(label, ok, detail) {
 function fakeDb(rows) {
   const calls = [];
   const tables = JSON.parse(JSON.stringify(rows || {}));
+  // NAMED (Nov 23 2026, P3-3): every fake holds the one category list (migration 200's rows, scripts/_categories.js); a listing's category must be on it
+  if (!tables.categories) tables.categories = require("./_categories").rows();
   function from(table) {
     const q = { table: table, op: "select", filters: [], payload: null };
     const chain = {};
@@ -196,8 +198,8 @@ function executor(name, db) {
 }
 
 const LISTINGS = [
-  { id: "usd-only", seller_id: "seller-1", title: "Old USD listing", price_bfc: 0, price_usd: 4900, status: "active", listing_kind: "product", category: "other", media: [] },
-  { id: "priced", seller_id: "seller-1", title: "BFC listing", price_bfc: 500, price_usd: 2500, status: "active", listing_kind: "product", category: "other", media: [] }
+  { id: "usd-only", seller_id: "seller-1", title: "Old USD listing", price_bfc: 0, price_usd: 4900, status: "active", listing_kind: "product", category: "other", category_slug: "other", media: [] },   // NAMED (Nov 23 2026, P3-3): + category_slug
+  { id: "priced", seller_id: "seller-1", title: "BFC listing", price_bfc: 500, price_usd: 2500, status: "active", listing_kind: "product", category: "other", category_slug: "other", media: [] }   // NAMED (Nov 23 2026, P3-3): + category_slug
 ];
 const BFC_ONLY = "Listings are priced in BizCash only.";
 const NFS = "Not for sale until the seller sets a BizCash price";

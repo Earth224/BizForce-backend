@@ -37,6 +37,11 @@
 const zlib = require("zlib");
 const H = require("./_p21Harness");
 const { memDb } = require("./_p23Db");
+/* NAMED (Nov 23 2026, P3-3): every post names its intent and a category on the one list (lib/categories.js over the categories
+   table, seeded here from migration 200 by scripts/_categories.js). A body that names neither is sent as a share in Art; one that
+   names them keeps its own. checkPostIntent holds the intent and category rules themselves. */
+const CATEGORY_ROWS = require("./_categories").rows();
+const withIntent = b => Object.assign({ intent: "share", category: "art" }, b || {});
 
 const SERVER = "@server.js", PM = "@lib/postMedia.js", POSTS = "@lib/posts.js", MIG = "@supabase/migrations/193_posts.sql", COMPOSER = "scripts/bf-composer.js";
 const MUTATIONS = {
@@ -161,13 +166,13 @@ function world(seed) {
   check("B4. over 600 KB: 413", (await c([{ media_id: mid(5) }])).status === 413);
   check("B5. the same photo twice: 400 twice; an id that is not one: 400 bad_id", (await c([{ media_id: mid(1) }, { media_id: mid(1) }])).reason === "twice" && (await c([{ media_id: "x" }])).reason === "bad_id");
   const P = T.libRequire("./lib/posts");
-  const pw = memDb({ member_media: lib, post_media: [], posts: [], users: [{ id: ME, created_at: "2026-01-01T00:00:00.000Z", email_verified_at: "2026-01-01T00:00:00.000Z" }], bf_profiles: [],   /* NAMED (Nov 20 2026, P3-1): the author has confirmed their email (public posts need it) */ profiles: [], moderation_queue: [],
+  const pw = memDb({ categories: CATEGORY_ROWS, member_media: lib, post_media: [], posts: [], users: [{ id: ME, created_at: "2026-01-01T00:00:00.000Z", email_verified_at: "2026-01-01T00:00:00.000Z" }], bf_profiles: [],   /* NAMED (Nov 20 2026, P3-1): the author has confirmed their email (public posts need it) */ profiles: [], moderation_queue: [],
     follows: [], member_blocks: [], member_mutes: [], post_likes: [], post_saves: [] });
   const made = await P.createPost({ sb: pw.client, now: () => "2026-11-20T12:00:00.000Z", claims: () => null, ownerPublic: async () => true, env: { SUPABASE_URL: "https://x.supabase.co" } },
-    ME, { kind: "photo", body: "", media: [{ media_id: mid(1), thumb_media_id: mid(2) }, { media_id: mid(6) }] });
+    ME, withIntent({ kind: "photo", body: "", media: [{ media_id: mid(1), thumb_media_id: mid(2) }, { media_id: mid(6) }] }));
   check("B6. a photo post links them as idx 0 and 1, and answers each photo's url and thumbnail url", made.status === 201 && J(pw.t.post_media.map(x => x.idx + ":" + x.media_id)) === J(["0:" + mid(1), "1:" + mid(6)]) &&
     made.body.post.photos.length === 2, J(made.body));
-  const refusedPost = await P.createPost({ sb: pw.client, now: () => "2026-11-20T12:00:00.000Z", claims: () => null, ownerPublic: async () => true, env: {} }, ME, { kind: "photo", media: [{ media_id: mid(3) }] });
+  const refusedPost = await P.createPost({ sb: pw.client, now: () => "2026-11-20T12:00:00.000Z", claims: () => null, ownerPublic: async () => true, env: {} }, ME, withIntent({ kind: "photo", media: [{ media_id: mid(3) }] }));
   check("B7. a post naming another member's photo is refused and not saved", refusedPost.status === 404 && pw.t.posts.length === 1);
 
   /* ── C ── */

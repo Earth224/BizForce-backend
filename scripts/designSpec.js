@@ -231,4 +231,48 @@ const TMX = {
 };
 const ORBIT = { SETTLE_MS: 1300, SETTLE_MIN_MS: 1000, SETTLE_MAX_MS: 1500 };
 
-module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX };   // NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
+/* NAMED (Nov 23 2026, P3-3): THE OWNER'S CANVAS, ROW 4: "New post: Share, Offer or Need" (Composer) and "A Need post in the feed"
+   (NeedPost), Downloads at 2x, halved here; measured by pixel scans (runs, bounding boxes, corner fits). Positions are at
+   390 x 844 with no safe area. KEPT, and named in the report as deviations from the pictures:
+     COMPOSER.WHEN: the board's When control runs off the screen's edge ("Any" cut by it); here it fits inside the 16 px
+       margins and Where takes the rest of the row (FIT: true);
+     COMPOSER: every tap target is 44 px (the site's rule): the 40 px chips and Post pill and the 38 px segment pills are
+       drawn inside 44 px labels and buttons, at the board's sizes;
+     NEEDPOST: the board draws the rail before FX2 (126 px above the bar, no Tip slot) and "For You" on two lines; FX2's rail
+       and its one-line tabs are kept (FEED.RAIL, FEED.TOP);
+     NEEDPOST: "[reference photo, if they add one]" is the board's note, not drawn: a Need with a photo shows it as any post. */
+const COMPOSER = {
+  BOARD: "Composer",
+  HEADER: { HEIGHT: 64, DIVIDER: "#1e2848", X_ICON: 12, X_CENTRE: 34, TITLE: "New post", TITLE_FONT: 17, TITLE_WEIGHT: 800,
+    POST: { W: 71, H: 40, RADIUS: 20, RIGHT: 12, FONT: 16, HIT: 44 } },
+  SIDE: 16,                       // the content's margins
+  SECTION_GAP: 16,                // between the sections
+  LABEL: { FONT: 13, LINE: 16, WEIGHT: 700, SPACING: 1.5, COLOR: "#a9b3cc", GAP: 8, FIRST_TOP: 81 },
+  TILES: { TOP: 104, H: 64, W: 110, GAP: 12, RADIUS: 10, BORDER: 1.5, FILL: "#0e1428", LINE: "#2b3a6b", ON_FILL: "#0f2a3a", ON_LINE: "#22d3ee",
+    TITLE_FONT: 16, SUB_FONT: 13, TITLE: "#c9d1e6", SUB: "#a9b3cc", ON_SUB: "#9ee6f2",
+    ITEMS: [["share", "Share", "Show your work"], ["offer", "Offer", "Sell or book"], ["need", "Need", "Ask for help"]],
+    MEMBERS_TAG: "Members" },
+  LABELS: { share: "What do you want to say?", offer: "What are you offering?", need: "What do you need?" },
+  NEED_HINT: "Example: Looking for a tattoo artist for a forearm piece, black and grey, this month.",
+  TEXT: { TOP: 207.5, H: 108, RADIUS: 12, FILL: "#0b1022", LINE: "#2b3a6b", FONT: 16, LINE_H: 20, PAD: 13, MAX: 2200, COUNT_FONT: 13 },
+  CHIPS: { TOP: 377, H: 40, RADIUS: 20, GAP: 8, PAD: 15, FONT: 14, FILL: "#0e1428", LINE: "#2b3a6b", TEXT: "#c9d1e6", ON_FILL: "#0f2a3a", ON_LINE: "#22d3ee",
+    NOTE: "The same list as the Market. Swipe for more." },
+  WHERE: { H: 44, RADIUS: 12, FILL: "#0b1022", LINE: "#2b3a6b", MAX: 80 },
+  WHEN: { GAP: 11, PILL_H: 38, PILL_RADIUS: 9, FILL: "#0e1428", LINE: "#1e2848", ON: "#22d3ee", ITEMS: ["Today", "Week", "Any"], FIT: true },
+  PHOTOS: { TOP: 562, SLOT: 78, GAP: 8, RADIUS: 10, COUNT: 4, DASH: "#2b3a6b", FILL: "#0b1022" },
+  BOX: { H: 62, RADIUS: 14, FILL: "#0e1428", LINE: "#1e2848", ICON: 17, TEXT_LEFT: 62, FONT: 15,
+    TEXT: "Members who offer this nearby will be told about your post." },
+  AUDIENCE: { H: 44, PILL_H: 38, FILL: "#0e1428", LINE: "#1e2848", ON_FILL: "#1a2244", ITEMS: ["Public", "Followers"] }
+};
+const NEEDPOST = {
+  BOARD: "NeedPost",
+  TAG: { W: 56, H: 24, RADIUS: 12, FONT: 12, FILL: "#22d3ee", TEXT: "#070b18", WORD: "NEED", FOUND: "FOUND" },
+  META: { GAP: 8, FONT: 14, LINE: 16, COLOR: "#c9d1e6", SEP: " \u00b7 ", WHEN: { today: "Today", week: "This week" } },
+  STRIP: { H: 80, RADIUS: 14, LINE: "#2b3a6b", PAD: 8, ICON: 40, ICON_FILL: "#0f2a3a", TARGET: 15, TITLE_FONT: 13, SUB_FONT: 12,
+    BUTTON_H: 34, BUTTON_W: 89, BUTTON_RADIUS: 17, BUTTON_FONT: 14,
+    TITLE: "You offer this nearby", SUB: "Reply privately with your work", BUTTON: "I can help" },
+  BACKDROP: { GLOW: "#123a4a", GLOW_AT: "77% 28%", TOP: "#0b1230", BOTTOM: "#070b1b" },
+  SHARE_CATEGORY_FONT: 13
+};
+
+module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX, COMPOSER, NEEDPOST };   // NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN

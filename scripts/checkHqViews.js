@@ -74,7 +74,8 @@ const MUTATIONS = {
   "route-put-no-400": [[SERVER, "if (req.body.hq_card_view !== null && HQ_CARD_VIEWS.indexOf(req.body.hq_card_view) === -1) {", "if (false) {"]],
   "route-null-not-stored": [[SERVER, "      updates.hq_orbit = req.body.hq_orbit;", "      if (req.body.hq_orbit !== null) updates.hq_orbit = req.body.hq_orbit;"]],
   // NAMED (Nov 21 2026, FX2): BEFORE anchored on the select's end, hq_orbit"); AFTER the select ends in agents_card_view (migration 200e), so on "hq_orbit, agents_card_view".
-  "route-get-drops-orbit": [[SERVER, "goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view\")", "goal_time_zone, goal_set_at, hq_card_view, agents_card_view\")"]],
+  // NAMED (Nov 23 2026, P3-3): need_alerts (migration 202b) now follows agents_card_view, last
+  "route-get-drops-orbit": [[SERVER, "goal_time_zone, goal_set_at, hq_card_view, hq_orbit, agents_card_view, need_alerts\")", "goal_time_zone, goal_set_at, hq_card_view, agents_card_view, need_alerts\")"]],
   "route-get-unchecked": [[SERVER, "hq_card_view: HQ_CARD_VIEWS.indexOf(row.hq_card_view) !== -1 ? row.hq_card_view : null,", "hq_card_view: row.hq_card_view,"]],
   // NAMED (Nov 21 2026, FX2): BEFORE "..., hq_orbit, updated_at"; AFTER agents_card_view sits between them
   "yourdata-no-columns": [[YOURDATA, "goal_set_at, hq_card_view, hq_orbit, agents_card_view, updated_at", "goal_set_at, agents_card_view, updated_at"]],
@@ -133,7 +134,8 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, FX2): BEFORE "p32". AFTER "fx2": the feed's Tip and product strip, the Profile's banner, the Agent Directory's views (bf-agents-views.js) and the Oracle's Sun.
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx3b\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
+  // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"p33\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
   // FX3B (Nov 22 2026): a moon whose photo failed shows again (drawn whole) at every repaint, until the error hides it
   "fx3b-moon-reveal": [[MOON, "    el.hidden = failed;\n", "    el.hidden = false;\n"]],
   // FX3B: no probe, so a moon whose photo failed never shows again
@@ -204,9 +206,10 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
     // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
     // NAMED (Nov 21 2026, FX2, migration 200): 200_categories_and_intent.sql (the shared categories table, post category, intent, need_place and need_when, marketplace_listings.category_slug, and 200e's agents_card_view, search_visible and the SEO fields; applied by hand Nov 21 2026) is allowed above too, by name; "the highest" (200) is checkBuyListingDigital R1's.
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
-    top === 201 && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
+    top === 202 /* NAMED (Nov 23 2026, P3-3): BEFORE 201 */ && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
-    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql", J([top]));
+    // NAMED (Nov 23 2026, P3-3, migration 202): 202_need_found_and_alerts.sql (posts.need_found_at, a Need marked Found, and user_preferences.need_alerts) is allowed too, by name.
+    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql,202_need_found_and_alerts.sql", J([top]));
   check("R2. it adds hq_card_view and hq_orbit as text, only if they do not exist (safe to re-run)",
     has(mig, "ADD COLUMN IF NOT EXISTS hq_card_view text,") && has(mig, "ADD COLUMN IF NOT EXISTS hq_orbit     text;"));
   check("R3. the named CHECKs as live: user_preferences_hq_card_view_check (NULL or large, compact, grid) and user_preferences_hq_orbit_check (NULL or shown, hidden), each dropped if it exists first",
@@ -633,7 +636,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
-  check("W1. SHELL_REV \"fx3b\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"fx3b\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
+  check("W1. SHELL_REV \"p33\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p33\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js (NAMED, Nov 22 2026, FX3: bf-abyss.js, the abyss sun's stars, just before bf-oracle-moon.js)", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-abyss\.js"><\/script>\n<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 
