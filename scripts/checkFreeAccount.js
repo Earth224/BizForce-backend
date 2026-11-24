@@ -145,14 +145,19 @@ const MEMBER_ROUTES = {
     "post /api/crm/customers", "post /api/prospects", "post /api/icp-profiles", "post /api/inventory/items", "post /api/calendar/events", "post /api/bizdoc/documents",
     "post /api/bizbook/generate", "post /api/cover-wraps", "post /api/certifications/award", "post /api/inner-iq/results", "post /api/guide/ask"],
   "music uploads, digital cards and Google Wallet passes, campaigns and media library uploads outside posts": ["post /api/bfp/music", "post /api/music/tracks", "post /api/digital-cards", "put /api/digital-cards/:id",
-    "post /api/crowdfunding/campaigns", "get /api/crowdfunding/campaigns", "get /api/crowdfunding/my-campaigns", "post /api/media"]
+    "post /api/crowdfunding/campaigns", "get /api/crowdfunding/campaigns", "get /api/crowdfunding/my-campaigns", "post /api/media"],
+  // NAMED (Nov 24 2026, LR-2B): the owner's ninth line and every Lead Radar member route.
+  "Lead Radar: people asking for what you offer, found from your Fingerprint, with every reply approved by you": ["get /api/leads", "get /api/leads/fingerprint", "put /api/leads/fingerprint",
+    "post /api/leads/fingerprint/rebuild", "post /api/leads/fingerprint/suggest", "post /api/leads/fingerprint/spare/swap", "get /api/leads/summary", "post /api/leads/:id/status",
+    "post /api/leads/:id/draft", "post /api/leads/:id/send"]
 };
 
 (async function main() {
   console.log("\n══ A. the owner's lists ══");
   // NAMED (Nov 21 2026, P3-1B): BEFORE "the seven lines" and "the nine lines". AFTER the owner's final eight and eight.
   check("A1. a free account gets the eight lines, in order", J(M.FREE_INCLUDES) === J(Object.keys(FREE_ROUTES)), J(M.FREE_INCLUDES));
-  check("A2. membership adds the eight lines, in order", J(M.MEMBER_ADDS) === J(Object.keys(MEMBER_ROUTES)), J(M.MEMBER_ADDS));
+  // NAMED (Nov 24 2026, LR-2B): BEFORE "the eight lines"; Lead Radar is the ninth.
+  check("A2. membership adds the nine lines, in order", J(M.MEMBER_ADDS) === J(Object.keys(MEMBER_ROUTES)), J(M.MEMBER_ADDS));
 
   console.log("\n══ B. every line is the routes ══");
   Object.keys(FREE_ROUTES).forEach((line, i) => {
@@ -308,9 +313,17 @@ const MEMBER_ROUTES = {
   bad = inG("M", ["get /api/crowdfunding/campaigns", "get /api/crowdfunding/campaigns/by-share/:shareId", "get /api/crowdfunding/my-campaigns", "get /api/crowdfunding/donations",
     "post /api/crowdfunding/campaigns", "post /api/crowdfunding/campaigns/:id/donate"]);
   check("H5. campaigns are members only (M): their reads, creating one and donating", bad.length === 0, bad.join(", "));
-  const radar = ["get /api/leads", "get /api/leads/youtube-signals", "get /api/agents/sales/leads", "post /api/agents/sales/lead-status", "get /api/agents/sales/pipeline"];
-  bad = inG("A", radar).concat(radar.filter(k => R.ADMIN_IN_HANDLER.indexOf(k) === -1));
-  check("H6. the Lead Radar routes stay the owner's (A) until the Radar-for-every-member block", bad.length === 0, bad.join(", "));
+  /* NAMED (Nov 23 2026, LR-2, the Radar-for-every-member block): BEFORE H6 held the five owner-only Lead Radar routes in A
+     (owner check in the handler) "until the Radar-for-every-member block". AFTER that block: Lead Radar is members only (M)
+     and a free account gets the members panel; the five old routes are gone from every group; the owner keeps one read-only
+     archive (A, owner check in the handler). */
+  const radar = ["get /api/leads", "get /api/leads/fingerprint", "put /api/leads/fingerprint", "post /api/leads/fingerprint/rebuild",
+    "post /api/leads/fingerprint/suggest", "get /api/leads/summary", "post /api/leads/:id/status", "post /api/leads/:id/draft", "post /api/leads/:id/send",
+    "post /api/agents/rd/demand-signals"];
+  const gone = ["get /api/leads/youtube-signals", "get /api/agents/sales/leads", "post /api/agents/sales/lead-status", "get /api/agents/sales/pipeline", "post /api/leads/draft-reply"];
+  bad = inG("M", radar).concat(gone.filter(k => R.groupOf(k) !== null).map(k => k + " still " + R.groupOf(k)))
+    .concat(R.groupOf("get /api/leads/archive") === "A" && R.ADMIN_IN_HANDLER.indexOf("get /api/leads/archive") !== -1 ? [] : ["get /api/leads/archive " + R.groupOf("get /api/leads/archive")]);
+  check("H6. Lead Radar is members only (M) for every member; the old owner routes are gone; the owner's archive is A, checked in the handler", bad.length === 0, bad.join(", "));
   const wallet = H.routeStatement(S, "get", "/api/cards/google-wallet") || "";
   check("H7. get /api/cards/google-wallet is public (P), served while the card's owner is in good standing (ownerPagePublic)",
     R.groupOf("get /api/cards/google-wallet") === "P" && /ownerPagePublic\(/.test(wallet), R.groupOf("get /api/cards/google-wallet") + " " + wallet.length);

@@ -1,40 +1,37 @@
-/* ══════════════════════════════════════════════════════════════════════════
-   checkLeadRadarPages.js — what the two lead pages do with the 403 the four
-   lead routes now send, and what they no longer claim.
+/* ═══════════════════════════════════════════════════════════════════════════
+   checkLeadRadarPages.js — who sees what on the two lead pages, and what they no longer claim.
 
-   COMPANION TO checkLeadRadarOwnerGate.js. That file proves the backend
-   refuses a non-owner with code "lead_radar_unavailable" before reading a
-   row. This one boots agents/lead-radar.html and agents/sales.html from the
-   frontend checkout in jsdom, answers their lead fetches with that exact
-   refusal, and asserts what the document then contains:
+   NAMED BEFORE → AFTER (Nov 23 2026, LR-2). BEFORE this file booted agents/lead-radar.html and agents/sales.html
+   against the 403 "lead_radar_unavailable" the four owner-only lead routes sent a non-owner, and proved the server's
+   sentence was shown with no Convert, Draft or "Post Public Replies" control; and, as the control, the owner's leads
+   with Draft and "Post my reply" on agents/sales.html. AFTER Lead Radar is every member's (lib/leadRoutes.js, members
+   only): agents/lead-radar.html was rebuilt to the owner's boards (LeadsHome, LeadsReply, LeadsFingerprint), the owner
+   routes are gone, and agents/sales.html points to Lead Radar, with the owner's old leads as a read-only archive
+   (GET /api/leads/archive). So this file now proves, in jsdom with fetch replaced:
 
-     - the server's own sentence, verbatim, where the lead list would be
-     - NO Convert control and NO "Post Public Replies" control anywhere in
-       the document — absent, not disabled. querySelectorAll, not a
-       visibility check: a hidden button is still a button.
-     - no lead card, no Draft Engagement button, no Load More
-     - window.confirm never called
+     lead-radar.html
+       - signed out (no token): "Sign in to see Lead Radar." and a Sign in link, and NO lead request;
+       - a free account (bfAccess tier free): the members panel state ("Lead Radar is for members", "Join to unlock",
+         which opens the site's members panel), and NO lead request;
+       - the server answering 402 (a lapsed member): the same members panel, and the site's panel is opened;
+       - the server answering 401: the sign-in state;
+       - the server failing (500): "could not load", never an empty list or "0 leads";
+       - a member: the stats, the chips for the sources that are on, the cards with their badge, text and green match
+         line, Save and Not a fit, the footer line; and none of the old page's controls (Show Noise, Refresh, Load More,
+         Draft Engagement, a chart).
+     sales.html
+       - a member (the archive answers 403): only the pointer to Lead Radar; no archive, no lead card, and no control
+         that drafts, sends or converts;
+       - the owner (the archive answers 200): the archive, read only: its cards and board carry no button that acts;
+       - neither calls a removed route (GET /api/leads, /api/agents/sales/leads, lead-status, pipeline, convert,
+         send-approved).
+     The copy: the old claims are gone from the pages that carried them, and the members' sentences are there.
 
-   And, as the control, the same two pages booted against a 200 with sample
-   leads, which must render the cards and the controls — so the removal is
-   shown to be conditional on the refusal rather than the page having lost
-   its buttons altogether.
+   NOTHING HERE TOUCHES THE DATABASE OR THE NETWORK. External scripts are not loaded; bfAccess is a stub.
 
-   The copy checks are the second half: the four claims the report named are
-   asserted gone from the pages that carried them, and the phrases that
-   replaced them are asserted present.
-
-   NOTHING HERE TOUCHES THE DATABASE OR THE NETWORK. fetch is replaced in
-   the window before any page script runs; external scripts (chart.js,
-   bf-session.js, the termaximus helpers) are not loaded, which is why
-   bf_token is seeded into localStorage by hand — bf-session.js would have
-   redirected to the login page without it.
-
-   MUTATION. MUTATE=ignore-refusal rewrites both pages as they are loaded so
-   their refusal branch can never be taken. The refusal-mode checks must go
-   red; the control-mode and copy checks stay green. Run it after any edit
-   to this file.
-   ══════════════════════════════════════════════════════════════════════════ */
+   MUTATE=<name> edits a page as it is loaded; MUTATE=all runs each in its own process and passes only if every one
+   fails a check. An unmatched search text is an ERROR (scripts/_shared.js), never a catch.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const path = require("path");
 const fs = require("fs");
@@ -43,9 +40,20 @@ const { JSDOM, VirtualConsole } = require("jsdom");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const MUT = require("./_shared");
-// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
-if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["ignore-refusal"]);
-const MUTATING = process.env.MUTATE === "ignore-refusal";
+
+const MUTATIONS = {
+  // NAMED (Nov 23 2026, LR-2): BEFORE "ignore-refusal" made the 403 branch unreachable. AFTER the 402 branch.
+  "ignore-refusal": ["radar", "if (res.status === 402) { showState(\"members_only\");", "if (false) { showState(\"members_only\");"],
+  // a free account asks for the leads anyway
+  "free-loads-leads": ["radar", "if (a.tier === \"free\") { showState(\"members_only\"); return; }\n", ""],
+  // a signed-out visitor asks for the leads anyway
+  "signed-out-loads": ["radar", "if (!tok()) { showState(\"signed_out\"); return; }", "if (false) { showState(\"signed_out\"); return; }"],
+  // the archive is drawn for an answer that is not the archive's (a member's 403)
+  "archive-for-anyone": ["sales", ".then(function (r) { return r.ok ? r.json() : null; })", ".then(function (r) { return r.json().then(function (d) { return Object.assign({ leads: [] }, d); }); })"]
+};
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
+const MUTATE = process.env.MUTATE || "";
+if (MUTATE && !MUTATIONS[MUTATE]) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
 
 const PAGES = {
   radar: path.join(FRONTEND, "agents", "lead-radar.html"),
@@ -53,239 +61,198 @@ const PAGES = {
   dashboard: path.join(FRONTEND, "dashboard.html")
 };
 Object.keys(PAGES).forEach(function (k) {
-  if (!fs.existsSync(PAGES[k])) {
-    console.error("Frontend page not found: " + PAGES[k] + " (set BIZFORCE_FRONTEND_DIR).");
-    process.exit(1);
-  }
+  if (!fs.existsSync(PAGES[k])) { console.error("Frontend page not found: " + PAGES[k] + " (set BIZFORCE_FRONTEND_DIR)."); process.exit(1); }
 });
 
-/* The exact body the backend sends. Kept in step by hand with
-   LEAD_RADAR_UNAVAILABLE in server.js; checkLeadRadarOwnerGate.js prints
-   the live one. The page must show `error` verbatim, so the text matters. */
-const REFUSAL = {
-  error: "Lead Radar runs against a single connected social account and is not enabled for your account. " +
-         "Leads, scoring and public replies are only available on the account that owns those credentials.",
-  code: "lead_radar_unavailable"
+// The routes LR-2 removed: no page may call them.
+const REMOVED = ["/api/agents/sales/leads", "/api/agents/sales/lead-status", "/api/agents/sales/pipeline", "/api/agents/sales/convert",
+  "/api/agents/sales/send-approved", "/api/leads/youtube-signals", "/api/leads/draft-reply"];
+
+const NOW = Date.now();
+const iso = (mins) => new Date(NOW - mins * 60000).toISOString();
+const LEADS = [
+  { id: "n1", source: "bizforce", author_handle: "maria", author_place: "Austin", posted_at: iso(30), text: "Need a plumber for a leaking kitchen sink this week.",
+    match_reason: "Home services in Austin", status: "new", need_post_id: "p1", can_reply: false },
+  { id: "b1", source: "bluesky", author_handle: "sam.bsky.social", posted_at: iso(120), text: "Anyone know a good plumber in Austin? Water heater died.",
+    match_reason: "Strong match: asks for a plumber nearby", status: "new", reply_invited: true, can_reply: true, url: "https://bsky.app/profile/sam/post/1" },
+  { id: "y1", source: "youtube", author_handle: "Viewer", posted_at: iso(600), text: "How do I fix a dripping tap myself?", matched_keyword: "dripping tap",
+    status: "new", can_reply: false, url: "https://www.youtube.com/watch?v=x&lc=y" }
+];
+const LIST = { leads: LEADS, stats: { new_this_week: 7, replied: 2, won: 1 }, sources_on: { bizforce: true, bluesky: true, youtube: true, threads: false }, weaker_hidden: 0 };
+const ARCHIVE = {
+  leads: [{ post_uri: "at://old/1", author_handle: "old.bsky.social", post_text: "an old find", intent_score: 72, status: "scored", sales_status: "replied" }],
+  pipeline: [{ lead_post_uri: "at://old/1", status: "replied", last_draft: "an old reply" }]
 };
 
-const LEAD_ROUTES = ["/api/leads", "/api/agents/sales/leads", "/api/agents/sales/lead-status", "/api/agents/sales/pipeline"];
-
-const SAMPLE_LEADS = [
-  { id: "a", post_uri: "at://did:plc:a/app.bsky.feed.post/1", author_handle: "one.bsky.social", post_text: "anyone tried tongkat ali?", matched_keyword: "anyone tried tongkat ali", intent_score: 81, intent_reason: "asks the room", suggested_product: "Tongkat Ali", source: "bluesky", status: "scored", sales_status: "new", created_at: "2026-09-01T00:00:00Z" },
-  { id: "b", post_uri: "at://did:plc:b/app.bsky.feed.post/2", author_handle: "two.bsky.social", post_text: "why isn't my manifestation working", matched_keyword: "why isn't my manifestation working", intent_score: 64, intent_reason: "seeker", suggested_product: "Quantum Jumping book", source: "bluesky", status: "scored", sales_status: "new", created_at: "2026-09-01T00:00:00Z" }
-];
-const SAMPLE_PIPELINE = { new: [], drafted: [], contacted: [], replied: [], converted: [] };
-
-let failures = 0;
+let failures = 0, passes = 0;
 function check(label, ok, detail) {
-  if (ok) console.log("    pass  " + label);
-  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
+  if (ok) { passes++; console.log("    pass  " + label); }
+  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + String(detail).slice(0, 300) + "]" : "")); }
 }
-
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-
-/* Builds a Response-shaped object the pages' .then chains accept. */
 function reply(status, body) {
-  return {
-    ok: status >= 200 && status < 300,
-    status: status,
-    json: function () { return Promise.resolve(body); },
-    text: function () { return Promise.resolve(JSON.stringify(body)); }
-  };
+  return { ok: status >= 200 && status < 300, status: status, json: function () { return Promise.resolve(body); }, text: function () { return Promise.resolve(JSON.stringify(body)); } };
 }
-
-function mutate(html, needle, label) {
-  return MUT.replaceOnce(html, needle, "false", "ignore-refusal in " + label);
-}
-
-/* Boots one page. mode is "refuse" (every lead route answers the 403) or
-   "serve" (they answer 200 with the samples). Returns the window and the
-   record of what was fetched and whether confirm was ever called. */
-async function boot(pageKey, mode) {
-  let html = fs.readFileSync(PAGES[pageKey], "utf8");
-
-  if (MUTATING) {
-    if (pageKey === "radar") html = mutate(html, 'res.status === 403 && res.data.code === "lead_radar_unavailable"', "lead-radar.html");
-    if (pageKey === "sales") html = mutate(html, 'return status === 403 && !!data && data.code === "lead_radar_unavailable";', "sales.html");
-  }
-
-  const seen = { fetched: [], confirms: 0, errors: [] };
-  const virtualConsole = new VirtualConsole();
-  virtualConsole.on("jsdomError", function (e) { seen.errors.push(String(e && e.message || e).split("\n")[0]); });
-
-  const dom = new JSDOM(html, {
-    url: "https://bizforce.test/agents/" + path.basename(PAGES[pageKey]),
-    runScripts: "dangerously",
-    pretendToBeVisual: true,
-    virtualConsole: virtualConsole,
-    beforeParse: function (window) {
-      try { window.localStorage.setItem("bf_token", "check-token"); } catch (e) { /* jsdom always has it */ }
-      window.confirm = function () { seen.confirms += 1; return false; };
-      window.alert = function () {};
-      window.fetch = function (url, opts) {
-        const u = String(url);
-        const routePath = u.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
-        seen.fetched.push(routePath);
-        /* NAMED (Nov 23 2026, LR-1): Draft asks convert for a draft (it never posts); "Post my reply" sends the shown
-           text to send-approved. Both are answered here, in serve mode only, and every body is recorded. */
-        if (mode === "serve" && (routePath === "/api/agents/sales/convert" || routePath === "/api/agents/sales/send-approved")) {
-          const body = JSON.parse((opts && opts.body) || "{}");
-          (seen.bodies = seen.bodies || []).push([routePath, body]);
-          if (routePath === "/api/agents/sales/convert") return Promise.resolve(reply(200, { results: [{ lead_post_uri: body.lead_post_uri, conversion: "Fits the offer.", draft: "Sorry to hear that. This may help.", draft_rejection: "", sent: false }] }));
-          return Promise.resolve(reply(200, { sent: true, uri: "at://posted/1", text: body.text }));
-        }
-        if (LEAD_ROUTES.indexOf(routePath) !== -1) {
-          if (mode === "refuse") return Promise.resolve(reply(403, REFUSAL));
-          if (routePath === "/api/agents/sales/pipeline") return Promise.resolve(reply(200, { pipeline: SAMPLE_PIPELINE }));
-          return Promise.resolve(reply(200, { leads: SAMPLE_LEADS }));
-        }
-        /* Everything else the pages ask for on boot is out of scope: an
-           empty 404 exercises their own error handling and nothing more. */
-        return Promise.resolve(reply(404, {}));
-      };
-      /* chart.js is not loaded; the pages guard their chart code with
-         try/catch, but a stub keeps that noise out of the run. */
-      window.Chart = function () { return { destroy: function () {} }; };
-    }
-  });
-
-  /* Wait for the lead fetches to have been answered and rendered. */
-  const doc = dom.window.document;
-  const settled = function () {
-    if (pageKey === "radar") return !!doc.querySelector("#leadsList .empty-state, #leadsList .lead-card");
-    /* The list ships with a "Loading leads…" placeholder; it has settled once
-       that is gone and, in refuse mode, once the pipeline board has too. */
-    const list = doc.querySelector("#salesLeadsList");
-    const board = doc.querySelector("#salesPipelineBoard");
-    if (!list || /Loading leads/.test(list.textContent)) return false;
-    if (mode === "refuse") return !!(board && board.querySelector('[data-state="lead_radar_unavailable"]'));
-    return true;
-  };
-  for (let i = 0; i < 60 && !settled(); i++) await sleep(50);
-  await sleep(150);
-
-  return { window: dom.window, doc: doc, seen: seen };
-}
-
 function textOf(el) { return el ? el.textContent.replace(/\s+/g, " ").trim() : null; }
 
+/* Boots one page. o.token (default true), o.tier (bfAccess), o.answer(path, method) -> [status, body]. */
+async function boot(pageKey, o) {
+  o = o || {};
+  let html = fs.readFileSync(PAGES[pageKey], "utf8");
+  if (MUTATE && MUTATIONS[MUTATE][0] === pageKey) html = MUT.replaceOnce(html, MUTATIONS[MUTATE][1], MUTATIONS[MUTATE][2], MUTATE);
+  const seen = { fetched: [], panel: 0, confirms: 0, errors: [] };
+  const vc = new VirtualConsole();
+  vc.on("jsdomError", function (e) { seen.errors.push(String(e && e.message || e).split("\n")[0]); });
+  const dom = new JSDOM(html, {
+    url: "https://bizforce.test/agents/" + path.basename(PAGES[pageKey]),
+    runScripts: "dangerously", pretendToBeVisual: true, virtualConsole: vc,
+    beforeParse: function (window) {
+      if (o.token !== false) window.localStorage.setItem("bf_token", "check-token");
+      window.confirm = function () { seen.confirms += 1; return false; };
+      window.alert = function () {};
+      window.bfAccess = { ready: Promise.resolve({ tier: o.tier || "member" }), showPanel: function () { seen.panel += 1; } };
+      window.fetch = function (url, opts) {
+        const p = String(url).replace(/^https?:\/\/[^/]+/, "").split("?")[0];
+        const method = (opts && opts.method) || "GET";
+        seen.fetched.push(method + " " + p);
+        const a = o.answer ? o.answer(p, method) : null;
+        return Promise.resolve(a ? reply(a[0], a[1]) : reply(404, {}));
+      };
+      window.Chart = function () { seen.chart = true; return { destroy: function () {} }; };
+    }
+  });
+  const doc = dom.window.document;
+  for (let i = 0; i < 60; i++) {
+    await sleep(25);
+    if (pageKey === "radar") {
+      const st = doc.getElementById("lrState");
+      if ((st && !st.hidden) || doc.querySelector("#lrList .lr-card")) break;
+    } else if (seen.fetched.some(f => /\/api\/leads\/archive$/.test(f))) { await sleep(100); break; }
+  }
+  await sleep(100);
+  return { window: dom.window, doc: doc, seen: seen };
+}
+const leadReads = (seen) => seen.fetched.filter(f => / \/api\/leads/.test(f));
+const removedCalls = (seen) => seen.fetched.filter(f => REMOVED.some(r => f.endsWith(" " + r)));
+
 (async function main() {
-  if (MUTATING) console.log("\n!! MUTATION: both pages' refusal branches are now unreachable — the refusal-mode checks below must fail.");
+  if (MUTATE) console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
 
-  /* ── lead-radar.html, refused ─────────────────────────────────────────── */
-  console.log("\n══ lead-radar.html — server refuses ══");
+  console.log("\n══ lead-radar.html — signed out ══");
   {
-    const p = await boot("radar", "refuse");
-    const d = p.doc;
-    const state = d.querySelector('#leadsList [data-state="lead_radar_unavailable"]');
-    console.log("    fetched: " + p.seen.fetched.join(", "));
-    console.log("    read-back #leadsList: " + JSON.stringify(textOf(d.querySelector("#leadsList"))));
-    console.log("    read-back #leadsCount: " + JSON.stringify(textOf(d.querySelector("#leadsCount"))));
-    check("the list shows the refusal state", !!state);
-    check("with the server's sentence, verbatim", textOf(state) === REFUSAL.error, textOf(state) || textOf(d.querySelector("#leadsList")));
-    check("the count reads as not enabled, not as a number of leads", /Not enabled/.test(textOf(d.querySelector("#leadsCount")) || ""), textOf(d.querySelector("#leadsCount")));
-    check("no lead card is in the document", d.querySelectorAll(".lead-card").length === 0, d.querySelectorAll(".lead-card").length + " cards");
-    check("no Draft Engagement button is in the document", d.querySelectorAll(".draft-btn").length === 0);
-    check("no Load More button is in the document", !d.getElementById("loadMoreBtn"));
-    check("the Show Noise button is not displayed", (d.getElementById("noiseBtn") || {}).style && d.getElementById("noiseBtn").style.display === "none");
-    check("nothing on the page still says leads are on their way", !/runs every 5 minutes|No scored leads yet/.test(textOf(d.querySelector("#leadsList")) || ""));
-    check("confirm was never called", p.seen.confirms === 0);
+    const p = await boot("radar", { token: false });
+    const st = p.doc.getElementById("lrState");
+    check("the sign-in state: \"Sign in to see Lead Radar.\" and a Sign in link", st && !st.hidden && st.getAttribute("data-state") === "signed_out" &&
+      /Sign in to see Lead Radar\./.test(textOf(st)) && !!st.querySelector('a[href="/app.html"]'), textOf(st));
+    check("no lead request is made", leadReads(p.seen).length === 0, p.seen.fetched.join(", "));
+    check("the tabs and the lists stay hidden", p.doc.getElementById("lrTabs").hidden && p.doc.getElementById("lrLeads").hidden);
     p.window.close();
   }
 
-  /* ── lead-radar.html, served (the control) ────────────────────────────── */
-  console.log("\n══ lead-radar.html — server serves leads (control) ══");
+  console.log("\n══ lead-radar.html — a free account ══");
   {
-    const p = await boot("radar", "serve");
-    const d = p.doc;
-    check("lead cards render", d.querySelectorAll(".lead-card").length === SAMPLE_LEADS.length, d.querySelectorAll(".lead-card").length + " cards");
-    check("Draft Engagement buttons render", d.querySelectorAll(".draft-btn").length === SAMPLE_LEADS.length);
-    check("no refusal state is shown", !d.querySelector('[data-state="lead_radar_unavailable"]'));
+    const p = await boot("radar", { tier: "free", answer: (r) => r.indexOf("/api/leads") === 0 ? [200, LIST] : null });
+    const st = p.doc.getElementById("lrState");
+    check("the members panel state: \"Lead Radar is for members\" and \"Join to unlock\"", st && !st.hidden && st.getAttribute("data-state") === "members_only" &&
+      /Lead Radar is for members/.test(textOf(st)) && /Join to unlock/.test(textOf(st)), textOf(st));
+    check("no lead request is made", leadReads(p.seen).length === 0, p.seen.fetched.join(", "));
+    const join = p.doc.getElementById("lrJoin");
+    if (join) join.click();
+    check("Join to unlock opens the site's members panel", p.seen.panel === 1, p.seen.panel);
+    check("no lead card is in the document", p.doc.querySelectorAll("#lrList .lr-card[data-lead]").length === 0);
     p.window.close();
   }
 
-  /* ── sales.html, refused ──────────────────────────────────────────────── */
-  console.log("\n══ sales.html — server refuses ══");
+  console.log("\n══ lead-radar.html — the server refuses (402, 401) or fails ══");
   {
-    const p = await boot("sales", "refuse");
+    const p = await boot("radar", { answer: (r) => r.indexOf("/api/leads") === 0 ? [402, { error: "Lead Radar is for members.", code: "members_only" }] : null });
+    const st = p.doc.getElementById("lrState");
+    check("402: the members panel state, and the site's members panel is opened", st && !st.hidden && st.getAttribute("data-state") === "members_only" && p.seen.panel === 1,
+      textOf(st) + " panel " + p.seen.panel);
+    check("402: no lead card, and the tabs stay hidden", p.doc.querySelectorAll(".lr-card[data-lead]").length === 0 && p.doc.getElementById("lrTabs").hidden);
+    p.window.close();
+    const q = await boot("radar", { answer: (r) => r.indexOf("/api/leads") === 0 ? [401, { error: "Sign in." }] : null });
+    check("401: the sign-in state", q.doc.getElementById("lrState").getAttribute("data-state") === "signed_out" && !q.doc.getElementById("lrState").hidden);
+    q.window.close();
+    const e = await boot("radar", { answer: (r) => r.indexOf("/api/leads") === 0 ? [500, { error: "down" }] : null });
+    const es = e.doc.getElementById("lrState");
+    check("500: \"could not load\", never an empty list or a count of 0 leads", es && !es.hidden && /could not load/.test(textOf(es)) &&
+      e.doc.querySelectorAll(".lr-card[data-lead]").length === 0 && e.doc.getElementById("lrLeads").hidden, textOf(es));
+    e.window.close();
+  }
+
+  console.log("\n══ lead-radar.html — a member ══");
+  {
+    const posted = [];
+    const p = await boot("radar", { answer: (r, m) => {
+      if (r === "/api/leads") return [200, LIST];
+      const s = /^\/api\/leads\/([^/]+)\/status$/.exec(r);
+      if (s && m === "POST") { posted.push(s[1]); return [200, { lead: Object.assign({}, LEADS.find(l => l.id === s[1]), { status: "saved" }) }]; }
+      return null;
+    } });
     const d = p.doc;
-    const state = d.querySelector('#salesLeadsList [data-state="lead_radar_unavailable"]');
-    const boardState = d.querySelector('#salesPipelineBoard [data-state="lead_radar_unavailable"]');
-    console.log("    fetched: " + p.seen.fetched.filter(function (r) { return LEAD_ROUTES.indexOf(r) !== -1; }).join(", "));
-    console.log("    read-back #salesLeadsList: " + JSON.stringify(textOf(d.querySelector("#salesLeadsList"))));
-    console.log("    read-back #salesPipelineBoard: " + JSON.stringify(textOf(d.querySelector("#salesPipelineBoard"))));
-    console.log("    read-back #salesConvertAllBtn: " + JSON.stringify(d.getElementById("salesConvertAllBtn") ? d.getElementById("salesConvertAllBtn").outerHTML : null));
-    check("the lead list shows the refusal state", !!state);
-    check("with the server's sentence, verbatim", textOf(state) === REFUSAL.error, textOf(state) || textOf(d.querySelector("#salesLeadsList")));
-    check("the pipeline board shows the refusal too, not five empty columns", !!boardState, textOf(d.querySelector("#salesPipelineBoard")));
-    check("the Post Public Replies button is ABSENT from the document (getElementById)", d.getElementById("salesConvertAllBtn") === null);
-    check("the Post Public Replies button is ABSENT from the document (querySelectorAll by id)", d.querySelectorAll('[id="salesConvertAllBtn"]').length === 0);
-    check("no element in the document reads Post Public Replies",
-      Array.prototype.every.call(d.querySelectorAll("button, a"), function (el) { return !/Post Public Replies/.test(el.textContent); }));
-    check("no per-lead Convert button is in the document", d.querySelectorAll(".sales-convert-btn").length === 0, d.querySelectorAll(".sales-convert-btn").length + " buttons");
-    check("no lead card is in the document", d.querySelectorAll(".sales-lead-card").length === 0);
-    check("no disabled stand-in was left behind", d.querySelectorAll("button[disabled]").length === 0 ||
-      Array.prototype.every.call(d.querySelectorAll("button[disabled]"), function (el) { return !/Convert|Post Public|Re-Draft/.test(el.textContent); }));
-    check("nothing on the page still says leads are on their way", !/scans every 5 minutes|No captured leads yet/.test(textOf(d.querySelector("#salesLeadsList")) || ""));
-    check("confirm was never called", p.seen.confirms === 0);
+    const cards = d.querySelectorAll("#lrList .lr-card[data-lead]");
+    check("the leads tab shows: the tabs, the three stats as served (7 new this week, 2 replied, 1 won)",
+      !d.getElementById("lrTabs").hidden && textOf(d.getElementById("lrStatNew")) === "7" && textOf(d.getElementById("lrStatReplied")) === "2" && textOf(d.getElementById("lrStatWon")) === "1");
+    check("only the Leads and Fingerprint tabs (no empty Inbound or Get found tab)",
+      d.querySelectorAll("#lrTabs [role=tab]").length === 2 && !/Inbound|Get found/.test(textOf(d.getElementById("lrTabs"))), textOf(d.getElementById("lrTabs")));
+    const chips = Array.prototype.map.call(d.querySelectorAll("#lrChips .lr-chip"), c => textOf(c));
+    check("chips: All and each source that is on (Threads is off, so no Threads chip)", JSON.stringify(chips) === JSON.stringify(["All", "Inside BizForce", "Bluesky", "YouTube"]), JSON.stringify(chips));
+    check("a card for each lead, each with its badge and its text", cards.length === 3 &&
+      /BIZFORCE NEED/.test(textOf(cards[0])) && /BLUESKY · ASKED THE ROOM/.test(textOf(cards[1])) && /YOUTUBE COMMENT/.test(textOf(cards[2])) &&
+      textOf(cards[1].querySelector(".lr-text")) === LEADS[1].text, Array.prototype.map.call(cards, c => textOf(c)).join(" | "));
+    check("the green match line is the server's reason (none on a YouTube comment)", textOf(cards[1].querySelector(".lr-match")) === LEADS[1].match_reason && !cards[2].querySelector(".lr-match"));
+    check("a Need offers I can help (to the post), Save and Not a fit; a Bluesky lead invited to reply offers Draft a reply and Open post",
+      !!cards[0].querySelector('a[href="/home.html?post=p1"]') && !!cards[0].querySelector('[data-act="save"]') && !!cards[0].querySelector('[data-act="dismiss"]') &&
+      !!cards[1].querySelector('[data-act="draft"]') && !!cards[1].querySelector('a[href="' + LEADS[1].url + '"]'));
+    check("the footer says who sends", /You approve every reply\. BizForce never messages anyone for you\./.test(textOf(d.body)));
+    check("none of the old page's controls: Show Noise, Refresh, Load More, Draft Engagement, a chart",
+      !d.getElementById("noiseBtn") && !d.getElementById("refreshBtn") && !d.getElementById("loadMoreBtn") && d.querySelectorAll(".draft-btn").length === 0 &&
+      !p.seen.chart && !/chart\.js/.test(fs.readFileSync(PAGES.radar, "utf8")));
+    cards[0].querySelector('[data-act="save"]').click();
+    for (let i = 0; i < 40 && !posted.length; i++) await sleep(25);
+    check("Save asks the server for exactly that lead's status, once", JSON.stringify(posted) === '["n1"]', JSON.stringify(posted));
+    check("no removed route is called, and no confirm dialog", removedCalls(p.seen).length === 0 && p.seen.confirms === 0, removedCalls(p.seen).join(", "));
     p.window.close();
   }
 
-  /* ── sales.html, served (the control) ─────────────────────────────────── */
-  console.log("\n══ sales.html — server serves leads (control) ══");
+  console.log("\n══ sales.html — a member, then the owner ══");
   {
-    const p = await boot("sales", "serve");
+    const p = await boot("sales", { answer: (r) => r === "/api/leads/archive" ? [403, { error: "Only the owner account can read the archive." }] : null });
     const d = p.doc;
-    check("lead cards render", d.querySelectorAll(".sales-lead-card").length === SAMPLE_LEADS.length, d.querySelectorAll(".sales-lead-card").length + " cards");
-    check("per-lead Draft buttons render", d.querySelectorAll(".sales-convert-btn").length === SAMPLE_LEADS.length);
-    /* NAMED (Nov 23 2026, LR-1): BEFORE the bulk "Post Public Replies" button and two confirm dialogs (single and bulk)
-       naming the server's account. AFTER no bulk control at all; Draft shows an editable reply and only "Post my reply"
-       posts, sending exactly the text in the box to send-approved. No confirm dialog: the tap on the shown text is the approval. */
-    check("the bulk Post Public Replies button is gone", d.getElementById("salesConvertAllBtn") === null &&
-      Array.prototype.every.call(d.querySelectorAll("button, a"), function (el) { return !/Post Public Replies/.test(el.textContent); }));
-    check("no refusal state is shown", !d.querySelector('[data-state="lead_radar_unavailable"]'));
-    p.seen.bodies = [];
-    d.querySelector(".sales-convert-btn").click();
-    for (let i = 0; i < 40 && !d.querySelector(".sales-approve-text"); i++) await sleep(25);
-    const box = d.querySelector(".sales-approve-text");
-    check("Draft asks convert for one lead and shows the draft in an editable box; nothing is sent yet",
-      !!box && box.value === "Sorry to hear that. This may help." && p.seen.bodies.length === 1 && p.seen.bodies[0][0] === "/api/agents/sales/convert" &&
-      p.seen.bodies[0][1].lead_post_uri === SAMPLE_LEADS[0].post_uri && !("segment" in p.seen.bodies[0][1]), JSON.stringify(p.seen.bodies));
-    if (box) box.value = "Sorry to hear that. Edited by me.";
-    const post = d.querySelector(".sales-approve-btn");
-    check("a Post my reply button sits with the box", !!post && /Post my reply/.test(post.textContent));
-    if (post) post.click();
-    for (let i = 0; i < 40 && p.seen.bodies.length < 2; i++) await sleep(25);
-    check("Post my reply sends exactly the text in the box, for that lead, to send-approved",
-      p.seen.bodies.length === 2 && p.seen.bodies[1][0] === "/api/agents/sales/send-approved" &&
-      p.seen.bodies[1][1].text === "Sorry to hear that. Edited by me." && p.seen.bodies[1][1].lead_post_uri === SAMPLE_LEADS[0].post_uri, JSON.stringify(p.seen.bodies));
-    check("no confirm dialog was opened at any step", p.seen.confirms === 0);
+    check("a member: the pointer to Lead Radar", !!d.getElementById("salesRadarPointer") && !!d.querySelector('#salesRadarPointer a[href="/agents/lead-radar.html"]'));
+    check("a member: no archive is drawn for a 403", d.getElementById("salesArchive").hidden === true && d.querySelectorAll(".sales-lead-card").length === 0,
+      textOf(d.getElementById("salesLeadsList")));
+    check("no control drafts, sends or converts", !d.querySelector(".sales-convert-btn, .sales-approve-btn, .sales-approve-text, #salesConvertAllBtn") &&
+      Array.prototype.every.call(d.querySelectorAll("button, a"), el => !/Post Public Replies|Post my reply|Draft reply|Convert/.test(el.textContent)));
+    check("no removed route is called, and no confirm dialog", removedCalls(p.seen).length === 0 && p.seen.confirms === 0, removedCalls(p.seen).join(", "));
     p.window.close();
+    const o = await boot("sales", { answer: (r) => r === "/api/leads/archive" ? [200, ARCHIVE] : null });
+    const od = o.doc;
+    check("the owner: the archive, read only, with its old lead", od.getElementById("salesArchive").hidden === false && od.querySelectorAll("#salesLeadsList .sales-lead-card").length === 1 &&
+      /an old find/.test(textOf(od.getElementById("salesLeadsList"))), textOf(od.getElementById("salesLeadsList")));
+    check("the archive's cards carry no button", od.querySelectorAll("#salesLeadsList button").length === 0);
+    check("the owner: no removed route is called either", removedCalls(o.seen).length === 0, removedCalls(o.seen).join(", "));
+    o.window.close();
   }
 
-  /* ── the copy ─────────────────────────────────────────────────────────── */
-  console.log("\n══ the four claims, gone from the source ══");
+  console.log("\n══ the copy ══");
   {
-    const radar = fs.readFileSync(PAGES.radar, "utf8");
-    const sales = fs.readFileSync(PAGES.sales, "utf8");
-    const dash = fs.readFileSync(PAGES.dashboard, "utf8");
-    check("dashboard tile no longer says real-time leads captured for you",
-      dash.indexOf("Real-time buying-intent leads captured from Bluesky, scored and ranked.") === -1);
-    check("dashboard tile says it runs on one account and who it is enabled for",
-      /single social account/.test(dash) && /enabled only for the account that owns it/.test(dash));
-    check("lead-radar subtitle no longer says 'your market'", !/in your market/.test(radar));
-    check("lead-radar subtitle says one keyword set, one account", /One keyword set and one social account/.test(radar));
-    check("no confirm dialog says 'your own connected'", sales.indexOf("your own connected") === -1);
-    // NAMED (Nov 23 2026, LR-1): BEFORE both confirm dialogs (single and bulk) named the server's account. AFTER there are no
-    // confirm dialogs on the page at all: nothing posts but "Post my reply" on the shown text.
+    const radar = fs.readFileSync(PAGES.radar, "utf8"), sales = fs.readFileSync(PAGES.sales, "utf8"), dash = fs.readFileSync(PAGES.dashboard, "utf8");
+    check("dashboard tile no longer says real-time leads captured for you", dash.indexOf("Real-time buying-intent leads captured from Bluesky, scored and ranked.") === -1);
+    // NAMED (Nov 23 2026, LR-2): BEFORE the tile said it ran on one account, enabled only for its owner. AFTER the members' sentence.
+    check("dashboard tile: every member's, and every reply approved", !/single social account|enabled only for the account that owns it/.test(dash) &&
+      dash.indexOf("People asking for what you offer, found inside BizForce, on Bluesky and on YouTube from your Fingerprint. You approve every reply before it posts.") !== -1);
+    check("lead-radar.html no longer says 'your market' or one keyword set and one account", !/in your market|One keyword set and one social account/.test(radar));
+    check("no page says the reply comes from anyone's account but the member's own", sales.indexOf("your own connected") === -1 || /own connected Bluesky account/.test(radar));
     check("sales.html opens no confirm dialog and has no bulk reply", !/confirm\(/.test(sales) && sales.indexOf("convertAllHighIntent") === -1);
-    check("lead-radar empty state no longer promises leads", radar.indexOf("No scored leads yet. The radar runs every 5 minutes.") === -1);
-    check("sales empty state no longer promises leads", sales.indexOf("No captured leads yet. Lead Radar scans every 5 minutes.") === -1);
+    check("no page promises leads are on their way", radar.indexOf("No scored leads yet. The radar runs every 5 minutes.") === -1 && sales.indexOf("No captured leads yet. Lead Radar scans every 5 minutes.") === -1);
+    check("neither page names a removed route", REMOVED.every(r => radar.indexOf(r) === -1 && sales.indexOf(r) === -1), REMOVED.filter(r => radar.indexOf(r) !== -1 || sales.indexOf(r) !== -1).join(", "));
   }
 
   console.log("");
-  if (failures) { console.log("CHECKS FAILED: " + failures); process.exit(1); }
-  console.log("ALL CHECKS PASSED");
+  if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
+  console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);
 })().catch(function (err) {
   console.error("checkLeadRadarPages crashed:", err && (err.stack || err.message) || err);

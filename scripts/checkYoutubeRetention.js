@@ -36,6 +36,10 @@
         or require happens while it runs.
      I. Demand Signals reads no YouTube row (the filter is in the query),
         lists no YouTube-only keyword, and says why in not_measured.
+        NAMED (Nov 23 2026, LR-2): BEFORE loadDemandRows(theme) read the shared bsky_leads over five fixed
+        themes (DEMAND_THEME_KEYWORDS, now removed); AFTER loadDemandRows(userId, theme) reads the member's own
+        member_leads and a theme is one of the member's own words. The same three guarantees hold: no
+        YouTube row, the filter in every query, and a word only YouTube found gives no row at all.
      Every batch logs its counts.
 
    MUTATE=<name> edits lib/youtubeRetention.js or server.js IN MEMORY (nothing
@@ -82,7 +86,8 @@ const MUTATIONS = {
     "    var deletable = leads;"]],
   // Demand Signals reads YouTube rows again
   // NAMED (Nov 23 2026, LR-1): BEFORE the anchor ended "DEMAND_EXCLUDED_SOURCE);"; the line now also skips archived rows
-  "demand-reads-youtube": [[SERVER, "    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE).neq(\"status\", \"archived\");", "    q = q.neq(\"status\", \"archived\");"]]
+  // NAMED (Nov 23 2026, LR-2): BEFORE "    q = q.neq(source...)"; AFTER the query is scoped to the member first.
+  "demand-reads-youtube": [[SERVER, "    q = q.eq(\"user_id\", userId).neq(\"source\", DEMAND_EXCLUDED_SOURCE).neq(\"status\", \"archived\");", "    q = q.eq(\"user_id\", userId).neq(\"status\", \"archived\");"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -126,7 +131,7 @@ function fakeDb(tables, opts) {
   const log = [];
   const copy = (v) => JSON.parse(JSON.stringify(v));
   const cmp = (col, x, y) => {
-    if (col === "created_at" || col === "post_created_at") { const a = Date.parse(x), b = Date.parse(y); return a < b ? -1 : a > b ? 1 : 0; }
+    if (col === "created_at" || col === "post_created_at" || col === "posted_at") { const a = Date.parse(x), b = Date.parse(y); return a < b ? -1 : a > b ? 1 : 0; }
     return x < y ? -1 : x > y ? 1 : 0;
   };
   function keep(f, r) {
@@ -412,43 +417,38 @@ const has = (rows, id) => rows.some(r => r.id === id);
 
   /* ── I. Demand Signals ──────────────────────────────────────────────────── */
   console.log("\n══ I. Demand Signals reads no YouTube row ══");
-  const lifted = ["DEMAND_THEME_KEYWORDS", "DEMAND_NOT_MEASURED", "DEMAND_EXCLUDED_SOURCE", "DEMAND_PAGE", "loadDemandRows"]
+  // NAMED (Nov 23 2026, LR-2): loadDemandRows(userId, theme, windowStart) over member_leads; DEMAND_THEME_KEYWORDS is removed.
+  const lifted = ["LEAD_SCORE_FAILED_REASON", "DEMAND_NOT_MEASURED", "DEMAND_EXCLUDED_SOURCE", "DEMAND_PAGE", "demandRowOf", "loadDemandRows"]
     .map(n => { const d = s.definitionOf(SERVER_SRC, n); if (!d) throw new Error(n + " not found in server.js"); return d; }).join("\n\n");
   seq = 0;
   const dsRows = [];
-  ["bluesky", "mastodon", "youtube"].forEach(src => {
-    dsRows.push(Object.assign(lead(src, NOW - 5 * DAY), { matched_keyword: "how to manifest", post_created_at: iso(Date.now() - 5 * DAY) }));
-    dsRows.push(Object.assign(lead(src, NOW - 5 * DAY), { matched_keyword: "how to manifest", post_created_at: null }));
-    dsRows.push(Object.assign(lead(src, NOW - 5 * DAY), { matched_keyword: "how to manifest", post_created_at: iso(Date.now() - 300 * DAY) }));
+  const mrow = (src, uid, kw, posted) => ({ id: "m-" + (++seq), user_id: uid, source: src, status: "new", matched_keyword: kw, posted_at: posted, created_at: iso(NOW - 5 * DAY), text: "post " + seq });
+  ["bluesky", "threads", "youtube"].forEach(src => {
+    dsRows.push(mrow(src, "u1", "how to manifest", iso(Date.now() - 5 * DAY)));
+    dsRows.push(mrow(src, "u1", "how to manifest", null));
+    dsRows.push(mrow(src, "u1", "how to manifest", iso(Date.now() - 300 * DAY)));
+    dsRows.push(mrow(src, "u2", "how to manifest", iso(Date.now() - 5 * DAY)));
   });
-  const dbI = fakeDb({ bsky_leads: dsRows });
+  // A word only YouTube found for this member.
+  dsRows.push(mrow("youtube", "u1", "tongkat ali reviews", iso(Date.now() - 5 * DAY)));
+  const dbI = fakeDb({ member_leads: dsRows });
   const ctx = { supabase: dbI.client, Date, Object, Array, String, Number, JSON };
   vm.createContext(ctx);
-  vm.runInContext(lifted + "\nthis.__api = { loadDemandRows: loadDemandRows, DEMAND_NOT_MEASURED: DEMAND_NOT_MEASURED, DEMAND_THEME_KEYWORDS: DEMAND_THEME_KEYWORDS };", ctx);
+  vm.runInContext(lifted + "\nthis.__api = { loadDemandRows: loadDemandRows, DEMAND_NOT_MEASURED: DEMAND_NOT_MEASURED };", ctx);
   const windowStart = iso(Date.now() - 90 * DAY);
-  const gotAll = await ctx.__api.loadDemandRows("all", windowStart);
-  const gotTheme = await ctx.__api.loadDemandRows("manifestation", windowStart);
-  check("I. theme all: no YouTube row read; 2 rows in the window, 2 undated, 2 before it (Bluesky and Mastodon only)",
+  const gotAll = await ctx.__api.loadDemandRows("u1", "all", windowStart);
+  const gotTheme = await ctx.__api.loadDemandRows("u1", "how to manifest", windowStart);
+  check("I. theme all: no YouTube row read; 2 rows in the window, 2 undated, 2 before it (Bluesky and Threads only, the member's own)",
     gotAll.rows.length === 2 && gotAll.rows.every(r => r.source !== "youtube") && gotAll.undated === 2 && gotAll.datedBefore === 2,
     JSON.stringify([gotAll.rows.map(r => r.source), gotAll.undated, gotAll.datedBefore]));
-  check("I. a theme: the same", gotTheme.rows.length === 2 && gotTheme.rows.every(r => r.source !== "youtube") && gotTheme.undated === 2 && gotTheme.datedBefore === 2,
+  check("I. a theme (one of the member's words): the same", gotTheme.rows.length === 2 && gotTheme.rows.every(r => r.source !== "youtube") && gotTheme.undated === 2 && gotTheme.datedBefore === 2,
     JSON.stringify([gotTheme.rows.map(r => r.source), gotTheme.undated, gotTheme.datedBefore]));
   check("I. the filter is in every query (source neq youtube), not applied afterwards",
     dbI.log.length === 6 && dbI.log.every(q => q.filters.some(f => f[0] === "neq" && f[1] === "source" && f[2] === "youtube")), dbI.log.length);
   const nm = ctx.__api.DEMAND_NOT_MEASURED;
   check("I. not_measured says YouTube is excluded, and why", nm.some(x => /^YouTube: excluded\. YouTube's API terms forbid combining YouTube data with data from other sources/.test(x)), JSON.stringify(nm));
-  // NAMED (Nov 23 2026, LR-1): BEFORE leadRadar.js + mastodonRadar.js; mastodonRadar.js is deleted (Mastodon lead search
-  // removed). The three YouTube-only keywords are the same either way (none was on the Mastodon hashtag list).
-  const radarSrc = fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8");
-  const ytSrc = fs.readFileSync(path.join(REPO, "youtubeRadar.js"), "utf8");
-  const ytKw = /KEYWORDS = \[([\s\S]*?)\];/.exec(ytSrc);
-  const ytToday = ytKw ? (ytKw[1].match(/"[^"]+"/g) || []).map(x => x.slice(1, -1)) : [];
-  const ytOnlyToday = ytToday.filter(k => radarSrc.indexOf("\"" + k + "\"") === -1);
-  // youtubeRadar.js's list at 5746f53, never searched on Bluesky or Mastodon and on no Bluesky or Mastodon row (Oct 2026).
-  const ytOnlyEarlier = ["low libido help", "boost energy naturally", "natural male vitality", "tongkat ali reviews"];
-  const flat = [].concat.apply([], Object.values(ctx.__api.DEMAND_THEME_KEYWORDS));
-  check("I. no theme lists a YouTube-only keyword (" + ytOnlyToday.length + " searched only by youtubeRadar.js today, " + ytOnlyEarlier.length + " from its earlier list)",
-    ytOnlyToday.length === 3 && ytOnlyToday.concat(ytOnlyEarlier).every(k => flat.indexOf(k) === -1), JSON.stringify(ytOnlyToday.concat(ytOnlyEarlier).filter(k => flat.indexOf(k) !== -1)));
+  const gotYtOnly = await ctx.__api.loadDemandRows("u1", "tongkat ali reviews", windowStart);
+  check("I. a word only YouTube found gives no row and no count", gotYtOnly.rows.length === 0 && gotYtOnly.undated === 0 && gotYtOnly.datedBefore === 0, JSON.stringify(gotYtOnly));
 
   globalThis.fetch = realFetch;
   console.log("");

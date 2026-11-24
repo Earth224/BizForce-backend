@@ -5,16 +5,22 @@
    Frontend "Demand signals on the R&D page" added the rd/demand-signals tool
    to rd-agent.html as an owner-only tool (adminOnly), drawn by
    scripts/agent-profile.js only after /api/auth/me says admin, with its own
-   renderer. This runs agent-profile.js in vm with a stubbed DOM and fetch, and
+   renderer. NAMED (Nov 23 2026, LR-2): BEFORE owner-only, over the shared
+   bsky_leads pool, with seven fixed themes. AFTER every member's, over their
+   own Lead Radar leads (member_leads): the form is drawn like any R&D tool,
+   its themes are "all" plus the words in the member's Fingerprint (the page's
+   own script reads GET /api/leads/fingerprint, members only), and a free
+   account makes no call. This runs agent-profile.js in vm with a stubbed DOM and fetch, and
    feeds it FIXTURES MADE BY THIS REPO'S REAL ROUTE: POST
    /api/agents/rd/demand-signals, lifted from server.js and run against a fake
    database whose rows carry post text, handles and post addresses, with the
    model stubbed. No browser, no network, no model; nothing is written.
 
    WHAT THIS PROVES
-     A. The form only for an admin; nothing at all for anyone else; an error
-        line, never the form, when /api/auth/me cannot be read. The other R&D
-        tools are drawn as before.
+     A. The form for every member (LR-2: BEFORE only for an admin), with the
+        Fingerprint's words as themes; no word: "all" and a link to the
+        Fingerprint; a free account: no Fingerprint call. The other R&D tools
+        are drawn as before.
      B. Themes first, each with its keyword chips and "supported by N of M
         sampled posts"; a "<5" from the server is "fewer than 5", never a
         number; undated posts are stated as counted but not dated.
@@ -46,9 +52,16 @@ const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "Biz
 const MUTATE = process.env.MUTATE || "";
 const PROFILE = "scripts/agent-profile.js", RD = "rd-agent.html";
 
+/* NAMED (Nov 23 2026, LR-2): BEFORE "form-for-non-admins" (the owner-only gate, which no tool on rd-agent.html uses now).
+   AFTER two edits of rd-agent.html, named by their file: the tool made owner-only again, and the Fingerprint's words
+   never added. An entry of three is [file, from, to]; of two, agent-profile.js as before. */
 const MUTATIONS = {
-  // the owner-only tool is drawn for everyone
-  "form-for-non-admins": [["slot.innerHTML = admin ? toolMarkup(tool) : \"\";", "slot.innerHTML = toolMarkup(tool);"]],
+  // the members' tool is owner-only again
+  "form-owner-only-again": [[RD, "      \"id\": \"demand-signals\",\n", "      \"id\": \"demand-signals\",\n      \"adminOnly\": true,\n"]],
+  // the member's Fingerprint words are never offered as themes
+  "fingerprint-words-dropped": [[RD, "var o = document.createElement(\"option\"); o.value = w; o.textContent = w; sel.appendChild(o);", "var o = document.createElement(\"option\"); o.value = w; o.textContent = w;"]],
+  // a free account reads the Fingerprint too
+  "free-reads-fingerprint": [[RD, "    if (!a || a.tier !== \"member\") return;\n    var t = null; try { t = localStorage.getItem(\"bf_token\"); } catch (e) { t = null; }\n    if (!t) return;\n    fetch(API + \"/api/leads/fingerprint\"", "    if (!a) return;\n    var t = null; try { t = localStorage.getItem(\"bf_token\"); } catch (e) { t = null; }\n    if (!t) return;\n    fetch(API + \"/api/leads/fingerprint\""]],
   // a suppressed count is printed as its threshold
   "small-count-as-number": [["    if (m) return \"fewer than \" + m[1];\n", "    if (m) return m[1];\n"]],
   // what the report cannot say is hidden
@@ -65,8 +78,8 @@ const FILES = {};
 if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
-  for (const [from, to] of edits) FILES[PROFILE] = s.replaceOnce(FILES[PROFILE], from, to, MUTATE);
-  console.log("\n!! MUTATION: " + MUTATE + " (agent-profile.js, in memory)");
+  for (const e of edits) { const [file, from, to] = e.length === 3 ? e : [PROFILE, e[0], e[1]]; FILES[file] = s.replaceOnce(FILES[file], from, to, MUTATE); }
+  console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
 }
 
 let passes = 0, failures = 0;
@@ -134,6 +147,7 @@ function fakeDb(rows) {
       if (op === "lt") return r[col] != null && r[col] < a;
       // loadDemandRows filters source neq youtube in every query (YouTube retention build, Oct 2026).
       if (op === "neq") return r[col] !== a;
+      if (op === "eq") return r[col] === a;   // NAMED (Nov 23 2026, LR-2): the route reads one member's rows (user_id)
       return true;
     });
   }
@@ -160,19 +174,25 @@ let n = 0;
 const SECRET_HANDLE = "secret-person.bsky.social";
 const SECRET_URI = "at://did:plc:secretperson/app.bsky.feed.post/3kxyz";
 const SECRET_TEXT = "my private struggle with this method has lasted eleven long months now";
-const row = (kw, extra) => Object.assign({ id: "r" + String(++n).padStart(4, "0"), matched_keyword: kw, source: "bluesky", post_created_at: ago(10),
-  status: "scored", intent_score: 72, intent_reason: "asks a question", post_text: SECRET_TEXT + " " + n + " @" + SECRET_HANDLE,
-  author_handle: SECRET_HANDLE, author_did: "did:plc:secretperson", post_uri: SECRET_URI + n, post_id: "pid" + n, post_cid: "cid" + n,
-  outreach_safe: true, suggested_product: "Tongkat Ali" }, extra || {});
+/* NAMED (Nov 23 2026, LR-2): BEFORE bsky_leads rows (post_created_at, intent_score, intent_reason, suggested_product). AFTER
+   the member's own member_leads rows (posted_at, score, scored_at, match_reason, text), plus another member's rows that
+   must never be counted. */
+const MEMBER = "member-1", OTHER = "member-2";
+const row = (kw, extra) => Object.assign({ id: "r" + String(++n).padStart(4, "0"), user_id: MEMBER, matched_keyword: kw, source: "bluesky", posted_at: ago(10),
+  status: "new", score: 72, scored_at: ago(9), match_reason: "Good match: asks a question", text: SECRET_TEXT + " " + n + " @" + SECRET_HANDLE,
+  author_handle: SECRET_HANDLE, url: "https://bsky.app/profile/" + SECRET_HANDLE + "/post/" + n, external_id: SECRET_URI + n,
+  outreach_safe: true, reply_invited: true }, extra || {});
 function rows() {
   n = 0;
   const out = [];
   for (let i = 0; i < 12; i++) out.push(row("how to manifest"));
-  for (let i = 0; i < 3; i++) out.push(row("law of assumption", { intent_score: 15 }));
-  for (let i = 0; i < 2; i++) out.push(row("how to manifest", { post_created_at: ago(300) }));
-  for (let i = 0; i < 6; i++) out.push(row("how to manifest", { post_created_at: null }));
+  for (let i = 0; i < 3; i++) out.push(row("law of assumption", { score: 15 }));
+  for (let i = 0; i < 2; i++) out.push(row("how to manifest", { posted_at: ago(300) }));
+  for (let i = 0; i < 6; i++) out.push(row("how to manifest", { posted_at: null }));
+  for (let i = 0; i < 4; i++) out.push(row("how to manifest", { user_id: OTHER }));
   return out;
 }
+const FINGERPRINT_WORDS = ["how to manifest", "law of assumption"];
 const THEMES_REPLY = [
   "THEME: Doubt after trying | WANT: People want to know why methods fail for them and what to change. | KEYWORDS: how to manifest; law of assumption | SUPPORT: 7",
   "THEME: Off topic | WANT: Something else entirely. | KEYWORDS: low libido | SUPPORT: 3",
@@ -184,6 +204,9 @@ async function realResponse(opts) {
   const ctx = {
     supabase: fakeDb(rows()), JSON, Math, Promise, Number, Object, Array, String, Date,
     nowIso: () => new Date().toISOString(), process: { env: {} }, console: { log() {}, error() {}, warn() {} }, OWNER_ACCOUNT_ID: "owner",
+    // NAMED (Nov 23 2026, LR-2): the route reads the member's Fingerprint (lib/leadFingerprint.js); nothing else is required
+    // (lib/agentNetwork.js throws here, so the sales>rd link reads as on, as before).
+    require: (name) => { if (/leadFingerprint$/.test(name)) return { shape: x => x, getOrBuild: async () => ({ keywords: FINGERPRINT_WORDS.slice() }) }; throw new Error("no require: " + name); },
     requireAuth: function requireAuth() {}, requireActiveSubscription: function requireActiveSubscription() {}, aiLimiter: function aiLimiter() {},
     startToolRun: async () => ({ taskId: "task-page", complete: async () => true, fail: async () => {} }),
     resolvePreferredLanguage: async () => null,
@@ -194,7 +217,8 @@ async function realResponse(opts) {
   vm.createContext(ctx);
   vm.runInContext(LIFTED, ctx);
   const res = { code: 200, body: null, status(x) { this.code = x; return this; }, json(x) { this.body = JSON.parse(JSON.stringify(x)); return this; } };
-  await handler({ user: { id: opts.id || "owner", role: opts.role || "admin" }, body: opts.body || { theme: "manifestation" } }, res, () => { res.code = 500; });   // NAMED (Nov 23 2026, LR-1): + id
+  // NAMED (Nov 23 2026, LR-2): BEFORE the owner (admin) and theme "manifestation". AFTER a member and theme "all".
+  await handler({ user: { id: opts.id || MEMBER, role: opts.role || "user" }, body: opts.body || { theme: "all" } }, res, () => { res.code = 500; });
   return { status: res.code, body: res.body, publicUser: ctx.api.publicUser };
 }
 
@@ -241,34 +265,45 @@ const meAs = (role, publicUser) => () => ({ status: 200, body: { user: publicUse
   const pu = real.publicUser;
 
   /* ── A. who sees the form ─────────────────────────────────────────────── */
-  console.log("\n══ A. the form, only for the owner ══");
+  // NAMED (Nov 23 2026, LR-2): BEFORE the form only for the owner (adminOnly, drawn after /api/auth/me said admin) with seven
+  // fixed themes. AFTER the form for every member, its themes "all" plus the member's Fingerprint words.
+  console.log("\n══ A. the form, for every member ══");
   const cfg = rdConfig();
   const tool = cfg.tools.find(t => t.id === "demand-signals");
-  check("rd-agent.html has the demand-signals tool, owner-only", tool && tool.adminOnly === true);
+  check("rd-agent.html has the demand-signals tool, for members (not owner-only)", tool && !tool.adminOnly && /Members only\./.test(tool.description) && !/Owner account only/.test(tool.description));
   const themeField = tool && tool.fields.find(f => f.name === "theme");
-  check("theme is a select of the seven themes", themeField && themeField.type === "select" &&
-    JSON.stringify(themeField.options.map(o => o.value)) === JSON.stringify(["manifestation", "quantum_jumping", "supplements", "libido", "energy", "bizforce", "all"]));
+  check("theme is a select that starts with \"all\" alone (the member's words are added from their Fingerprint)", themeField && themeField.type === "select" &&
+    JSON.stringify(themeField.options.map(o => o.value)) === JSON.stringify(["all"]) && /Fingerprint/.test(themeField.hint || ""));
   const wd = tool && tool.fields.find(f => f.name === "window_days"), ss = tool && tool.fields.find(f => f.name === "sample_size");
   check("window_days 7-365 and sample_size 10-80, both numbers", wd && wd.type === "number" && wd.min === 7 && wd.max === 365 && ss && ss.type === "number" && ss.min === 10 && ss.max === 80);
-  async function gate(meHandler) {
-    const pg = loadPage((m, p) => p === "/api/auth/me" ? meHandler() : { status: 404, body: { error: "unplanned" } });
-    const markup = pg.ap.toolsMarkup();
-    await pg.ap.drawAdminTools();
-    return { markup, slot: pg.els.get(pg.ap.toolDomId("demand-signals", "gate")).innerHTML };
+  const pg0 = loadPage(() => ({ status: 404, body: {} }));
+  const markup = pg0.ap.toolsMarkup();
+  check("the form is drawn with the page, like the other R&D tools: its run button and three fields, no owner gate",
+    markup.indexOf('data-tool-run="demand-signals"') !== -1 && ["theme", "window_days", "sample_size"].every(f => markup.indexOf("apTool_demand_signals_f_" + f) !== -1) &&
+    markup.indexOf('id="apTool_demand_signals_gate"') === -1);
+  check("the other R&D tools are drawn as before", markup.indexOf('data-tool-run="brief"') !== -1 && markup.indexOf('data-tool-run="competitor-scan"') !== -1);
+  // The page's own script, run with a fake document: the Fingerprint's words become themes.
+  const FP_SCRIPT = (FILES[RD].match(/<script>\s*(\(function \(\) \{\s*var API = [\s\S]*?apTool_demand_signals_f_theme[\s\S]*?\}\)\(\);)\s*<\/script>/) || [])[1];
+  async function fingerprintRun(tier, words) {
+    const calls = [], sel = { options: [{ value: "all" }], parentNode: { insertBefore(el) { sel.after = el; } }, appendChild(o) { this.options.push(o); } };
+    let access;
+    const doc = { getElementById: id => id === "apTool_demand_signals_f_theme" ? sel : null, createElement: () => ({}), addEventListener: (ev, fn) => { if (ev === "bf-access") access = fn; } };
+    const ctx = { window: {}, document: doc, localStorage: { getItem: () => "tok" }, setTimeout: fn => fn(),
+      fetch: (url, init) => { calls.push({ url, auth: init && init.headers && init.headers.Authorization }); return Promise.resolve({ ok: true, json: () => Promise.resolve({ fingerprint: { keywords: words } }) }); } };
+    vm.runInNewContext(FP_SCRIPT || "throw new Error('no script')", ctx);
+    access({ detail: { tier } });
+    await flush();
+    return { calls, values: sel.options.map(o => o.value), after: sel.after };
   }
-  const asAdmin = await gate(meAs("admin", pu));
-  check("before /api/auth/me answers, the page has an empty slot and no demand-signals button",
-    asAdmin.markup.indexOf('data-tool-run="demand-signals"') === -1 && asAdmin.markup.indexOf('id="apTool_demand_signals_gate"') !== -1);
-  check("the other R&D tools are drawn as before", asAdmin.markup.indexOf('data-tool-run="brief"') !== -1 && asAdmin.markup.indexOf('data-tool-run="competitor-scan"') !== -1);
-  check("admin: the form is drawn, with its run button and three fields",
-    asAdmin.slot.indexOf('data-tool-run="demand-signals"') !== -1 && ["theme", "window_days", "sample_size"].every(f => asAdmin.slot.indexOf("apTool_demand_signals_f_" + f) !== -1), asAdmin.slot.slice(0, 200));
-  const asUser = await gate(meAs("user", pu));
-  check("non-admin: nothing at all is drawn", asUser.slot === "", asUser.slot);
-  const asBroken = await gate(() => ({ status: 500, body: { error: "auth lookup failed" } }));
-  check("/api/auth/me failing: an error line, never the form",
-    asBroken.slot.indexOf("data-tool-run") === -1 && /could not be checked/.test(asBroken.slot) && /auth lookup failed/.test(asBroken.slot), asBroken.slot);
-  const asOffline = await gate(() => "reject");
-  check("/api/auth/me unreachable: an error line too", asOffline.slot.indexOf("data-tool-run") === -1 && /could not be checked/.test(asOffline.slot), asOffline.slot);
+  const fm = FP_SCRIPT ? await fingerprintRun("member", FINGERPRINT_WORDS) : null;
+  check("a member: GET /api/leads/fingerprint, once, with their token; each Fingerprint word becomes a theme after \"all\"",
+    fm && fm.calls.length === 1 && /\/api\/leads\/fingerprint$/.test(fm.calls[0].url) && fm.calls[0].auth === "Bearer tok" &&
+    JSON.stringify(fm.values) === JSON.stringify(["all"].concat(FINGERPRINT_WORDS)), fm && JSON.stringify(fm));
+  const fe = FP_SCRIPT ? await fingerprintRun("member", []) : null;
+  check("no words yet: \"all\" alone, and a link to the Fingerprint", fe && JSON.stringify(fe.values) === '["all"]' && fe.after &&
+    /lead-radar\.html#fingerprint/.test(fe.after.innerHTML || ""), fe && JSON.stringify(fe.values));
+  const ff = FP_SCRIPT ? await fingerprintRun("free", FINGERPRINT_WORDS) : null;
+  check("a free account makes no call", ff && ff.calls.length === 0 && JSON.stringify(ff.values) === '["all"]', ff && JSON.stringify(ff.calls));
 
   /* ── B. themes and measured ───────────────────────────────────────────── */
   console.log("\n══ B. the report ══");
@@ -314,7 +349,9 @@ const meAs = (role, publicUser) => () => ({ status: 200, body: { user: publicUse
 
   /* ── E. no person ─────────────────────────────────────────────────────── */
   console.log("\n══ E. no post, handle or address ══");
-  const leaks = (html) => [SECRET_HANDLE, "secret-person", "secretperson", SECRET_URI, "my private struggle", "asks a question", "Tongkat Ali"].filter(x => html.indexOf(x) !== -1);
+  // NAMED (Nov 23 2026, LR-2): BEFORE also "Tongkat Ali" (the old rows' suggested product, a column member_leads does not have).
+  const leaks = (html) => [SECRET_HANDLE, "secret-person", "secretperson", SECRET_URI, "my private struggle", "asks a question"].filter(x => html.indexOf(x) !== -1);
+  check("another member's rows are never counted: 15 posts in the window, as the member's own rows alone", real.body.measured && /Posts in the window<\/div><div class="ap-m-val">15</.test(h));
   check("the real route's report shows none of the fixture's post text, handles or addresses", leaks(h).length === 0, leaks(h).join(", "));
   const hostile = JSON.parse(JSON.stringify(real.body));
   hostile.post_text = SECRET_TEXT; hostile.author_handle = SECRET_HANDLE; hostile.post_uri = SECRET_URI;
@@ -329,15 +366,17 @@ const meAs = (role, publicUser) => () => ({ status: 200, body: { user: publicUse
   async function run(handler) {
     const pg = loadPage(handler);
     const t = pg.ap.TOOLS.find(x => x.id === "demand-signals");
-    pg.document.getElementById(pg.ap.toolDomId("demand-signals", "f_theme")).value = "manifestation";
+    pg.document.getElementById(pg.ap.toolDomId("demand-signals", "f_theme")).value = "all";   // NAMED (Nov 23 2026, LR-2): BEFORE "manifestation"
     pg.ap.runTool(t);
     await flush();
     return { msg: pg.els.get(pg.ap.toolDomId("demand-signals", "msg")), result: pg.els.get(pg.ap.toolDomId("demand-signals", "result")).innerHTML, posted: pg.posted };
   }
-  // NAMED (Nov 23 2026, LR-1): BEFORE { role: "user" } on the owner's id; the route now refuses by id, so the refused caller is another account.
-  const refused = await realResponse({ role: "user", id: "member-1" });
-  const r403 = await run((m, p) => p === ROUTE ? refused : { status: 404, body: {} });
-  check("a 403 shows the server's message and no result", refused.status === 403 && r403.msg.textContent === refused.body.error && r403.result === "", r403.msg.textContent);
+  // NAMED (Nov 23 2026, LR-2): BEFORE a 403 for anyone but the owner. AFTER a theme that is not "all" or one of the member's
+  // Fingerprint words is refused (400), naming the themes they can choose.
+  const refused = await realResponse({ body: { theme: "manifestation" } });
+  const r400 = await run((m, p) => p === ROUTE ? refused : { status: 404, body: {} });
+  check("a refused theme (400) shows the server's message and no result", refused.status === 400 && /one of the words in your Fingerprint: how to manifest, law of assumption, all\./.test(refused.body.error) &&
+    r400.msg.textContent === refused.body.error && r400.result === "", r400.msg.textContent);
   const r500 = await run((m, p) => p === ROUTE ? { status: 500, body: { error: "database unavailable" } } : { status: 404, body: {} });
   check("a 500 shows the server's message and no result — never an empty report", r500.msg.textContent === "database unavailable" && r500.result === "" && /err/.test(r500.msg.className));
   const r200 = await run((m, p) => p === ROUTE ? { status: 200, body: { success: true, themes: [] } } : { status: 404, body: {} });
@@ -345,7 +384,7 @@ const meAs = (role, publicUser) => () => ({ status: 200, body: { user: publicUse
     /could not be read/.test(r200.result) && r200.result.indexOf("Measured by the server") === -1 && r200.result.indexOf("No themes") === -1, r200.result.slice(0, 200));
   const rok = await run((m, p) => p === ROUTE ? { status: 200, body: real.body } : { status: 404, body: {} });
   const sent = rok.posted.find(x => x.path === ROUTE);
-  check("the form posts the theme to the route, leaving unset numbers to the server's defaults", sent && JSON.stringify(sent.body) === JSON.stringify({ theme: "manifestation" }), sent && JSON.stringify(sent.body));
+  check("the form posts the theme to the route, leaving unset numbers to the server's defaults", sent && JSON.stringify(sent.body) === JSON.stringify({ theme: "all" }), sent && JSON.stringify(sent.body));
   check("and a success renders the report", rok.result.indexOf("Doubt after trying") !== -1);
 
   check("zero network", NETWORK.length === 0, JSON.stringify(NETWORK));

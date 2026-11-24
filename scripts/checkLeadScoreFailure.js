@@ -1,411 +1,182 @@
-"use strict";
-/* ══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════
    checkLeadScoreFailure — a failed score is not a score.
 
-   THE DEFECT. When scoring a lead failed three times, leadRadar.js wrote
-   intent_score 0 with status "scored" and intent_reason "scoring failed after
-   3 attempts". 1,589 live rows carried it: a judgement nobody made, stored as a
+   THE DEFECT (2026). When scoring a lead failed three times, leadRadar.js wrote
+   intent_score 0 with status "scored": a judgement nobody made, stored as a
    real low score, sorted and counted with the real ones.
 
-   scoreNewLeads (leadRadar.js) and the five bsky_leads consumers in server.js —
-   GET /api/leads, GET /api/agents/sales/leads, GET /api/agents/sales/pipeline
-   and POST /api/agents/sales/convert (NAMED (Nov 23 2026, LR-1): runSalesAutoConvert is retired,
-   so it is no longer lifted) — are lifted and run
-   in a vm against a fake Supabase that applies the filters and Postgres's own
-   ordering rule (a descending sort puts nulls FIRST unless told otherwise).
-   Anthropic is a stub class; convertSingleLead is a spy that drafts nothing.
-   No network, no model, no database.
+   NAMED (Nov 23 2026, LR-2): BEFORE this ran leadRadar.js scoreNewLeads and the
+   five bsky_leads consumers (GET /api/leads, GET /api/agents/sales/leads, the
+   pipeline, POST /api/agents/sales/convert and its segment mode). AFTER LR-2
+   removed all of them (the original is in git, 65c0825): each member's leads
+   are scored by lib/memberRadar.js scoreMember on their own ledger, read by
+   lib/leadRoutes.js, and counted for demand by server.js demandRowOf.
 
-   WHAT THIS PROVES
-     1. Three failed scorings: the first two leave the lead "new" with its
-        attempt count; the third writes intent_score null (written, not
-        omitted), status "score_failed" and the failure reason. The scorer
-        never picks it up again. A successful scoring is unchanged: the score
-        and status "scored".
-     2. GET /api/leads and GET /api/agents/sales/leads show only real scores —
-        no null, no failed row, no legacy 0-with-the-failure-reason — even when
-        the database hands those rows back; each query asks for a non-null
-        score and orders it with nulls last.
-     3. The pipeline keeps a failed lead's row but shows no number: intent_score
-        null and score_label "scoring failed".
-     4. NAMED (Nov 23 2026, LR-1): BEFORE "runSalesAutoConvert drafts only for real scores". The
-        automatic loop is retired; section 4 now proves it is gone.
-     5. POST /api/agents/sales/convert refuses a named failed lead (not_scored).
-        NAMED (Nov 23 2026, LR-1): BEFORE "and its segment path drafts only real scores"; segment
-        mode is removed, so a segment request is refused (400) and drafts nothing.
-     1b. NAMED (Nov 23 2026, LR-1): every scoring call is enforced and recorded on the model ledger.
+   WHAT THIS PROVES, with the real functions and a fake database (no model, no
+   network, no write anywhere):
+     1. Removed: scoreNewLeads, runSalesAutoConvert, convertSingleLead and the
+        sales/leads, sales/pipeline and sales/convert routes are in no code.
+     2. A call that fails (thrown) writes nothing: the lead stays unscored and
+        waits for the next tick, and the tick stops there.
+     3. An answer that cannot be read is stored with NO score (null) and the
+        reason SCORE_UNREAD_REASON ("The score could not be read."), unsafe
+        and not invited, so it can never be replied to, and with scored_at
+        set, so it is never scored again (no second charge for it) and it
+        counts toward the member's daily scoring cap (a call was spent).
+        NAMED (Nov 23 2026, LR-2): BEFORE the first LR-2 stored it as 0 with
+        no reason (the defect above, again); the owner fixed it the same day.
+     4. It is not shown as a lead by default (isWeak), and the summary count
+        asks only for scores of 40 or more.
+     5. Demand (demandRowOf) reads it as a failed score, with the failure
+        reason, never as a real 0; a real 0 with its reason stays a 0.
+     6. A readable answer is stored as given, with its reason.
 
-   MUTATE=<name> edits the lifted source (nothing on disk is touched).
-   MUTATE=all runs each in its own process and passes only if every one fails
-   at least one check. A mutation whose search text does not match exactly once
-   is an ERROR, never counted as caught.
-   ══════════════════════════════════════════════════════════════════════════ */
-
-const fs = require("fs"), vm = require("vm"), path = require("path"), net = require("net"), dns = require("dns");
-const s = require("./_shared");
-
-const NETWORK = [];
-net.Socket.prototype.connect = function () { NETWORK.push("socket"); throw new Error("checkLeadScoreFailure: no network"); };
-dns.lookup = function (host) { NETWORK.push("dns " + host); throw new Error("checkLeadScoreFailure: no network"); };
-
+   MUTATIONS (MUTATE=<name> edits a source IN MEMORY; MUTATE=all runs each):
+     unread-zero     an unreadable answer is stored as a 0 again            → 3, 5
+     unread-reason   an unreadable answer gets a match reason, like a real one → 3, 5
+     unread-safe     an unreadable answer is stored safe and invited        → 3
+     unread-rescored an unreadable answer leaves scored_at null             → 3
+     thrown-writes   a thrown call is written as a 0                        → 2
+     demand-real     demand reads an unreadable answer as a real score      → 5
+   ═══════════════════════════════════════════════════════════════════════════ */
+"use strict";
+const fs = require("fs"), path = require("path"), vm = require("vm"), Module = require("module");
 const REPO = path.join(__dirname, "..");
+const MUT = require("./_shared");
 const MUTATE = process.env.MUTATE || "";
-const SERVER = "server.js", RADAR = "leadRadar.js";
 
+const MR = "lib/memberRadar.js", SERVER = "server.js";
 const MUTATIONS = {
-  // the failure path writes a number again
-  "write-zero-on-failure": [[RADAR, "            intent_score:   null,\n            intent_reason:  LEAD_SCORE_FAILED_REASON,\n",
-    "            intent_score:   0,\n            intent_reason:  LEAD_SCORE_FAILED_REASON,\n"]],
-  // the failure path keeps status "scored"
-  "keep-scored-on-failure": [[RADAR, "            status:         \"score_failed\"\n", "            status:         \"scored\"\n"]],
-  // GET /api/leads orders without nulls last
-  "drop-nulls-last": [[SERVER, "      .order(\"intent_score\", { ascending: false, nullsFirst: false })\n      .limit(100);",
-    "      .order(\"intent_score\", { ascending: false })\n      .limit(100);"]],
-  // NAMED (Nov 23 2026, LR-1): BEFORE "auto-convert-takes-null-score" (runSalesAutoConvert is retired). AFTER: convert drafts a failed lead
-  "convert-takes-failed-lead": [[SERVER, "      if (!leadHasRealScore(requestedLead)) {\n        refusals.push({\n          code:   \"not_scored\",",
-    "      if (false) {\n        refusals.push({\n          code:   \"not_scored\","]],
-  // NAMED (Nov 23 2026, LR-1): the scorer's call is not recorded on the ledger
-  "scorer-not-recorded": [[RADAR, "        await modelLedger.record({", "        if (false) await modelLedger.record({"]]
+  "unread-zero": [[MR, "      : { score: null, match_reason: SCORE_UNREAD_REASON,", "      : { score: 0, match_reason: SCORE_UNREAD_REASON,"]],
+  "unread-reason": [[MR, "      : { score: null, match_reason: SCORE_UNREAD_REASON,", "      : { score: null, match_reason: \"Good match: unread\","]],
+  "unread-safe": [[MR, "      : { score: null, match_reason: SCORE_UNREAD_REASON, outreach_safe: false, reply_invited: false,", "      : { score: null, match_reason: SCORE_UNREAD_REASON, outreach_safe: true, reply_invited: true,"]],
+  "unread-rescored": [[MR, "      : { score: null, match_reason: SCORE_UNREAD_REASON, outreach_safe: false, reply_invited: false, scored_at: at,", "      : { score: null, match_reason: SCORE_UNREAD_REASON, outreach_safe: false, reply_invited: false, scored_at: null,"]],
+  "thrown-writes": [[MR, "      return { scored: scored, alerts: alerts, reason: \"call_failed\" };", "      out = { text: \"{\\\"score\\\": 0, \\\"reason\\\": \\\"failed\\\"}\" };"]],
+  "demand-real": [[SERVER, "  var scored = !!l.scored_at;\n", "  var scored = !!l.scored_at && typeof l.score === \"number\";\n"]]
 };
-
-// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
-if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 const FILES = {};
-[SERVER, RADAR].forEach(f => { FILES[f] = fs.readFileSync(path.join(REPO, f), "utf8").replace(/\r\n/g, "\n"); });
+[MR, SERVER, "leadRadar.js"].forEach(f => { FILES[f] = fs.readFileSync(path.join(REPO, f), "utf8").replace(/\r\n/g, "\n"); });
 if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
-  for (const [file, from, to] of edits) FILES[file] = s.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
+  for (const [file, from, to] of edits) FILES[file] = MUT.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
   console.log("\n!! MUTATION: " + MUTATE);
 }
-
-let passes = 0, failures = 0;
+function load(rel) {
+  const m = new Module(path.join(REPO, rel), module);
+  m.filename = path.join(REPO, rel);
+  m.paths = Module._nodeModulePaths(path.dirname(m.filename));
+  m._compile(FILES[rel], m.filename);
+  return m.exports;
+}
+let failures = 0, passes = 0;
 function check(label, ok, detail) {
   if (ok) { passes++; console.log("    pass  " + label); }
   else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + String(detail).slice(0, 300) + "]" : "")); }
 }
+const code = src => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+const J = JSON.stringify;
 
-/* ── lifting ────────────────────────────────────────────────────────────── */
-const uncommented = (code) => code.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
-function lifter(SRC, STUBS) {
-  const SPANS = [];
-  const re = /^(?:(?:async )?function [A-Za-z_$][A-Za-z0-9_$]*[(]|app[.][a-z]+[(])/gm; let m;
-  while ((m = re.exec(SRC))) { const end = s.braceMatch(SRC, SRC.indexOf("{", m.index)); if (end > 0) SPANS.push([m.index, end]); }
-  function definitionOf(name) {
-    let d = new RegExp("^(?:async )?function " + name + "\\(", "m").exec(SRC);
-    if (d) return SRC.slice(d.index, s.braceMatch(SRC, SRC.indexOf(") {", d.index) + 2));
-    const r2 = new RegExp("^(?:var|const|let) " + name + "[ \t]*=[ \t]*", "gm");
-    while ((d = r2.exec(SRC)) && SPANS.some(([x, y]) => d.index > x && d.index < y)) { /* a local */ }
-    if (!d) return null;
-    // NAMED (Nov 23 2026, LR-1): a constant may end ";   // note" (SCORABLE_SOURCES does); BEFORE /;\n/ ran on past it
-    const brk = /;[ \t]*(?:\/\/[^\n]*)?\n/g; brk.lastIndex = d.index + d[0].length;
-    let b;
-    while ((b = brk.exec(SRC))) {
-      const next = SRC[b.index + b[0].length];
-      if (next === undefined || next === "\n" || /[^\s]/.test(next)) return SRC.slice(d.index, b.index + 1);
-    }
-    return null;
-  }
-  return function closure(root) {
-    const have = new Map();
-    const queue = [...new Set(uncommented(root).match(/[A-Za-z_$][A-Za-z0-9_$]*/g))];
-    while (queue.length) {
-      const name = queue.shift();
-      if (have.has(name) || STUBS.has(name)) continue;
-      const def = definitionOf(name);
-      if (!def) continue;
-      // A module import is the process's, never the lifted code's: skipped.
-      if (/^(?:var|const|let) [^=]*=[^;]*\brequire\(/.test(def)) continue;
-      try { new vm.Script(def); } catch (e) { continue; }
-      have.set(name, def);
-      new Set(uncommented(def).match(/[A-Za-z_$][A-Za-z0-9_$]*/g)).forEach(id => { if (!have.has(id) && !STUBS.has(id)) queue.push(id); });
-    }
-    return [...have.values()].sort((x, y) => SRC.indexOf(x) - SRC.indexOf(y)).join("\n\n") + "\n\n" + root;
-  };
-}
-function routeText(SRC, method, route) {
-  const sig = "app." + method + "(\"" + route + "\",";
-  const start = SRC.indexOf(sig);
-  if (start < 0) throw new Error(method.toUpperCase() + " " + route + " not found");
-  const end = s.braceMatch(SRC, SRC.indexOf("{", SRC.indexOf("function (req, res, next)", start)));
-  if (SRC.slice(end, end + 2) !== ");") throw new Error(method.toUpperCase() + " " + route + " did not end where expected");
-  return SRC.slice(start, end + 2);
-}
-
-const SERVER_STUBS = new Set(["supabase", "nowIso", "console", "process", "require", "module", "app", "Buffer", "setTimeout", "fetch",
-  "requireAuth", "requireActiveSubscription", "aiLimiter", "OUTREACH_CREDENTIAL_OWNER_ID", "OWNER_ACCOUNT_ID", "convertSingleLead",
-  "getLiveStats", "buildAgentSystemPrompt", "createPassEntitlementCache", "SALES_AGENT_BRAIN", "Date"]);
-const serverClosure = lifter(FILES[SERVER], SERVER_STUBS);
-/* Five column-0 constants the outreach code reads, taken verbatim by a direct
-   extractor: the closure's "is this a local inside a function" test misreads
-   them, so they would otherwise not be lifted at all. A one-line constant runs
-   to the end of its line; an immediately-invoked one to its closing "})();". */
-function constantText(SRC, name) {
-  const start = SRC.search(new RegExp("^(?:var|const) " + name + " = ", "m"));
-  if (start < 0) throw new Error(name + " not found in server.js");
-  const line = SRC.slice(start, SRC.indexOf("\n", start));
-  if (/= \(function \(\) \{$/.test(line)) return SRC.slice(start, SRC.indexOf("\n})();", start) + 6);
-  // NAMED (Nov 23 2026, LR-1): a trailing // note after the semicolon is allowed (OUTREACH_SENDABLE_SOURCES carries one)
-  const code = line.replace(/;\s*\/\/.*$/, ";");
-  if (!/;$/.test(code)) throw new Error(name + " is not a one-line or immediately-invoked constant");
-  return code;
-}
-const OUTREACH_CONSTANTS = ["OUTREACH_MIN_INTENT", "OUTREACH_SENDABLE_SOURCES", "OUTREACH_MAX_POST_AGE_DAYS", "SALES_ENGAGED_STATUSES", "DRAFT_ATTEMPT_CEILING"];
-OUTREACH_CONSTANTS.forEach(n => SERVER_STUBS.add(n));
-const SERVER_LIFTED = OUTREACH_CONSTANTS.map(n => constantText(FILES[SERVER], n)).join("\n\n") + "\n\n" + serverClosure([
-  routeText(FILES[SERVER], "get", "/api/leads"), routeText(FILES[SERVER], "get", "/api/agents/sales/leads"),
-  routeText(FILES[SERVER], "get", "/api/agents/sales/pipeline"), routeText(FILES[SERVER], "post", "/api/agents/sales/convert")
-].join("\n\n") + "\n\nthis.api = { leadHasRealScore: leadHasRealScore };");   // NAMED (Nov 23 2026, LR-1): BEFORE also runSalesAutoConvert (retired)
-
-const RADAR_STUBS = new Set(["supabase", "SCORING_ACCOUNT_ID", "console", "process", "require", "module", "Anthropic", "resolveAnthropicKey", "setTimeout", "Date"]);
-const RADAR_LIFTED = lifter(FILES[RADAR], RADAR_STUBS)("this.scoreNewLeads = scoreNewLeads; this.setModelLedger = setModelLedger;");   // NAMED (Nov 23 2026, LR-1): + the ledger hand-in
-
-/* ── the fake database, with Postgres's ordering ───────────────────────── */
-function fakeDb(seed, raw) {
-  const tables = {};
-  Object.keys(seed).forEach(t => { tables[t] = seed[t].map(r => JSON.parse(JSON.stringify(r))); });
-  const log = [];
-  const copy = v => JSON.parse(JSON.stringify(v));
-  function keep(q, row) {
-    return q.filters.every(f => {
-      const [op, col, a, b] = f;
-      if (op === "eq") return row[col] === a;
-      if (op === "neq") return row[col] !== a && row[col] != null;
-      if (op === "in") return a.indexOf(row[col]) !== -1;
-      if (op === "gte") return row[col] != null && row[col] >= a;
-      if (op === "not" && a === "is" && b === null) return row[col] != null;
-      if (op === "not" && a === "in") return true;
-      return true;
-    });
-  }
-  function ordered(q, rows) {
-    const orders = q.filters.filter(f => f[0] === "order");
-    if (!orders.length) return rows;
-    const [, col, opts] = orders[0];
-    const asc = !opts || opts.ascending !== false;
-    const nullsFirst = opts && typeof opts.nullsFirst === "boolean" ? opts.nullsFirst : !asc;   // Postgres's default
-    return rows.slice().sort((x, y) => {
-      const a = x[col], b = y[col];
-      if (a == null && b == null) return 0;
-      if (a == null) return nullsFirst ? -1 : 1;
-      if (b == null) return nullsFirst ? 1 : -1;
-      return (a < b ? -1 : a > b ? 1 : 0) * (asc ? 1 : -1);
-    });
-  }
-  function answer(q) {
-    const rows = tables[q.table] || [];
-    if (q.op === "update") {
-      const hit = rows.filter(r => keep(q, r));
-      hit.forEach(r => Object.assign(r, copy(q.payload)));
-      return Promise.resolve({ data: null, error: null });
-    }
-    let hits = raw && raw[q.table] ? raw[q.table].map(copy) : ordered(q, rows.filter(r => keep(q, r)));
-    const limit = q.filters.find(f => f[0] === "limit");
-    if (limit && !(raw && raw[q.table])) hits = hits.slice(0, limit[1]);
-    if (q.single) return Promise.resolve({ data: hits[0] ? copy(hits[0]) : null, error: null });
-    return Promise.resolve({ data: hits.map(copy), error: null });
-  }
-  function from(table) {
-    const q = { table, op: "select", payload: null, filters: [], single: false };
-    log.push(q);
+/* A fake member_leads: the scored-today count, the unscored queue, and every update recorded. */
+function fakeDb(leads) {
+  const updates = [];
+  return { updates, from(table) {
+    const st = { head: false, upd: null, filters: [] };
     const b = {
-      select() { return b; },
-      update(p) { q.op = "update"; q.payload = p; return b; }
+      select(cols, o) { st.head = !!(o && o.head); return b; }, eq(k, v) { st.filters.push([k, v]); return b; }, in() { return b; }, gte() { return b; }, is() { return b; },
+      order() { return b; }, limit() { return b; }, update(f) { st.upd = f; return b; },
+      then(res, rej) {
+        let out;
+        if (st.upd) { updates.push({ table, fields: st.upd, id: (st.filters.find(f => f[0] === "id") || [])[1] }); out = { error: null }; }
+        else if (st.head) out = { count: 0, error: null };
+        else out = { data: leads, error: null };
+        return Promise.resolve(out).then(res, rej);
+      }
     };
-    ["eq", "neq", "in", "not", "gte", "order", "limit", "range"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
-    b.single = b.maybeSingle = () => { q.single = true; return answer(q); };
-    b.then = (res, rej) => answer(q).then(res, rej);
     return b;
-  }
-  return { tables, log, client: { from } };
+  } };
 }
-
-/* ── fixtures ───────────────────────────────────────────────────────────── */
-const OWNER = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
-const FAILED = "scoring failed after 3 attempts";
-const fresh = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-const lead = (k, extra) => Object.assign({ id: "lead-" + k, post_uri: "at://did:plc:x/app.bsky.feed.post/" + k, author_handle: "h" + k + ".bsky.social",
-  post_text: "post " + k, source: "bluesky", post_created_at: fresh, outreach_safe: true, reply_invited: true,
-  suggested_product: "Tongkat Ali", matched_keyword: "anyone tried tongkat ali" }, extra);
-const L = {
-  good80: lead("good80", { status: "scored", intent_score: 80, intent_reason: "asks the room" }),
-  good65: lead("good65", { status: "scored", intent_score: 65, intent_reason: "asks for help" }),
-  legacy: lead("legacy", { status: "scored", intent_score: 0, intent_reason: FAILED, outreach_safe: true, reply_invited: true }),
-  failed: lead("failed", { status: "score_failed", intent_score: null, intent_reason: FAILED }),
-  nullScored: lead("nullScored", { status: "scored", intent_score: null, intent_reason: "no number" })
-};
-const ALL = [L.legacy, L.nullScored, L.good65, L.failed, L.good80];
-const realOnly = (rows) => rows.every(r => Number.isInteger(r.intent_score) && r.status === "scored" && r.intent_reason !== FAILED);
-
-function server(seed, raw) {
-  const db = fakeDb(seed, raw);
-  const drafted = [];
-  const ctx = {
-    supabase: db.client, JSON, Math, Promise, Date, Number, Object, Array, String,
-    nowIso: () => new Date().toISOString(),
-    process: { env: {} },   // NAMED (Nov 23 2026, LR-1): BEFORE SALES_AUTOLOOP_DRY_RUN "true" (the variable is gone)
-    console: { log() {}, error() {}, warn() {} },
-    OUTREACH_CREDENTIAL_OWNER_ID: OWNER, OWNER_ACCOUNT_ID: OWNER, SALES_AGENT_BRAIN: "BRAIN",
-    requireAuth: function requireAuth(req, res, next) { next(); },
-    requireActiveSubscription: function requireActiveSubscription(req, res, next) { next(); },
-    aiLimiter: function aiLimiter(req, res, next) { next(); },
-    convertSingleLead: async (userId, l) => { drafted.push(l.id); return { skipped: false, draft: "d" }; },
-    getLiveStats: async () => ({}), buildAgentSystemPrompt: () => "SYSTEM",
-    createPassEntitlementCache: () => async () => ({ plan: { active: true } })
-  };
-  const routes = {};
-  const reg = (m) => function (p) { routes[m + " " + p] = [].slice.call(arguments, 1); };
-  ctx.app = { get: reg("get"), post: reg("post") };
-  vm.createContext(ctx);
-  vm.runInContext(SERVER_LIFTED, ctx);
-  async function call(key, body, query) {
-    const chain = routes[key];
-    const res = { code: 200, body: null, status(x) { this.code = x; return this; }, json(x) { this.body = JSON.parse(JSON.stringify(x)); return this; } };
-    const req = { user: { id: OWNER, role: "admin" }, params: {}, query: query || {}, body: body || {} };
-    let i = 0;
-    async function step() {
-      const fn = chain[i++];
-      if (!fn) return;
-      let advanced = false;
-      await fn(req, res, (e) => { if (e) { res.code = 500; res.body = { error: String(e.message || e) }; return; } advanced = true; });
-      if (advanced) await step();
-    }
-    await step();
-    return { status: res.code, body: res.body };
-  }
-  return { db, ctx, call, drafted, api: ctx.api };
-}
-const leadsQuery = (db) => db.log.filter(q => q.table === "bsky_leads" && q.op === "select");
-const ordersNullsLast = (q) => q.filters.some(f => f[0] === "order" && f[1] === "intent_score" && f[2] && f[2].ascending === false && f[2].nullsFirst === false);
-const excludesNull = (q) => q.filters.some(f => f[0] === "not" && f[1] === "intent_score" && f[2] === "is" && f[3] === null);
 
 (async function main() {
-  /* ── 1. the scorer ────────────────────────────────────────────────────── */
-  console.log("\n══ 1. scoreNewLeads ══");
-  async function radar(rows, modelReply) {
-    const db = fakeDb({ bsky_leads: rows });
-    const writes = [];
-    const realFrom = db.client.from;
-    db.client.from = (t) => { const b = realFrom(t); const u = b.update; b.update = (p) => { writes.push(JSON.parse(JSON.stringify(p))); return u(p); }; return b; };
-    let modelCalls = 0;
-    class Anthropic { constructor() { this.messages = { create: async () => { modelCalls++; if (modelReply instanceof Error) throw modelReply; return { content: [{ type: "text", text: modelReply }] }; } }; } }
-    const ctx = { supabase: db.client, Anthropic, resolveAnthropicKey: async () => null, SCORING_ACCOUNT_ID: OWNER, JSON, Math, Promise, Date, Number, Object, Array, String,
-      process: { env: { ANTHROPIC_API_KEY: "sk-ant-stub" } }, console: { log() {}, error() {}, warn() {} }, setTimeout: (fn) => { fn(); return 0; } };
+  console.log("\n══ 1. the owner's scorer and its consumers are removed ══");
+  const all = code(FILES[SERVER]) + "\n" + code(FILES["leadRadar.js"]);
+  const gone = ["scoreNewLeads", "runSalesAutoConvert", "convertSingleLead", "\"/api/agents/sales/leads\"", "\"/api/agents/sales/pipeline\"", "\"/api/agents/sales/convert\""].filter(n => all.indexOf(n) !== -1);
+  check("scoreNewLeads, runSalesAutoConvert, convertSingleLead and the sales lead routes are in no code", gone.length === 0, gone.join(", "));
+
+  const M = load(MR);
+  const NOW = Date.parse("2026-11-23T12:00:00Z");
+  const member = { user_id: "u1", fp: require(path.join(REPO, "lib", "leadFingerprint.js")).shape({ offer_summary: "Drain repair", keywords: ["blocked drain"], sources: { bluesky: true } }) };
+  const lead = (id) => ({ id, user_id: "u1", source: "bluesky", text: "Who fixes blocked drains?", posted_at: new Date(NOW - 3600000).toISOString() });
+  const run = async (answer) => {
+    const db = fakeDb([lead("l1"), lead("l2")]);
+    const deps = { sb: db, env: {}, callModel: async () => { if (answer instanceof Error) throw answer; return { text: answer }; } };
+    const out = await M.scoreMember(deps, member, NOW);
+    return { out, updates: db.updates };
+  };
+
+  console.log("\n══ 2. a call that fails writes nothing ══");
+  {
+    const prev = console.warn; console.warn = () => {};
+    const t = await run(new Error("socket hang up"));
+    console.warn = prev;
+    check("nothing is written, the tick stops there (call_failed), and the lead waits unscored", t.updates.length === 0 && t.out.reason === "call_failed" && t.out.scored === 0, J(t));
+  }
+
+  console.log("\n══ 3. an answer that cannot be read ══");
+  let unread;
+  {
+    const prev = console.warn; console.warn = () => {};
+    const t = await run("I think this person might want a plumber.");
+    console.warn = prev;
+    unread = t.updates[0] && t.updates[0].fields;
+    check("it is stored with no score (null) and the reason \"" + M.SCORE_UNREAD_REASON + "\", unsafe and not invited",
+      !!unread && unread.score === null && unread.match_reason === M.SCORE_UNREAD_REASON && M.SCORE_UNREAD_REASON === "The score could not be read." &&
+      unread.outreach_safe === false && unread.reply_invited === false, J(t.updates));
+    check("…and counted toward the daily cap: the tick says scored, and the cap counts scored_at, not score",
+      t.out.scored === 2 && /\.select\("id", \{ count: "exact", head: true \}\)\.eq\("user_id", userId\)\.in\("source", SCORED_SOURCES\)\.gte\("scored_at", utcDayStart\(nowMs\)\)/.test(FILES[MR]), J(t.out));
+    check("…with scored_at set, so it is never scored again", !!unread && typeof unread.scored_at === "string" && Date.parse(unread.scored_at) === NOW, J(unread));
+    const LR = require(path.join(REPO, "lib", "leadReplies.js"));
+    const stored = Object.assign(lead("l1"), unread, { status: "new" });
+    check("…so it can never be replied to (not_safe)", (LR.replyRefusal(stored, NOW) || {}).code === "not_safe", J(LR.replyRefusal(stored, NOW)));
+  }
+
+  console.log("\n══ 4. it is not shown as a lead by default ══");
+  {
+    const RT = require(path.join(REPO, "lib", "leadRoutes.js"));
+    const stored = Object.assign(lead("l1"), unread, { status: "new" });
+    check("isWeak: hidden from the default list", RT.isWeak(stored) === true);
+    const src = fs.readFileSync(path.join(REPO, "lib", "leadRoutes.js"), "utf8");
+    check("the summary's new-lead count asks only for scores of " + M.WEAK_BELOW + " or more (or a Need or comment, never scored)",
+      src.indexOf('.or("source.eq.bizforce,source.eq.youtube,score.gt." + (MR.WEAK_BELOW - 1))') !== -1 && M.WEAK_BELOW === 40);
+  }
+
+  console.log("\n══ 5. demand reads it as a failed score ══");
+  {
+    const ctx = { LEAD_SCORE_FAILED_REASON: undefined };
     vm.createContext(ctx);
-    vm.runInContext(RADAR_LIFTED, ctx);
-    // NAMED (Nov 23 2026, LR-1): the scorer scores only with a ledger handed in; this one counts what it is given
-    const ledger = { enforced: 0, recorded: [] };
-    ctx.setModelLedger({ enforce: async () => { ledger.enforced++; return true; }, record: async (d) => { ledger.recorded.push(JSON.parse(JSON.stringify(d))); } });
-    return { db, writes, ledger, run: () => ctx.scoreNewLeads(), calls: () => modelCalls };
-  }
-  const newLead = lead("new1", { status: "new", score_attempts: 0, intent_score: null, intent_reason: null, outreach_safe: null, reply_invited: null, created_at: "2026-10-01T00:00:00Z" });
-  const r = await radar([newLead], new Error("upstream timeout"));
-  await r.run();
-  let row = r.db.tables.bsky_leads[0];
-  check("failure 1: still new, attempt 1, no score", row.status === "new" && row.score_attempts === 1 && row.intent_score === null, JSON.stringify(row));
-  await r.run();
-  row = r.db.tables.bsky_leads[0];
-  check("failure 2: still new, attempt 2, no score", row.status === "new" && row.score_attempts === 2 && row.intent_score === null, JSON.stringify(row));
-  await r.run();
-  row = r.db.tables.bsky_leads[0];
-  const last = r.writes[r.writes.length - 1] || {};
-  check("failure 3: status score_failed", row.status === "score_failed", row.status);
-  check("failure 3: intent_score null, written explicitly rather than omitted", row.intent_score === null && Object.prototype.hasOwnProperty.call(last, "intent_score") && last.intent_score === null, JSON.stringify(last));
-  check("failure 3: the reason says scoring failed, attempt 3", row.intent_reason === FAILED && row.score_attempts === 3, JSON.stringify(row));
-  check("failure 3: no suitability or invitation judgement is written", !("outreach_safe" in last) && !("reply_invited" in last), JSON.stringify(last));
-  const before = r.calls();
-  await r.run();
-  check("a score_failed lead is never picked up by the scorer again", r.calls() === before, r.calls() - before);
-
-  const ok = await radar([lead("new2", { status: "new", score_attempts: 0, intent_score: null, intent_reason: null, outreach_safe: null, reply_invited: null, created_at: "2026-10-01T00:00:00Z" })],
-    JSON.stringify({ score: 72, reason: "asks the room what helps", product: "Tongkat Ali", safety: "SAFE", invitation: "INVITED" }));
-  await ok.run();
-  row = ok.db.tables.bsky_leads[0];
-  check("a successful scoring is unchanged: score 72, status scored", row.status === "scored" && row.intent_score === 72 && row.intent_reason === "asks the room what helps", JSON.stringify(row));
-  // NAMED (Nov 23 2026, LR-1): the scorer is on the spend ledger
-  const rec = ok.ledger.recorded[0] || {};
-  check("1b. the scoring call was capped first and recorded once: lead_radar, scoreNewLeads, the model",
-    ok.ledger.enforced === 1 && ok.ledger.recorded.length === 1 && rec.agentType === "lead_radar" && rec.route === "scoreNewLeads" && rec.model === "claude-sonnet-4-6" && rec.userId === OWNER,
-    JSON.stringify(ok.ledger));
-  check("1b. the three failed calls were capped too (one enforce per call)", r.ledger.enforced === 3, r.ledger.enforced);
-
-  /* ── 2. the owner's lists ─────────────────────────────────────────────── */
-  console.log("\n══ 2. GET /api/leads and GET /api/agents/sales/leads ══");
-  for (const key of ["get /api/leads", "get /api/agents/sales/leads"]) {
-    const sv = server({ bsky_leads: ALL, sales_lead_pipeline: [] });
-    const res = await sv.call(key);
-    const leads = (res.body && res.body.leads) || [];
-    check(key + ": only real scores, highest first (80, 65)", res.status === 200 && JSON.stringify(leads.map(l => l.intent_score)) === "[80,65]", JSON.stringify(leads.map(l => [l.id, l.intent_score])));
-    const q = leadsQuery(sv.db)[0];
-    check(key + ": the query excludes a null score", q && excludesNull(q), q && JSON.stringify(q.filters));
-    check(key + ": the query orders by score with nulls last", q && ordersNullsLast(q), q && JSON.stringify(q.filters));
-    const raw = server({ bsky_leads: [], sales_lead_pipeline: [] }, { bsky_leads: ALL });
-    const rres = await raw.call(key);
-    const rleads = (rres.body && rres.body.leads) || [];
-    check(key + ": even when the database returns failed and null rows, none is shown", rleads.length === 2 && realOnly(rleads), JSON.stringify(rleads.map(l => l.id)));
+    const def = name => { const at = FILES[SERVER].search(new RegExp("^(?:var|const) " + name + " = |^function " + name + "\\(", "m")); if (at < 0) throw new Error(name + " not found");
+      const end = FILES[SERVER].indexOf("\n}\n", at); return /^function/.test(FILES[SERVER].slice(at, at + 9)) ? FILES[SERVER].slice(at, end + 2) : FILES[SERVER].slice(at, FILES[SERVER].indexOf(";\n", at) + 1); };
+    vm.runInContext(def("LEAD_SCORE_FAILED_REASON").replace(/^const /, "var ") + "\n" + def("demandRowOf") + "\nthis.f = demandRowOf;", ctx);
+    const failed = ctx.f(Object.assign(lead("l1"), unread));
+    check("an unreadable answer: done (status scored, never waiting), no score, the failure reason", failed.status === "scored" && failed.intent_score === null && failed.intent_reason === ctx.LEAD_SCORE_FAILED_REASON && !!ctx.LEAD_SCORE_FAILED_REASON, J(failed));
+    const legacy = ctx.f(Object.assign(lead("l4"), { score: 0, match_reason: null, scored_at: new Date(NOW).toISOString() }));
+    check("…and a first-LR-2 row (0 with no reason) reads as failed too, never a real 0", legacy.intent_score === null && legacy.intent_reason === ctx.LEAD_SCORE_FAILED_REASON, J(legacy));
+    const real0 = ctx.f(Object.assign(lead("l2"), { score: 0, match_reason: "Good match: not asking", scored_at: new Date(NOW).toISOString() }));
+    check("a real 0, with its reason, stays a real 0", real0.intent_score === 0 && real0.intent_reason === "Good match: not asking", J(real0));
+    const unscored = ctx.f(lead("l3"));
+    check("an unscored lead is new, with no reason", unscored.status === "new" && unscored.intent_reason == null, J(unscored));
   }
 
-  /* ── 3. the pipeline ──────────────────────────────────────────────────── */
-  console.log("\n══ 3. GET /api/agents/sales/pipeline ══");
+  console.log("\n══ 6. a readable answer ══");
   {
-    const pipe = [L.legacy, L.failed, L.good80].map(l => ({ user_id: OWNER, lead_post_uri: l.post_uri, status: "new", last_draft: null, updated_at: fresh }));
-    const sv = server({ bsky_leads: ALL, sales_lead_pipeline: pipe });
-    const res = await sv.call("get /api/agents/sales/pipeline");
-    const items = ((res.body && res.body.pipeline && res.body.pipeline.new) || []);
-    const byUri = {}; items.forEach(it => { byUri[it.lead_post_uri] = it.lead; });
-    check("a score_failed lead: no number, labelled scoring failed",
-      byUri[L.failed.post_uri] && byUri[L.failed.post_uri].intent_score === null && byUri[L.failed.post_uri].score_label === "scoring failed", JSON.stringify(byUri[L.failed.post_uri]));
-    check("a legacy 0 with the failure reason: no number, labelled scoring failed",
-      byUri[L.legacy.post_uri] && byUri[L.legacy.post_uri].intent_score === null && byUri[L.legacy.post_uri].score_label === "scoring failed", JSON.stringify(byUri[L.legacy.post_uri]));
-    check("a real score keeps its number and no label",
-      byUri[L.good80.post_uri] && byUri[L.good80.post_uri].intent_score === 80 && !("score_label" in byUri[L.good80.post_uri]), JSON.stringify(byUri[L.good80.post_uri]));
+    const t = await run('{"score": 82, "reason": "asks for a drain repair today", "safety": "SAFE", "invitation": "INVITED"}');
+    const f = t.updates[0] && t.updates[0].fields;
+    check("stored as given: 82, its reason, safe and invited", !!f && f.score === 82 && f.match_reason === "Strong match: asks for a drain repair today" && f.outreach_safe === true && f.reply_invited === true, J(f));
   }
-
-  /* ── 4. the automatic loop is retired ────────────────────────────────── */
-  // NAMED (Nov 23 2026, LR-1): BEFORE four checks that runSalesAutoConvert drafted only real scores. AFTER: it is gone.
-  console.log("\n══ 4. runSalesAutoConvert is retired ══");
-  check("runSalesAutoConvert and salesAutoConvertTick are not defined in server.js",
-    !/function runSalesAutoConvert\(|function salesAutoConvertTick\(/.test(FILES[SERVER]), "still defined");
-
-  /* ── 5. convert ───────────────────────────────────────────────────────── */
-  console.log("\n══ 5. POST /api/agents/sales/convert ══");
-  for (const [label, l] of [["a score_failed lead", L.failed], ["a legacy 0 with the failure reason", L.legacy]]) {
-    const sv = server({ bsky_leads: ALL, sales_lead_pipeline: [], business_profiles: [], agent_memory: [] });
-    const res = await sv.call("post /api/agents/sales/convert", { lead_post_uri: l.post_uri });
-    check("named " + label + ": 422 not_scored, nothing drafted",
-      res.status === 422 && (res.body.reasons || []).some(x => x.code === "not_scored") && /Scoring this lead failed/.test(res.body.error) && sv.drafted.length === 0,
-      res.status + " " + JSON.stringify(res.body));
-  }
-  {
-    const sv = server({ bsky_leads: ALL, sales_lead_pipeline: [], business_profiles: [], agent_memory: [] });
-    const res = await sv.call("post /api/agents/sales/convert", { lead_post_uri: L.good80.post_uri });
-    check("named, a real score: drafted", res.status === 200 && JSON.stringify(sv.drafted) === "[\"lead-good80\"]", res.status + " " + JSON.stringify(sv.drafted));
-    // NAMED (Nov 23 2026, LR-1): BEFORE three checks on segment mode drafting real scores only. AFTER: segment mode is removed.
-    const seg = server({ bsky_leads: ALL, sales_lead_pipeline: [], business_profiles: [], agent_memory: [] });
-    const sres = await seg.call("post /api/agents/sales/convert", { segment: {} });
-    check("segment: refused 400, no lead read, nothing drafted", sres.status === 400 && seg.drafted.length === 0 && leadsQuery(seg.db).length === 0,
-      sres.status + " " + JSON.stringify(sres.body));
-  }
-
-  /* ── 6. Postgres's rule, and every ordering ───────────────────────────── */
-  console.log("\n══ 6. nulls last ══");
-  {
-    const db = fakeDb({ t: [{ v: 1 }, { v: null }, { v: 3 }] });
-    const plain = await db.client.from("t").select("*").order("v", { ascending: false });
-    const last = await db.client.from("t").select("*").order("v", { ascending: false, nullsFirst: false });
-    check("the fake follows Postgres: a plain descending sort puts the null first; nullsFirst false puts it last",
-      plain.data[0].v === null && last.data[2].v === null, JSON.stringify([plain.data, last.data]));
-    const orders = (FILES[SERVER].match(/\.order\("intent_score", \{[^}]*\}\)/g) || []);
-    // NAMED (Nov 23 2026, LR-1): BEFORE 4 orderings; the autoloop's and the segment's are gone, leaving GET /api/leads and GET /api/agents/sales/leads
-    check("every ordering by intent_score in server.js says nullsFirst: false (" + orders.length + ")",
-      orders.length === 2 && orders.every(o => /ascending: false, nullsFirst: false/.test(o)), JSON.stringify(orders));
-  }
-
-  check("zero network", NETWORK.length === 0, JSON.stringify(NETWORK));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");
-  process.exit(0);
 })().catch(e => { console.error("\nThe check threw: " + (e && e.stack || e)); process.exit(1); });

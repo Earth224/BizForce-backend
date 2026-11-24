@@ -62,7 +62,8 @@ const SPECIFIC = {
   "agents/seo.html": ["Audits", ["seoOptimizeCard", "seoBlogCard"]],
   // NAMED (Nov 12 2026, Social page clean-up): "Your videos" became its own card (#videosCard) directly above
   // the YouTube card, in place of a block inside it. Still the exact list, in this exact order.
-  "agents/social.html": ["Accounts", ["bskyConnect", "bskyMentions", "mastoConnect", "videosCard", "ytConnect", "ttConnect", "igConnect", "fbConnect"]]
+  // NAMED (Nov 23 2026, LR-2): BEFORE the eight account tiles. AFTER + thConnect, the Threads tile (lib/threadsRoutes.js).
+  "agents/social.html": ["Accounts", ["bskyConnect", "bskyMentions", "mastoConnect", "videosCard", "ytConnect", "ttConnect", "igConnect", "fbConnect", "thConnect"]]
 };
 const SHARED = ["Run", "Schedule", "Activity", "Learning", "Business"];
 

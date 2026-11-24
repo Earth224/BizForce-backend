@@ -43,8 +43,8 @@ const MUTATIONS = {
   "shares-kept-forever": [[PR, "const SHARE_DAYS_KEEP = 30;", "const SHARE_DAYS_KEEP = 3000;"]],
   "step-error-stops": [[PR, "      try { out[steps[i][0]] = await steps[i][1](sb, nowIso); } catch (e) { err = err || e; out[steps[i][0]] = null; }", "      out[steps[i][0]] = await steps[i][1](sb, nowIso);"]],
   "unclaimed-runs": [[PR, "    if (!claimed) return { claimed: false };\n", ""]],
-  "chain-dropped": [[SERVER, ".then(copyrightRestoreTick).then(postRetentionTick);", ".then(copyrightRestoreTick);"]],
-  "schedule-unlisted": [[JS, '      "post_retention"] },', "      ] },"]]
+  "chain-dropped": [[SERVER, ".then(copyrightRestoreTick).then(postRetentionTick)\n", ".then(copyrightRestoreTick)\n"]], /* NAMED (Nov 23 2026, LR-2): the chain now ends with memberLeadsPurgeTick (Lead Radar's retention) */
+  "schedule-unlisted": [[JS, '      "post_retention",\n', "\n"]] /* NAMED (Nov 23 2026, LR-2): the chain now ends with memberLeadsPurgeTick (Lead Radar's retention) */
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, PR, JS]);
 const { FILES, check, J, has } = T;
@@ -121,9 +121,11 @@ function base(extra) { return memDb(Object.assign({ posts: [], post_comments: []
   check("E2. a claimed day runs the four steps; one step's error does not stop the others", r && r.claimed === true && r.posts && r.posts.purged === 1 && r.comments === null && r.photos && r.shares && r.shares.deleted === 1 &&
     J(claims) === J(["post_retention:2026-11-20"]), J(r));
   const S = FILES[SERVER];
-  check("E3. the last step of the 04:45 UTC chain, through the shared daily claim", has(S, ".then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);") &&
+  // NAMED (Nov 23 2026, LR-2): BEFORE "the last step"; Lead Radar's retention now follows it.
+  check("E3. a step of the 04:45 UTC chain after the copyright restore (Lead Radar's retention follows), through the shared daily claim", has(S, ".then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick)\n        .then(memberLeadsPurgeTick);") &&
     has(S, 'return await require("./lib/postRetention").tick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });') && R.JOB_NAME === "post_retention");
-  check("E4. lib/jobSchedules.js lists post_retention in the 04:45 entry", /\{ tick: "cardLeadsPurgeTick\(", cron: "45 4 \* \* \*",[\s\S]*?"post_retention"\] \},/.test(FILES[JS]));
+  // NAMED (Nov 23 2026, LR-2): BEFORE post_retention closed the list; member_leads_purge now follows it.
+  check("E4. lib/jobSchedules.js lists post_retention in the 04:45 entry", /\{ tick: "cardLeadsPurgeTick\(", cron: "45 4 \* \* \*",[\s\S]*?"post_retention",\n[^\n]*\n\s*"member_leads_purge"\] \},/.test(FILES[JS]));
   const LPX = require("../lib/legalPages");   // the real one: it reads its sources from disk
   const priv = LPX.buildLegalPages(LPX.codeFacts())["privacy.html"] || "";
   check("E5. the privacy page states the three figures from the code", priv.indexOf("its text is erased " + R.BODY_PURGE_DAYS + " days later") !== -1 &&

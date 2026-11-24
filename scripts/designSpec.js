@@ -275,4 +275,58 @@ const NEEDPOST = {
   SHARE_CATEGORY_FONT: 13
 };
 
-module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX, COMPOSER, NEEDPOST };   // NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
+/* NAMED (Nov 23 2026, LR-2): THE OWNER'S CANVAS, ROW 6 ("Lead Radar for every member"): LeadsHome, LeadsReply and LeadsFingerprint,
+   390 x 844, measured from the boards' own sources (their .dc.html CSS and inline styles, so every figure is exact). The page is
+   agents/lead-radar.html. KEPT, and named in the report as deviations from the boards:
+     the site's fonts (FONT), never the boards' Space Grotesk or Inter; the music icon (the boombox beside the logo on a desktop,
+       docked at the bottom on a phone, as on every page);
+     only the Leads and Fingerprint tabs (TABS.ITEMS; Inbound is LR-3, Get found LR-4); the bottom bar is the site's (BAR);
+     every tap target is 44 px (the site's rule, HIT): the 40 px tabs, 34 px chips, 38 px buttons and 26 px switches are drawn at
+       the boards' sizes inside 44 px buttons, with negative margins so the layout keeps the boards' spacing;
+     the draft box's type is 16 px on a phone (css/bf-phone.css: no field under 16 px, so iOS never zooms into it), 15 px above;
+     the source chips swipe (overflow-x auto) where the board clips them (overflow hidden), so a Threads chip is never cut;
+     the sheet sits under the site's bar (z-index below 90), as the board draws its bar over the sheet. */
+const LEADS = {
+  BOARDS: ["LeadsHome", "LeadsReply", "LeadsFingerprint"],
+  FONT: 'system-ui, -apple-system, "Segoe UI", Arial, sans-serif',
+  PAGE: { BG: "#070b18", TEXT: "#e6eaf5" },
+  HIT: 44,
+  HEADER: { PAD: "12px 8px 4px", GAP: 6, BUTTON: 44, MARK: 34, MARK_RADIUS: 10, MARK_BG: "#0f2a3a", TITLE: "Lead Radar", TITLE_FONT: 18, TITLE_WEIGHT: 700,
+    SETTINGS: "Radar settings" },
+  TABS: { ITEMS: ["Leads", "Fingerprint"], NOT_DRAWN: ["Inbound", "Get found"], PAD: "0 12px 10px", GAP: 4, H: 40, PAD_X: 14, RADIUS: 20, FONT: 14, WEIGHT: 600,
+    COLOR: "#a9b3cc", ON_BG: "#0f2a3a" },
+  CONTENT: { PAD_X: 12, GAP: 10 },
+  CARD: { RADIUS: 16, BORDER: "#1e2848", BG: "#0b1022", PAD: 12, GAP: 8 },
+  STATS: { GAP: 8, PAD: 10, NUM_FONT: 20, NUM_WEIGHT: 700, LABEL_FONT: 12, LABELS: ["new this week", "you replied", "won"], WON: "#f5c46b" },
+  CHIP: { H: 34, PAD_X: 12, RADIUS: 17, BORDER: "#2b3a6b", BG: "#0e1428", COLOR: "#c9d1e6", FONT: 12.5, WEIGHT: 500, GAP: 8, ON_BG: "#0f2a3a",
+    SOURCES: ["All", "Inside BizForce", "Bluesky", "YouTube"] },
+  BADGE: { H: 22, PAD_X: 8, RADIUS: 11, FONT: 10.5, WEIGHT: 700, SPACING: 1,
+    NEED: { TEXT: "BIZFORCE NEED", BG: "#22d3ee", COLOR: "#070b18" },
+    BSKY: { TEXT: "BLUESKY · ASKED THE ROOM", BG: "#1b2350", COLOR: "#b79cfa" },
+    YT: { TEXT: "YOUTUBE COMMENT", BG: "#3a1414", COLOR: "#fca5a5", CARD_OPACITY: 0.8 } },
+  LEAD: { META_FONT: 12, TEXT_FONT: 14.5, TEXT_LINE: 1.4, MATCH_FONT: 12, MATCH: "#6ee7b7" },
+  BUTTON: { H: 38, PAD_X: 14, RADIUS: 19, BORDER: "#2b3a6b", COLOR: "#c9d1e6", FONT: 13, WEIGHT: 600, GAP: 10, PRIMARY_TEXT: "#070b18",
+    NEED: ["I can help", "Save", "Not a fit"], BSKY: ["Draft a reply", "Open post", "Not a fit"] },
+  FOOT: { TEXT: "You approve every reply. BizForce never messages anyone for you.", FONT: 12, COLOR: "#8e9bbf", LINE: 1.4, PAD_X: 10 },
+  LABEL: { FONT: 11, WEIGHT: 600, SPACING: 1.6, COLOR: "#8e9bbf" },
+  SWITCH: { W: 44, H: 26, RADIUS: 13, KNOB: 20, INSET: 3, ON: "#22d3ee", OFF: "#2b3a6b", KNOB_ON: "#070b18", KNOB_OFF: "#a9b3cc" },
+  SHEET: { VEIL: "rgba(3,5,12,0.66)", H: 640, RADIUS: 22, BG: "#0b1022", TOP_LINE: "#2b3a6b", PAD: "10px 16px 20px", GAP: 12, UNDER_BAR: 90,
+    GRAB: { W: 40, H: 4, RADIUS: 2, COLOR: "#2b3a6b" }, TITLE: "Your reply on Bluesky", TITLE_FONT: 17, CLOSE: 44,
+    QUOTE: { LINE: 3, COLOR: "#8b5cf6", PAD: "6px 10px", FONT: 13.5, LINE_H: 1.4, TEXT: "#c9d1e6" },
+    DRAFT_LABEL: "DRAFT (EDIT ANYTHING)",
+    DRAFT: { MIN_H: 132, PAD: 12, RADIUS: 14, LINE: "#22d3ee", BG: "#070b18", FONT: 15, LINE_H: 1.45, PHONE_FONT: 16 },
+    CHECKS: ["Answers what they asked", "No hard sell, no promises", "They asked the room, so a reply is welcome"], CHECK_GAP: 6, CHECK_FONT: 13, TICK: "#6ee7b7",
+    LINK: "Add a link to my listing", LINK_FONT: 13.5, LINK_PAD: "8px 0",
+    AGAIN: "Write it again", POST: "Post my reply", BIG_H: 48, BIG_RADIUS: 24, POST_FLEX: 1.4,
+    FOOT: "Posted from your own connected Bluesky account. One reply per post, up to 5 a day.",
+    CONNECT: "Connect your Bluesky account to reply" },
+  FINGERPRINT: { PAD_X: 16, GAP: 12,
+    INTRO: "Built for you from your profile, listings and posts. It updates by itself. Change anything.", INTRO_FONT: 13, INTRO_LINE: 1.45, INTRO_COLOR: "#c9d1e6",
+    LABELS: ["WHAT YOU DO", "WHERE", "WORDS PEOPLE USE", "NOT FOR ME", "WHERE TO LOOK"], REACH: ["My city", "25 miles", "Online, anywhere"], ADD: "+ Add",
+    LOOK: { PAD: "8px 0", TITLE_FONT: 13.5, TITLE_WEIGHT: 600, SUB_FONT: 12,
+      ROWS: [["Inside BizForce", "Needs posted by people near you"], ["Bluesky", "Public posts that ask the room"], ["YouTube", "Comments asking for help, limited each day"]],
+      THREADS_WAITING: "Waiting for Meta's approval" } }
+};
+
+// NAMED (Nov 23 2026, LR-2): + LEADS. NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
+module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX, COMPOSER, NEEDPOST, LEADS };

@@ -404,9 +404,11 @@ function loadAgentPage(file, handlers) {
     return pi === -1 || ai === -1 || pi > ai;
   });
   check("D6. all " + AGENT_PAGES.length + " pages that load agent-profile.js load bf-paywall.js before it", missing.length === 0, missing.join(", "));
-  const ownCalls = [["agents/seo.html", 2], ["agents/sales.html", 2], ["agents/content.html", 2]].filter(([f, n]) =>
+  // NAMED (Nov 23 2026, LR-2): BEFORE sales.html had two (its convert calls). AFTER it has none: the convert route is gone and
+  // its leads are the owner's read-only archive; Lead Radar's own calls answer 402 with the members panel (checkLeadRadarPages).
+  const ownCalls = [["agents/seo.html", 2], ["agents/sales.html", 0], ["agents/content.html", 2]].filter(([f, n]) =>
     (SRC[f].match(/var paywall = window\.bfPaywall \? window\.bfPaywall\.from\(res\.status, res\.data\) : null;/g) || []).length !== n);
-  check("D7. the pages' own gated calls take the 402 branch (seo optimize and generate-post, sales convert x2, content launch x2)", ownCalls.length === 0, JSON.stringify(ownCalls));
+  check("D7. the pages' own gated calls take the 402 branch (seo optimize and generate-post, content launch x2; sales none since LR-2)", ownCalls.length === 0, JSON.stringify(ownCalls));
 
   /* ── E. #7 the dashboard ─────────────────────────────────────────────── */
   console.log("\n══ E. #7 the dashboard: subscribe to start, and the welcome line ══");

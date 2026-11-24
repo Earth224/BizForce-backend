@@ -297,6 +297,11 @@ const OLD = [];
 const LR1_TILE_FROM = "<p>Buying-intent posts from Bluesky, and Mastodon when switched on, scored and ranked.";
 const LR1_TILE_TO = "<p>Buying-intent posts from Bluesky, scored and ranked.";
 OLD.forEach(t => { if (t.slug === "lead-radar" && t.text.split(LR1_TILE_FROM).length === 2) { t.text = t.text.replace(LR1_TILE_FROM, LR1_TILE_TO); t.lr1Swapped = true; } });
+/* NAMED (Nov 23 2026, LR-2): Lead Radar is every member's, so the tile's sentence (after LR-1's swap) is swapped once more, whole,
+   for the members' one. The tile's link, title, icon and button are still compared byte for byte, and so is every other tile. */
+const LR2_TILE_FROM = "<p>Buying-intent posts from Bluesky, scored and ranked. Runs on a single social account and is enabled only for the account that owns it.</p>";
+const LR2_TILE_TO = "<p>People asking for what you offer, found inside BizForce, on Bluesky and on YouTube from your Fingerprint. You approve every reply before it posts.</p>";
+OLD.forEach(t => { if (t.slug === "lead-radar" && t.lr1Swapped && t.text.split(LR2_TILE_FROM).length === 2) { t.text = t.text.replace(LR2_TILE_FROM, LR2_TILE_TO); t.lr2Swapped = true; } });
 const BASE_DIR = BASE.slice(BASE.indexOf("<div id=\"agentDirectoryLanding\""), BASE.indexOf("<!-- Recent Activity was removed here."));
 
 /* ── fixtures ── */
@@ -373,6 +378,8 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const notKept = OLD.filter(t => tpl.indexOf(t.text) === -1 || FILES[DASH].split(t.text).length !== 2).map(t => t.slug);
   check("each of the 29 tiles is in the template byte for byte, once", notKept.length === 0, notKept.join(", "));
   check("LR-1: the Lead Radar tile differs from BASELINE only by its Mastodon words (swapped once)", OLD.filter(t => t.lr1Swapped).length === 1 && FILES[DASH].indexOf("and Mastodon when switched on") === -1);
+  check("LR-2: ... and by its one sentence, now the members' (swapped once); nothing says it is the owner's only", OLD.filter(t => t.lr2Swapped).length === 1 &&
+    FILES[DASH].indexOf("enabled only for the account that owns it") === -1);
   // NAMED (Nov 10 2026, visual match): rebuilt for one grid cell, so its parts and links are checked, not its bytes.
   const tplDir = (/<div id="agentDirectoryLanding"[\s\S]*?\n<\/div>\n/.exec(tpl) || [""])[0];
   const baseBtn = id => (new RegExp("<button type=\"button\" id=\"" + id + "\"[^\\n]*<\\/button>").exec(BASE_DIR) || ["?"])[0];

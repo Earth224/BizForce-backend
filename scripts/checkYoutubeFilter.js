@@ -10,6 +10,15 @@
    server.js and run against stored rows; lead-radar.html's YouTube section is
    run with a fake document. No network, no model, no database.
 
+   NAMED (Nov 23 2026, LR-2): BEFORE youtubeRadar.js searched the owner's 8 fixed KEYWORDS into bsky_leads, GET
+   /api/leads/youtube-signals filtered stored rows for display, and lead-radar.html showed the hidden counts (D to G).
+   AFTER the 8 KEYWORDS, runYoutubeRadarOnce, the signals route and that page section are removed (the original is in
+   git, 65c0825). YouTube is a source of each member's own Lead Radar: lib/memberRadar.js captureYoutube searches one
+   of the member's words (youtubeRadar.js searchComments) and keeps a comment only if the SAME filter keeps it. A, the
+   filter, holds unchanged; B now takes its keywords as words a member might enter (the old 8 among them); C, no model
+   call, holds; D runs the real captureYoutube; E proves the display route is gone, so nothing unfiltered is shown,
+   because nothing unfiltered is stored. F and G (the page and the guide) belong to the page checks now.
+
    WHAT THIS PROVES
      A. The filter, on the real shapes from the first live pass (Oct 19):
         link spam → link, "Correct" and a 5-word reply → too_short, a
@@ -47,8 +56,8 @@ const MUTATE = process.env.MUTATE || "";
 const FILTER = "lib/youtubeFilter.js", QUOTA = "lib/youtubeQuota.js", RADAR = "youtubeRadar.js", SERVER = "server.js";
 const FILES = {};
 [FILTER, QUOTA, RADAR, SERVER].forEach(f => { FILES[f] = fs.readFileSync(path.join(REPO, f), "utf8").replace(/\r\n/g, "\n"); });
-const PAGE = fs.readFileSync(path.join(FRONTEND, "agents", "lead-radar.html"), "utf8").replace(/\r\n/g, "\n");
-const GUIDE = fs.readFileSync(path.join(FRONTEND, "scripts", "termaximus-guide.js"), "utf8").replace(/\r\n/g, "\n");
+const MEMBER_RADAR = "lib/memberRadar.js";   // NAMED (Nov 23 2026, LR-2): the page and guide are no longer read here
+FILES[MEMBER_RADAR] = fs.readFileSync(path.join(REPO, MEMBER_RADAR), "utf8").replace(/\r\n/g, "\n");
 
 const MUTATIONS = {
   // the link test is dropped
@@ -57,12 +66,11 @@ const MUTATIONS = {
   "emoji-are-words": [[FILTER, ".filter(function (t) { return /[\\p{L}\\p{N}]/u.test(t); })", ".filter(function (t) { return t.length > 0; })"]],
   // no plural or -ing tolerance
   "no-plural-tolerance": [[FILTER, "  if (w.length > 5 && /ing$/.test(w)) w = w.slice(0, -3);\n  else if (w.length > 3 && /s$/.test(w) && !/ss$/.test(w)) w = w.slice(0, -1);\n", ""]],
-  // capture stores every comment
-  "capture-unfiltered": [[RADAR, "              if (!verdict.keep) { dropped[verdict.reason]++; return; }\n", ""]],
-  // display skips the filter
-  "display-unfiltered": [[SERVER, "        if (verdict.keep) finds.push(page[i]); else hidden[verdict.reason]++;\n", "        finds.push(page[i]);\n"]],
-  // the display limit is applied to the query, before the filter
-  "limit-before-filter": [[SERVER, "        .range(offset, offset + YOUTUBE_SIGNALS_PAGE - 1);\n", "        .limit(YOUTUBE_SIGNALS_LIMIT);\n"]]
+  // capture stores every comment (NAMED (Nov 23 2026, LR-2): BEFORE youtubeRadar.js's own loop; AFTER captureYoutube's filter line)
+  "capture-unfiltered": [[MEMBER_RADAR, "      if (deps.youtube.useful && !deps.youtube.useful(cm.text, word).keep) return;\n", ""]],
+  // NAMED (Nov 23 2026, LR-2): the member helper hands the radar no filter
+  "helper-no-filter": [[RADAR, "    useful: isUsefulYoutubeComment", "    useful: null"]]
+  // NAMED (Nov 23 2026, LR-2): display-unfiltered and limit-before-filter are removed with GET /api/leads/youtube-signals (E proves it is gone)
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -182,9 +190,7 @@ const EMOJI_SHORT = "libido tips 🔥 🔥 🔥 👍";
     is("libido is low these days", LIBIDO, "too_short") && is("my libido is low these days", LIBIDO, null));
 
   /* ── B. topic terms and stopwords ──────────────────────────────────────── */
-  console.log("\n══ B. topic terms of the 8 keywords ══");
-  const radarForKeywords = compile(RADAR, FILES[RADAR], { dotenv: { config() {} }, "@supabase/supabase-js": { createClient: () => fakeDb({}).client },
-    "./lib/youtubeQuota": Q, "./lib/youtubeFilter": YF });
+  console.log("\n══ B. topic terms of a member's words ══");
   const EXPECTED_TERMS = {
     "does tongkat ali actually work": ["tongkat", "ali"],
     "how to increase libido naturally": ["increase", "libido"],
@@ -195,8 +201,8 @@ const EMOJI_SHORT = "libido tips 🔥 🔥 🔥 👍";
     "does manifestation actually work": ["manifestation"],
     "does quantum jumping actually work": ["quantum", "jumping"]
   };
-  const KW = radarForKeywords.KEYWORDS;
-  check("B. the radar's 8 KEYWORDS are the ones listed here", Array.isArray(KW) && KW.length === 8 && JSON.stringify(KW.slice().sort()) === JSON.stringify(Object.keys(EXPECTED_TERMS).sort()), JSON.stringify(KW));
+  // NAMED (Nov 23 2026, LR-2): BEFORE these were youtubeRadar.js KEYWORDS (removed); AFTER they are words a member might enter.
+  const KW = Object.keys(EXPECTED_TERMS);
   KW.forEach(k => {
     const got = YF.youtubeTopicTerms(k);
     check("B. \"" + k + "\" → " + JSON.stringify(EXPECTED_TERMS[k]), JSON.stringify(got) === JSON.stringify(EXPECTED_TERMS[k]), JSON.stringify(got));
@@ -210,168 +216,35 @@ const EMOJI_SHORT = "libido tips 🔥 🔥 🔥 👍";
   const MODEL = /anthropic|openai|claude|gpt|generativelanguage|callModel|messages\.create|fetch\(/i;
   check("C. lib/youtubeFilter.js requires nothing and calls no model or network (compiled with an empty require map)",
     !/\brequire\(/.test(FILES[FILTER]) && !MODEL.test(FILES[FILTER]));
-  const routeAt = FILES[SERVER].indexOf("app.get(\"/api/leads/youtube-signals\", requireAuth, async function (req, res, next) {");
-  const ROUTE = routeAt < 0 ? "" : FILES[SERVER].slice(routeAt, s.braceMatch(FILES[SERVER], FILES[SERVER].indexOf("{", routeAt)) + 2);
-  check("C. the signals route calls no model", ROUTE.length > 0 && !/anthropic|openai|callModel|messages\.create|fetch\(/i.test(ROUTE));
+  check("C. youtubeRadar.js calls no model: its only network calls are the YouTube Data API",
+    !/anthropic|openai|callModel|messages\.create/i.test(FILES[RADAR]) && (FILES[RADAR].match(/fetch\(/g) || []).length > 0 &&
+    (FILES[RADAR].match(/https:\/\/[^"']+/g) || []).every(u => u.indexOf("https://www.googleapis.com/youtube/v3/") === 0 || u.indexOf("https://www.youtube.com/") === 0), JSON.stringify(FILES[RADAR].match(/https:\/\/[^"']+/g)));
 
-  /* ── D. capture ────────────────────────────────────────────────────────── */
+  /* ── D. capture stores only kept comments ─────────────────────────────── */
+  // NAMED (Nov 23 2026, LR-2): the real lib/memberRadar.js captureYoutube, its deps the real memberYoutubeDeps' filter.
   console.log("\n══ D. capture stores only kept comments ══");
-  // Per video: two kept, one link, two too_short, one off_topic.
-  function commentsFor(kw, vid, unfiltered) {
-    const texts = unfiltered
-      ? ["Has anyone found that '" + kw + "' has an answer after a month?", "Honestly '" + kw + "' is the question I asked my doctor too",
-         "Still asking '" + kw + "' after reading every single reply here", "Me too, '" + kw + "' is what I searched for this morning",
-         "A third question about '" + kw + "' from a different viewer today", "A fourth note on '" + kw + "' from yet another viewer here"]
-      : ["Has anyone found that '" + kw + "' has an answer after a month?", "Honestly '" + kw + "' is the question I asked my doctor too",
-         SPAM_1, ONE_WORD, EMOJI_SHORT, PORTUGUESE];
-    return texts.map((t, i) => ({ snippet: { topLevelComment: { id: "c-" + vid + "-" + i, snippet: { authorDisplayName: "someone", textOriginal: t, publishedAt: "2026-10-19T00:00:00Z" } } } }));
-  }
-  async function capturePass(unfiltered) {
-    const events = [], urls = [];
-    const db = fakeDb({ youtube_api_calls: [], bsky_leads: [] });
-    const realInsert = db.client.from;
-    db.client.from = function (table) { const b = realInsert(table); const ins = b.insert; b.insert = function (p) { if (table === "youtube_api_calls") events.push(p.units); return ins.call(b, p); }; return b; };
-    let searches = 0, lastQuery = "";
-    globalThis.fetch = async function (url) {
-      const u = String(url); urls.push(u);
-      if (u.indexOf("/youtube/v3/search?") !== -1) {
-        searches++; lastQuery = decodeURIComponent((/[?&]q=([^&]+)/.exec(u) || ["", ""])[1]);
-        return { ok: true, status: 200, json: async () => ({ items: [0, 1, 2, 3].map(i => ({ id: { videoId: "v" + searches + "x" + i } })) }) };
-      }
-      const vid = /videoId=([^&]+)/.exec(u)[1];
-      return { ok: true, status: 200, json: async () => ({ items: commentsFor(lastQuery, vid, unfiltered) }) };
-    };
-    process.env.YOUTUBE_API_KEY = "check-key";
-    delete process.env.YOUTUBE_DAILY_UNIT_CAP; delete process.env.YOUTUBE_RADAR_DAILY_UNITS;
-    const radar = compile(RADAR, FILES[RADAR], { dotenv: { config() {} }, "@supabase/supabase-js": { createClient: () => db.client },
-      "./lib/youtubeQuota": Q, "./lib/youtubeFilter": YF });
-    const logs = [], realLog = console.log, realErr = console.error;
-    console.log = (...a) => { logs.push(a.join(" ")); };
-    console.error = (...a) => { logs.push("ERR " + a.join(" ")); };
-    try { await radar.runYoutubeRadarOnce(); } finally { console.log = realLog; console.error = realErr; }
-    return { db, logs, urls, events, stored: db.tables.bsky_leads, units: db.tables.youtube_api_calls.reduce((a, r) => a + r.units, 0) };
-  }
-  const D = await capturePass(false);
-  check("D. a full pass fetched 8 × 4 × 6 = 192 comments and stored only the 64 kept", D.stored.length === 64, D.stored.length);
-  check("D. every stored row passes the filter; no link spam, one-liner or off-topic text is stored",
-    D.stored.every(r => YF.isUsefulYoutubeComment(r.post_text, r.matched_keyword).keep) &&
-    D.stored.every(r => [SPAM_1, ONE_WORD, EMOJI_SHORT, PORTUGUESE].indexOf(r.post_text) === -1));
-  const LINE = /^\[YoutubeRadar\] (.+): fetched (\d+), kept (\d+), dropped (\d+) \(link (\d+), too_short (\d+), off_topic (\d+)\)$/;
-  const lines = D.logs.map(l => LINE.exec(l)).filter(Boolean);
-  check("D. one count line per keyword, in KEYWORDS order", lines.length === 8 && lines.every((m, i) => m[1] === KW[i]), JSON.stringify(D.logs.slice(0, 3)));
-  check("D. each line: fetched 24, kept 8, dropped 16 (link 4, too_short 8, off_topic 4)",
-    lines.every(m => m.slice(2).join(",") === "24,8,16,4,8,4"), JSON.stringify(lines.map(m => m.slice(2).join(","))));
-  check("D. the counts add up on every line: fetched = kept + dropped, dropped = link + too_short + off_topic",
-    lines.length === 8 && lines.every(m => +m[2] === +m[3] + +m[4] && +m[4] === +m[5] + +m[6] + +m[7]));
-  check("D. the lines sum to the pass: 192 fetched, 64 kept = rows stored",
-    lines.reduce((a, m) => a + +m[2], 0) === 192 && lines.reduce((a, m) => a + +m[3], 0) === D.stored.length);
-  const U = await capturePass(true);
-  check("D. the units ledger is unchanged by the filter: the same 832 units, the same 40 reservations in the same order as a pass where every comment is kept",
-    D.units === 832 && U.units === 832 && JSON.stringify(D.events) === JSON.stringify(U.events) && D.events.length === 40 && U.stored.length === 192,
-    JSON.stringify([D.units, U.units, D.events.length, U.events.length, U.stored.length]));
-  check("C. a capture pass makes only YouTube Data API requests (no model endpoint)",
-    D.urls.length === 40 && D.urls.every(u => u.indexOf("https://www.googleapis.com/youtube/v3/") === 0), JSON.stringify(D.urls.filter(u => u.indexOf("https://www.googleapis.com/youtube/v3/") !== 0)));
+  const RAD = compile(RADAR, FILES[RADAR], { dotenv: { config() {} }, "@supabase/supabase-js": { createClient: () => fakeDb({}).client }, "./lib/youtubeQuota": Q, "./lib/youtubeFilter": YF });
+  const MRM = compile(MEMBER_RADAR, FILES[MEMBER_RADAR], { "./leadFingerprint": require(path.join(REPO, "lib", "leadFingerprint.js")) });
+  const helperFilter = RAD.memberYoutubeDeps ? (() => { try { return RAD.memberYoutubeDeps().useful; } catch (e) { return undefined; } })() : undefined;
+  check("D. the member helper hands the radar the filter itself", helperFilter === YF.isUsefulYoutubeComment);
+  const NOW = Date.parse("2026-11-23T12:00:00Z"), ago = h => new Date(NOW - h * 3600000).toISOString();
+  // Each dropped comment names the member's word, so the member radar's own word match would keep it: only the filter drops it.
+  const COMMENTS = ["Tongkat ali here: " + SPAM_1, "tongkat ali", "tongkat ali is great stuff", QUESTION, "Buy tongkat ali " + SPAM_2, "Obrigado tongkat ali querida amor"].map((text, i) => ({ id: "c" + i, text, author: "Viewer " + i, url: "https://www.youtube.com/watch?v=v&lc=c" + i, published_at: ago(2) }));
+  const inserted = [];
+  const sbD = { from() { const b = { upsert(rows) { inserted.push.apply(inserted, rows); return b; }, select() { return b; }, then(res, rej) { return Promise.resolve({ data: inserted.map((x, i) => ({ id: i })), error: null }).then(res, rej); } }; return b; } };
+  const fpD = require(path.join(REPO, "lib", "leadFingerprint.js")).shape({ keywords: ["tongkat ali"], sources: { youtube: true } });
+  const ytDeps = { caps: () => ({ daily: 9000, radar: 4000 }), worstCase: 106, unitsUsedBy: async () => 0, unitsToday: async () => ({ total: 0, radar: 0 }),
+    searchComments: async () => COMMENTS, useful: helperFilter };
+  MRM.resetMemory && MRM.resetMemory();
+  const D = await MRM.captureYoutube({ sb: sbD, youtube: ytDeps }, [{ user_id: "u1", fp: fpD }], NOW);
+  check("D. of six comments naming the word (two links, three too short, one question) only the question is stored",
+    inserted.length === 1 && inserted[0].text === QUESTION && inserted[0].source === "youtube" && inserted[0].user_id === "u1", JSON.stringify(inserted.map(x => x.text)));
+  check("D. it is stored as found, never scored by a model: Good match on the word, scored_at set", inserted.length === 1 && inserted[0].match_reason === "Good match: \"tongkat ali\"" && !!inserted[0].scored_at, JSON.stringify(inserted[0]));
 
-  /* ── E. display ────────────────────────────────────────────────────────── */
-  console.log("\n══ E. display filters rows already stored ══");
-  const defs = ["LEAD_RADAR_UNAVAILABLE", "YOUTUBE_SIGNALS_LIMIT", "YOUTUBE_SIGNALS_PAGE", "YOUTUBE_SIGNALS_MAX_READ", "OUTREACH_CREDENTIAL_OWNER_ID"].map(n => s.definitionOf(FILES[SERVER], n) || "");
-  const OWNER = require(path.join(REPO, "lib", "ownerAccount.js")).OWNER_ACCOUNT_ID;
-  async function callRoute(rows) {
-    const db = fakeDb({ bsky_leads: rows });
-    let handler = null;
-    const ctx = { supabase: db.client, OWNER_ACCOUNT_ID: OWNER, isUsefulYoutubeComment: YF.isUsefulYoutubeComment, process: { env: { ENABLE_YOUTUBE_RADAR: "true" } },
-      console: { log() {}, error() {}, warn() {} }, requireAuth: function requireAuth() {},
-      app: { get(p) { if (p === "/api/leads/youtube-signals") handler = arguments[arguments.length - 1]; } } };
-    vm.createContext(ctx);
-    vm.runInContext(defs.join("\n") + "\n" + ROUTE, ctx);
-    const res = { code: 200, body: null, raw: "", status(c) { this.code = c; return this; }, json(b) { this.raw = JSON.stringify(b); this.body = JSON.parse(this.raw); return this; } };
-    await handler({ user: { id: OWNER } }, res, (e) => { res.code = 500; res.body = { error: String(e) }; });
-    return { res, db };
-  }
-  // Stored before this build: 1,100 hidden rows (newest), then 400 that pass. created_at descending = index order.
-  const HIDDEN_TEXT = [SPAM_2, FIVE_WORDS, PORTUGUESE];
-  function storedRows() {
-    const rows = [];
-    for (let i = 0; i < 1500; i++) {
-      const hiddenKind = i < 500 ? 0 : i < 900 ? 1 : i < 1100 ? 2 : -1;
-      rows.push({ source: "youtube", status: "signal", post_uri: "https://www.youtube.com/watch?v=s" + i + "&lc=c" + i, matched_keyword: LIBIDO,
-        post_created_at: "2026-10-19T00:00:00Z", post_text: hiddenKind === -1 ? "Stored " + i + ": my libido dropped after the new job, any advice?" : HIDDEN_TEXT[hiddenKind],
-        created_at: new Date(Date.UTC(2026, 9, 19, 12) - i * 1000).toISOString() });
-    }
-    return rows;
-  }
-  const E = await callRoute(storedRows());
-  const finds = (E.res.body && E.res.body.finds) || [];
-  check("E. the newest 50 KEPT rows are shown, newest first, though 1,100 newer rows are hidden",
-    E.res.code === 200 && finds.length === 50 && /^Stored 1100:/.test(finds[0].post_text) && /^Stored 1149:/.test(finds[49].post_text),
-    JSON.stringify([E.res.code, finds.length, finds[0] && finds[0].post_text]));
-  check("E. every row shown passes the filter", finds.length > 0 && finds.every(f => YF.isUsefulYoutubeComment(f.post_text, f.matched_keyword).keep));
-  check("E. hidden_counts are exact for the rows read: link 500, too_short 400, off_topic 200; rows_read 1,150",
-    JSON.stringify(E.res.body.hidden_counts) === JSON.stringify({ link: 500, too_short: 400, off_topic: 200 }) && E.res.body.rows_read === 1150,
-    JSON.stringify([E.res.body.hidden_counts, E.res.body.rows_read]));
-  check("E. the rows were read a page at a time (two pages of 1,000), never limited to 50 before filtering",
-    E.db.log.length === 2 && E.db.log.every(q => q.limit === null && q.range && q.range[1] - q.range[0] === 999) && E.db.log[1].range[0] === 1000,
-    JSON.stringify(E.db.log.map(q => [q.range, q.limit])));
-  check("E. no hidden row's text is in the response", HIDDEN_TEXT.every(t => E.res.raw.indexOf(JSON.stringify(t).slice(1, -1)) === -1) && E.res.raw.indexOf("siteoficial") === -1);
-  const small = storedRows().slice(1090, 1105).concat(storedRows().slice(0, 3));
-  const E2 = await callRoute(small);
-  check("E. fewer than 50 kept: every row is read once, all kept rows shown, hidden_counts exact (link 3, off_topic 10)",
-    E2.res.body.finds.length === 5 && JSON.stringify(E2.res.body.hidden_counts) === JSON.stringify({ link: 3, too_short: 0, off_topic: 10 }) && E2.res.body.rows_read === 18 && E2.db.log.length === 1,
-    JSON.stringify([E2.res.body.finds.length, E2.res.body.hidden_counts, E2.res.body.rows_read]));
-  check("E. the response still has finds, capture_on and kept_days, now with hidden_counts and rows_read",
-    JSON.stringify(Object.keys(E.res.body).sort()) === JSON.stringify(["capture_on", "finds", "hidden_counts", "kept_days", "rows_read"]), JSON.stringify(Object.keys(E.res.body)));
-
-  /* ── F. the page ───────────────────────────────────────────────────────── */
-  console.log("\n══ F. lead-radar.html says what was hidden, and reveals nothing ══");
-  const section = (/<section class="yt-section" id="ytSection"[^>]*>[\s\S]*?<\/section>/.exec(PAGE) || [""])[0];
-  check("F. the section states the three rules",
-    /<p class="yt-rules" id="ytRules">Only comments that pass three rules are shown: no link, at least 6 words, and a word from the search they matched\. Link spam, one-liners and off-topic comments are hidden\.<\/p>/.test(section), section.slice(0, 400));
-  const script = (/<script>([\s\S]*?)<\/script>/.exec(PAGE) || ["", ""])[1];
-  const fn = (name) => { const i = script.indexOf("    function " + name + "("); return i < 0 ? "" : script.slice(i, s.braceMatch(script, script.indexOf("{", i))); };
-  const pageCode = ["tok", "escHtml", "buildYoutubeFind", "youtubeHiddenLine", "loadYoutubeFinds"].map(fn).join("\n");
-  async function runPage(status, data) {
-    const made = {};
-    const document = { getElementById(id) { return made[id] || (made[id] = { id, hidden: true, innerHTML: "", textContent: "" }); } };
-    const ctx = { API: "https://api.example", localStorage: { getItem: () => "t" }, document, String, Number,
-      fetch: () => Promise.resolve({ ok: status === 200, status, json: () => Promise.resolve(data) }) };
-    vm.createContext(ctx);
-    vm.runInContext(pageCode + "\nloadYoutubeFinds();", ctx);
-    for (let i = 0; i < 10; i++) await new Promise(r => setImmediate(r));
-    return made;
-  }
-  const P = await runPage(200, { finds: [{ post_uri: "https://www.youtube.com/watch?v=abc&lc=1", matched_keyword: LIBIDO, post_created_at: "2026-10-19T08:00:00Z",
-    post_text: "My libido came back after I read https://evil.example/x and www.other.example too" }], hidden_counts: { link: 3, too_short: 2, off_topic: 1 }, rows_read: 7, capture_on: true });
-  check("F. it shows \"6 hidden: 3 with links, 2 too short, 1 off topic\"", P.ytHidden && P.ytHidden.hidden === false && P.ytHidden.textContent === "6 hidden: 3 with links, 2 too short, 1 off topic",
-    P.ytHidden && P.ytHidden.textContent);
-  const listHtml = P.ytList ? P.ytList.innerHTML : "";
-  check("F. no link is drawn from comment text: the only anchor is \"Open on YouTube\" to youtube.com",
-    (listHtml.match(/<a /g) || []).length === 1 && /<a class="yt-find-link" href="https:\/\/www\.youtube\.com\/watch\?v=abc&amp;lc=1"[^>]*>Open on YouTube<\/a>/.test(listHtml) &&
-    listHtml.indexOf("href=\"https://evil") === -1, listHtml.slice(0, 400));
-  check("F. no way to reveal hidden rows: no button, toggle or \"show\" control in the section, and no code asks for them",
-    !/<button|<input|<details|<select/i.test(section) && !/reveal|show hidden|show_hidden|include_hidden|showHidden/i.test(PAGE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/<!--[\s\S]*?-->/g, "")), section.slice(0, 200));
-  const none = await runPage(200, { finds: [], hidden_counts: { link: 4, too_short: 0, off_topic: 0 }, rows_read: 4, capture_on: true });
-  check("F. nothing kept but some hidden: it says no stored comment passes the rules, and shows the count",
-    /data-state="youtube_none_kept">No stored YouTube comment passes the three rules yet\./.test(none.ytList.innerHTML) && none.ytHidden.textContent === "4 hidden: 4 with links, 0 too short, 0 off topic",
-    none.ytList.innerHTML);
-  const empty = await runPage(200, { finds: [], hidden_counts: { link: 0, too_short: 0, off_topic: 0 }, rows_read: 0, capture_on: true });
-  check("F. nothing stored at all: the old \"nothing has been found yet\" state, with \"0 hidden\"",
-    /data-state="youtube_none_yet"/.test(empty.ytList.innerHTML) && /^0 hidden:/.test(empty.ytHidden.textContent));
-  const refused = await runPage(403, { error: "no", code: "lead_radar_unavailable" });
-  check("F. a refusal hides the section and the count", refused.ytSection.hidden === true && refused.ytHidden.hidden === true && refused.ytHidden.textContent === "");
-
-  /* ── G. the guide tip ──────────────────────────────────────────────────── */
-  /* NAMED BEFORE → AFTER (Oct 28 2026, every guide rewritten to one standard: four or five tips of at most 160
-     characters). BEFORE: "the Lead Radar tip says: no link, at least 6 words, a word from the search it matched,
-     and that the section counts what was hidden" — one sentence inside a 587-character tip. AFTER: the rule is the
-     page's to state, beside the finds it governs: the YouTube section's own line names the three reasons a comment
-     is hidden (proved in F against the filter's reasons), and the guide may state no YouTube rule at all that the
-     filter contradicts — no other word minimum, no "shown" claim for linked comments. */
-  console.log("\n══ G. the rules are stated where the finds are, and the guide contradicts none of them ══");
-  const radarTips = (/"lead-radar\.html": \[([\s\S]*?)\n    \]/.exec(GUIDE) || ["", ""])[1];
-  const minClaims = (GUIDE.match(/at least (\d+) words/g) || []).map(m => +/(\d+)/.exec(m)[1]);
-  check("G. the YouTube section's line names all three reasons, and the guide states no word minimum but the filter's " + YF.YOUTUBE_MIN_WORDS + " and no rule letting a linked comment through",
-    radarTips.length > 0 && /" hidden: " \+ link \+ " with links, " \+ short \+ " too short, " \+ off \+ " off topic"/.test(PAGE) &&
-    minClaims.every(n => n === YF.YOUTUBE_MIN_WORDS) && !/link[s]? (are|is) (shown|kept)|with a link (is|are) shown/i.test(GUIDE), JSON.stringify(minClaims));
+  /* ── E. nothing unfiltered is shown ───────────────────────────────────── */
+  console.log("\n══ E. the display route is gone ══");
+  check("E. GET /api/leads/youtube-signals and its limits are removed: a member's YouTube leads are only what capture kept",
+    FILES[SERVER].indexOf("app.get(\"/api/leads/youtube-signals\"") === -1 && !/\nconst YOUTUBE_SIGNALS_(LIMIT|PAGE|MAX_READ) =/.test(FILES[SERVER]));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

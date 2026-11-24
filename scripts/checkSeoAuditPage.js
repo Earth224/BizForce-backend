@@ -580,7 +580,10 @@ const count = (h, needle) => h.split(needle).length - 1;
        checkDemandSignalsPage. Every other tool is compared as before. */
     const shared = Object.assign({}, cfg, { tools: (cfg.tools || []).filter(t => !t.adminOnly) });
     const o = load(OLD_SRC, shared), n = load(NEW_SRC, shared);
-    const newTools = n.ap.TOOLS.filter(t => !(cfg.agentType === "seo" && t.id === "audit"));
+    /* NAMED (Nov 23 2026, LR-2): BEFORE demand-signals was owner-only (adminOnly) and so left out above. AFTER it is every
+       member's and drawn with the page, so its markup is compared here like any tool; its result has its own renderer
+       (TOOL_WHOLE_RENDERERS, like seo/audit) and is checked by checkDemandSignalsPage, so its renders are not compared. */
+    const newTools = n.ap.TOOLS.filter(t => !(cfg.agentType === "seo" && t.id === "audit") && !(cfg.agentType === "rd" && t.id === "demand-signals"));
     /* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: every page's tools markup was compared
        as configured. AFTER: a deck page (deck: true, executive-agent.html) draws no tools, since its one command box
        is the deck's; its TOOLS list is empty (so inject draws no tools block), and with the deck flag off its tools still draw exactly as at BEFORE. */

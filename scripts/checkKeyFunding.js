@@ -10,8 +10,11 @@
    platform instead looked exactly like one that was never meant to be.
 
    WHAT THIS PROVES
-     1. Every call site a person's action reaches passes a user id, and the one
-        that does not is convertSingleLead and only convertSingleLead.
+     1. Every call site a person's action reaches passes a user id. NAMED (Nov
+        23 2026, LR-2): BEFORE the one that did not was convertSingleLead, the
+        platform's own outreach; AFTER LR-2 removed it, no call site bills the
+        platform without a user, and Lead Radar's one model call
+        (leadRadarModelCall) passes the member's id.
      2. resolveAnthropicKey.withSource reports platform/no_key_stored for a user
         with no stored key, and user/null for one with a key — proven with a
         real encrypted row, created and removed by this script.
@@ -202,10 +205,14 @@ function auditCallSites() {
   const audit = auditCallSites();
   console.log("    " + audit.total + " call sites; " + audit.nullSites.length + " still billing the platform:");
   audit.nullSites.forEach(function (n) { console.log("      " + n); });
-  check("exactly one call site still bills the platform", audit.nullSites.length === 1,
+  // NAMED (Nov 23 2026, LR-2): BEFORE "exactly one call site still bills the platform" and "it is convertSingleLead". AFTER none does.
+  check("no call site bills the platform without a user (convertSingleLead, the last, went with LR-2)", audit.nullSites.length === 0 && audit.total > 0,
     audit.nullSites.join(", "));
-  check("and it is convertSingleLead — the platform's own outreach",
-    audit.nullSites.length === 1 && audit.nullSites[0] === "convertSingleLead", audit.nullSites.join(", "));
+  {
+    const src = require("fs").readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
+    const m = /function leadRadarModelCall\(userId, prompt, maxTokens, route\) \{\n  return callAnthropicText\(prompt, maxTokens, userId, "claude-haiku-4-5-20251001", \{ user_id: userId, agent_type: "lead_radar", route: route \}\);/.exec(src);
+    check("and Lead Radar's one model call passes the member's id, to the key and to the ledger", !!m && !/convertSingleLead/.test(src.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "")));
+  }
 
   /* ── the resolver ─────────────────────────────────────────────────────── */
   console.log("\n══ resolveAnthropicKey.withSource ══");

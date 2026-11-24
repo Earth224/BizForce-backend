@@ -315,10 +315,19 @@ const IN_AGENTS = ["seo.html", "sales.html", "content.html", "social.html", "ana
 const fileOfKey = k => IN_AGENTS.indexOf(k) !== -1 ? "agents/" + k : k;
 
 const MUTATIONS = {
-  // Lead Radar's tip claims the Business Profile again
+  // NAMED (Nov 23 2026, LR-2): BEFORE the anchor was the owner's radar tip ("It searches a fixed set of buyer-intent phrases on
+  // Bluesky, ..."), gone with LR-2. AFTER the Fingerprint tip is replaced by the old untrue Business Profile tip.
   "restore-lead-radar-tip": [[GUIDE,
-    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code, and does not read your Business Profile."',
+    '"Open \\"Fingerprint\\" and check what you do, where you work and the words people use; your leads are found with them."',
     '"It tracks against your Business Profile\'s Competitors and Industry — keep those current so the radar is watching the conversations that actually matter to you."']],
+  // NAMED (Nov 23 2026, LR-2): the tip says replies post by themselves
+  "lr2-radar-auto-posts": [[GUIDE, "then \\\"Post my reply\\\"; nothing posts until you press it.", "and it posts for you automatically."]],
+  // NAMED (Nov 23 2026, LR-2): the tip's daily cap drifts from the page's and the server's
+  "lr2-radar-cap-drift": [[GUIDE, "one per post and up to 5 a day.", "one per post and up to 10 a day."]],
+  // NAMED (Nov 23 2026, LR-2): the Sales page loses the pointer the tip names
+  "lr2-sales-pointer-gone": [[SALES, "<a class=\"action-btn\" href=\"/agents/lead-radar.html\">Open Lead Radar</a>", ""]],
+  // NAMED (Nov 23 2026, LR-2): the archive a free or member account was told is the owner's is drawn for everyone
+  "lr2-archive-shown": [[SALES, "<div id=\"salesArchive\" hidden>", "<div id=\"salesArchive\">"]],
   // the broker tip points at the removed Pipeline report section again
   "restore-broker-pipeline-section": [[GUIDE,
     '"The agent keeps no record of where your deals stand; \\"Deal Pipeline\\" analyses only the deals you describe in your request."',
@@ -326,7 +335,8 @@ const MUTATIONS = {
   // the kept billing tip loses its evidence: the banner is gone from the page
   "remove-cancel-banner": [[BILLING, '<div class="warn-banner" id="cancelWarn">', '<div class="warn-banner">']],
   // a radar starts reading the business profile, so the rewritten tip would be false
-  "radar-reads-profile": [["leadRadar.js", "const KEYWORDS = [", 'const PROFILE_READ = () => supabase.from("business_profiles").select("*");\nconst KEYWORDS = [']],
+  // NAMED (Nov 23 2026, LR-2): BEFORE "radar-reads-profile" (leadRadar.js reads business_profiles; the old tip denied it). AFTER
+  // retired: the tip is gone, and the Fingerprint is built from the profile on purpose (the LR-2 tip says so).
   // the dashboard rewrite says "read once"; a poll would make that false
   "dashboard-polls": [[DASH, "    loadAnalytics();\n    loadActivity();", "    loadAnalytics();\n    loadActivity();\n    setInterval(loadAnalytics, 30000);"]],
   // seo line 114 points at the removed report sections again
@@ -341,17 +351,14 @@ const MUTATIONS = {
   "restore-dashboard-realtime": [[DASH, '<p class="agent-subtitle">Your business intelligence, read when the page opens.</p>',
     '<p class="agent-subtitle">Your real-time business intelligence.</p>']],
   // line 146 claims Mastodon and YouTube unconditionally again
-  "restore-radar-146-unconditional": [[GUIDE,
-    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code, and does not read",
-    "It searches a fixed set of buyer-intent phrases and hashtags on Bluesky, Mastodon and YouTube, set in the radar's own code, and does not read"]],
-  // the retention job stops deleting the pipeline rows built on a YouTube find: the tip's new sentence would be false
-  "retention-keeps-pipeline": [[RETENTION, "      .from(\"sales_lead_pipeline\")\n      .delete()\n", "      .from(\"sales_lead_pipeline\")\n      .select(\"id\")\n"]],
+  // NAMED (Nov 23 2026, LR-2): BEFORE "restore-radar-146-unconditional" (its anchor, the owner's radar tip, is gone). Retired.
+  // NAMED (Nov 23 2026, LR-2): BEFORE "retention-keeps-pipeline" (the old Lead Radar tip's 30-day YouTube sentence). Retired with it.
   // a removed section ("Warnings", analytics) is named in another page's tip that no per-tip check covers:
   // only the guide-wide guard G1 can catch it
   "warnings-panel-elsewhere": [[GUIDE, '"Document a workflow before you automate it;',
     '"Check the Warnings panel, then document a workflow before you automate it;']],
   // NAMED (Nov 23 2026, LR-1): BEFORE "mastodon-ungated" (ENABLE_MASTODON_RADAR is gone). AFTER Mastodon is scored again: the tip and subtitle naming only Bluesky would be false
-  "mastodon-scored-again": [["leadRadar.js", 'const SCORABLE_SOURCES = ["bluesky"];', 'const SCORABLE_SOURCES = ["bluesky", "mastodon"];']],
+  // NAMED (Nov 23 2026, LR-2): BEFORE "mastodon-scored-again" (the old radar's scorer; the tips no longer describe it). Retired.
   // ── groups 6–10 ──
   // wallet tip 68 states the invented payouts again
   "restore-wallet-68-amounts": [[GUIDE,
@@ -420,7 +427,8 @@ const MUTATIONS = {
   // oracle tip 226 says the numbers sharpen with time again
   "restore-226-sharpen": [[GUIDE, "Your Life Path, Expression, Soul Urge and Birthday numbers are fixed by birth name and date; place, path and story can change.", "Your Life Path, Expression, Soul Urge and Birthday numbers only sharpen with time, and the Oracle's counsel sharpens with them."]],
   // sales tip 118 claims pipeline intelligence from your business data again
-  "restore-sales-118": [[GUIDE, "\"The tasks read none of the leads or pipeline on this page, so say in your request what has changed in your deals.\",", "\"This agent builds pipeline and revenue intelligence — funnels, lead generation, outreach scripts, offers, and objection handling — from your business data.\","]],
+  // NAMED (Nov 23 2026, LR-2): BEFORE the anchor said "the leads or pipeline on this page"; the pipeline is an archive now.
+  "restore-sales-118": [[GUIDE, "\"The tasks read none of the leads on this page, so say in your request what has changed in your deals.\",", "\"This agent builds pipeline and revenue intelligence — funnels, lead generation, outreach scripts, offers, and objection handling — from your business data.\","]],
   // the Oracle's picker offers .doc again, which the server refuses
   "restore-picker-doc": [["oracle.html", "      { ext: \".docx\", mime:", "      { ext: \".doc\",  mime: \"application/msword\" },\n      { ext: \".docx\", mime:"]],
   // the picker offers every image type again; the server takes four
@@ -577,24 +585,26 @@ check("R1. every tile and chart the tip names is on the page, by label and eleme
   dashNamed.filter(n => !(FILES[DASH].indexOf(">" + n + "<") !== -1 && FILES[DASH].indexOf('id="' + DASH_NAMED[n] + '"') !== -1)).join(", ") || dashNamed.join(", "));
 
 /* ── R2. agents/sales.html ─────────────────────────────────────────────── */
-console.log("\n══ R2. sales.html — Pipeline and Opportunities rewritten ══");
+/* NAMED (Nov 23 2026, LR-2): BEFORE the tip 'In "Sales Pipeline", move each lead through New, Drafted, Contacted, Replied,
+   Converted; nothing here judges which deals are stalling.', proven by the board's stage select. AFTER the pipeline is the
+   owner's read-only archive and leads live in Lead Radar: the two tips that say so are proven on the page and the server. */
+console.log("\n══ R2. sales.html — leads in Lead Radar, the old ones an archive (LR-2) ══");
 const salesTips = tipsFor("sales.html");
-// NAMED BEFORE → AFTER (Oct 28 2026, one standard): found by "Sales Pipeline panel" → 'In "Sales Pipeline", move each lead'.
-const salesTip = tipWith(salesTips, 'In "Sales Pipeline", move each lead');
-check("R2. the old \"Pipeline and Opportunities panels … flag where deals are stalling\" tip is gone",
-  salesTips.every(t => !/Opportunities panel|flag where deals are stalling/.test(t)) && !!salesTip, JSON.stringify(salesTips));
-check("R2. the new tip uses no watching word", !WATCHING.test(salesTip), salesTip);
-// NAMED BEFORE → AFTER (YouTube retention build): the board may now follow the retention note under the heading.
-check("R2. the Sales Pipeline panel exists: its heading and #salesPipelineBoard",
-  /<h2 class="section-label">Sales Pipeline<\/h2>\s*(?:<p class="sales-pipeline-note">[^<]*<\/p>\s*)?<div class="sales-pipeline-board" id="salesPipelineBoard"><\/div>/.test(FILES[SALES]));
-check("R2. its stages are the five the tip names, in order",
-  /var STATUS_LABELS = \{ new: "New", drafted: "Drafted", contacted: "Contacted", replied: "Replied", converted: "Converted" \};/.test(FILES[SALES]) &&
-  /New, Drafted, Contacted, Replied, Converted/.test(salesTip));
-check("R2. a lead's stage can be moved: each card has a stage select and the board handles its change",
-  /class="sales-pipeline-item-select"/.test(FILES[SALES]) && /board\.addEventListener\("change"/.test(FILES[SALES]));
-check("R2. still no Opportunities panel and no stalled-deal logic on the page or the server (the tip says so)",
-  !/Opportunities<\/h2>|id="[^"]*[Oo]pportunit/.test(FILES[SALES]) && !/\bstall(ed|ing)\b/i.test(FILES[SALES]) && !/\bstall(ed|ing)[ _]deal/i.test(FILES[SERVER]) &&
-  /nothing here judges which deals are stalling/.test(salesTip));
+const salesRadarTip = tipWith(salesTips, 'New leads are found for each member in Lead Radar');
+const salesArchiveTip = tipWith(salesTips, 'Seeing "Archive"?');
+check("R2. the old Pipeline, Opportunities, stage-moving and Refresh tips are gone",
+  salesTips.every(t => !/Opportunities panel|flag where deals are stalling|move each lead|Sales Pipeline|press \"Refresh\"|Lead Radar finds/.test(t)) && !!salesRadarTip && !!salesArchiveTip, JSON.stringify(salesTips));
+check("R2. the tips use no watching word", !!salesRadarTip && !!salesArchiveTip && !WATCHING.test(salesRadarTip + " " + salesArchiveTip));
+check("R2. \"Open Lead Radar\" is on the page and opens Lead Radar, where every reply waits for the member's approval",
+  /"Open Lead Radar" takes you there/.test(salesRadarTip) && FILES[SALES].indexOf('<a class="action-btn" href="/agents/lead-radar.html">Open Lead Radar</a>') !== -1 &&
+  FILES[RADAR_PAGE].indexOf('if (e.target.closest("#lrPost")) { send(); return; }') !== -1);
+check("R2. \"Archive\": the old finds, hidden until the owner's read answers; the server refuses anyone else (403)",
+  /read only and shown to the owner account alone; nothing in it can be sent/.test(salesArchiveTip) &&
+  FILES[SALES].indexOf('<div id="salesArchive" hidden>') !== -1 && />Archive: the old Lead Radar finds<\/h2>/.test(FILES[SALES]) &&
+  FILES[SALES].indexOf('fetch(API_URL + "/api/leads/archive"') !== -1 &&
+  /app\.get\("\/api\/leads\/archive", deps\.requireAuth, async function \(req, res, next\) \{\s*try \{\s*if \(req\.user\.id !== deps\.ownerId\) return res\.status\(403\)/.test(fs.readFileSync(path.join(REPO, "lib", "leadRoutes.js"), "utf8")));
+check("R2. nothing in the archive can be sent, drafted or moved: no draft, send, convert or status call, no stage select",
+  !/send-approved|\/api\/agents\/sales\/(convert|lead-status|leads|pipeline)|\/api\/leads\/[^"]*\/send|class="sales-pipeline-item-select"|board\.addEventListener\("change"/.test(FILES[SALES]));
 
 /* ── R3. agents/analytics.html ─────────────────────────────────────────── */
 console.log("\n══ R3. analytics.html — Warnings rewritten ══");
@@ -615,108 +625,43 @@ check("R3. revenue_forecast still produces no revenue figure (the tip says it re
   /reads no revenue data of its own/.test(anTip));
 
 /* ── L. agents/lead-radar.html ─────────────────────────────────────────── */
-console.log("\n══ L. lead-radar.html — Business Profile claim and switches ══");
+/* NAMED (Nov 23 2026, LR-2): BEFORE the owner's single-account radar: a fixed set of buyer-intent phrases on Bluesky, its
+   switches (YouTube, scoring), the YouTube section, Draft Engagement and Copy, Show Noise; each tip proven on the radar's code
+   and that page. AFTER Lead Radar is every member's (the boards LeadsHome, LeadsReply, LeadsFingerprint): the four tips are
+   proven on the new page and the server's lead routes, and every old claim stays banned from the entry. */
+console.log("\n══ L. lead-radar.html — every member's Lead Radar (LR-2) ══");
 const lrTips = tipsFor("lead-radar.html");
-const lrTip = tipWith(lrTips, "fixed set of buyer-intent phrases");
-check("L. the old \"tracks against your Business Profile's Competitors and Industry\" tip is gone",
-  lrTips.every(t => !/tracks against your Business Profile|Competitors and Industry/.test(t)) && !!lrTip, JSON.stringify(lrTips));
-// NAMED BEFORE → AFTER: was "…phrases and hashtags on Bluesky, Mastodon and YouTube".
-check("L. the tip says it searches a fixed set of buyer-intent phrases on Bluesky (named after: was \"on Bluesky, Mastodon and YouTube\")",
-  /fixed set of buyer-intent phrases on Bluesky, set in the radar's own code/.test(lrTip) && !/on Bluesky, Mastodon and YouTube/.test(lrTip), lrTip);
-// NAMED BEFORE → AFTER: was "…and YouTube finds are not shown here", which was false; then (Social Search build)
-// "Older scored YouTube finds can appear in the list; new YouTube finds are not scored or shown", until the retention job.
-// NAMED BEFORE → AFTER (YouTube quota build): was "…and YouTube capture is switched off. YouTube finds are kept for at
-// most 30 days, and a Sales pipeline entry built on one is removed with it."
-// NAMED BEFORE → AFTER (Oct 28 2026, one standard, every tip at most 160 characters): the tip had to carry the whole
-// YouTube paragraph ("…YouTube finds are listed in their own section below the scored list: not scored, not replyable
-// from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it."). AFTER, the
-// switches tip says "Mastodon, YouTube and scoring each wait on their own switch", and the YouTube section's own
-// heading and the page subtitle carry the rest (both asserted below); no tip may restate the old, false lines.
-// NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon, YouTube and scoring each wait on their own switch"; AFTER Mastodon lead search is removed.
-const lrSwitchTip = tipWith(lrTips, "YouTube and scoring each wait on their own switch");
-check("L. a tip says YouTube and scoring each wait on their own switch, and names no Mastodon capture, and no tip says YouTube is switched off or unshown (named after: was the YouTube paragraph)",
-  !!lrSwitchTip && /New Bluesky finds arrive every 5 minutes/.test(lrSwitchTip) && !/Mastodon/.test(lrSwitchTip) &&
-  lrTips.every(t => !/YouTube capture is switched off|Older scored YouTube finds can appear|YouTube finds are not shown here/.test(t)), lrSwitchTip);
-check("L. the tip says it does not read your Business Profile", /does not read your Business Profile/.test(lrTip));
-check("L. no Lead Radar tip makes a Business Profile claim: the profile is named only in that denial",
-  lrTips.every(t => t.replace(/does not read your Business Profile/g, "").search(/Business Profile|\bprofile's\b|Competitors|Industry/) === -1 ||
-    t === lrTip && t.replace(/does not read your Business Profile/g, "").replace(/editing your profile does not change what it finds/, "").search(/Business Profile|profile|Competitors|Industry/) === -1),
-  lrTips.filter(t => t.replace(/does not read your Business Profile/g, "").replace(/editing your profile does not change what it finds/, "").search(/Business Profile|profile|Competitors|Industry/) !== -1).join(" | "));
-check("L. the rewritten tip uses no watching word", !WATCHING.test(lrTip), lrTip);
-// A read, not a mention: leadRadar.js's scorer prompt describes BizForce as "eighteen AI agents working from one business profile".
+const LRP = FILES[RADAR_PAGE] || "";
 const PROFILE_READ = /business_profiles|businessProfile|bfLoadBusinessContext/;
-check("L. no radar file reads business_profiles or a business profile",
-  RADARS.every(f => !PROFILE_READ.test(FILES[f])), RADARS.filter(f => PROFILE_READ.test(FILES[f])).join(", "));
-// NAMED (Nov 23 2026, LR-1): BEFORE also mastodonRadar.js's HASHTAGS; that file is deleted.
-check("L. the searches are fixed lists in code: KEYWORDS and BIZFORCE_KEYWORDS, and YouTube's KEYWORDS",
-  /\nconst KEYWORDS = \[/.test(FILES["leadRadar.js"]) && /\nconst BIZFORCE_KEYWORDS = \[/.test(FILES["leadRadar.js"]) &&
-  /\nconst KEYWORDS = \[/.test(FILES["youtubeRadar.js"]));
-check("L. the Lead Radar page itself reads no business profile", !/business_profile|bfLoadBusinessContext|\/api\/business/i.test(FILES[RADAR_PAGE]));
-// The switches, from leadRadar.js's radarTick: Bluesky unconditional, the rest each behind its own flag.
-const LR = FILES["leadRadar.js"];
-const radarSub0 = () => (/<p class="agent-subtitle">([^<]*)<\/p>/.exec(FILES[RADAR_PAGE]) || ["", ""])[1];
+const LR = FILES["leadRadar.js"] || "";
 const tickStart = LR.indexOf("async function radarTick() {");
 const tick = tickStart === -1 ? "" : LR.slice(tickStart, LR.indexOf("\n}\n", tickStart));
 function gated(flag, call) {
   const g = tick.indexOf('if (process.env.' + flag + ' === "true") {');
-  const c = g === -1 ? -1 : tick.indexOf(call, g);   // the call after the gate: a comment above it may name the call too
+  const c = g === -1 ? -1 : tick.indexOf(call, g);
   return g !== -1 && c > g && tick.slice(g, c).split("{").length - tick.slice(g, c).split("}").length >= 1;
 }
-check("L. Bluesky capture runs on every tick, ungated: radarTick calls runLeadRadarOnce() first",
-  /radarRunning = true;\s*try \{\s*await runLeadRadarOnce\(\);/.test(tick));
-check("L. ticks run every 5 minutes: setInterval(radarTick, 300000)", /setInterval\(radarTick, 300000\)/.test(LR));
-// NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon capture is gated by ENABLE_MASTODON_RADAR". AFTER it is removed: no file, no gate, no call, not scored.
-check("L. Mastodon lead search is removed: no mastodonRadar.js, no ENABLE_MASTODON_RADAR, no runMastodonRadarOnce, and mastodon is not scored",
-  !fs.existsSync(path.join(REPO, "mastodonRadar.js")) && !/ENABLE_MASTODON_RADAR === |runMastodonRadarOnce\(/.test(LR) &&
-  /const SCORABLE_SOURCES = \["bluesky"\];/.test(LR));
-check("L. YouTube capture is gated by ENABLE_YOUTUBE_RADAR", gated("ENABLE_YOUTUBE_RADAR", "runYoutubeRadarOnce") || gated("ENABLE_YOUTUBE_RADAR", "YoutubeRadar"),
-  (/if \(process\.env\.ENABLE_YOUTUBE_RADAR === "true"\) \{[\s\S]{0,600}/.exec(tick) || [""])[0].slice(0, 200));
-check("L. intent scoring is gated by ENABLE_LEAD_SCORING", gated("ENABLE_LEAD_SCORING", "scoreNewLeads()"));
-// NAMED BEFORE → AFTER: was "YouTube rows are not shown on the page"; older scored ones were, until the retention job.
-const LEADS_ROUTE = (function (sv) { const i = sv.indexOf('app.get("/api/leads", '); return i === -1 ? "" : sv.slice(i, sv.indexOf("\n});\n", i)); })(FILES[SERVER]);
-check("L. new YouTube finds are not shown: they are written as \"signal\", /api/leads lists only status \"scored\", and youtube is not a scored source",
-  /status:\s+"signal"/.test(FILES["youtubeRadar.js"]) && /\.eq\("status", "scored"\)/.test(LEADS_ROUTE) &&
-  /const SCORABLE_SOURCES = \["bluesky"\];/.test(LR));   // NAMED (Nov 23 2026, LR-1): BEFORE ["bluesky", "mastodon"]
-// NAMED BEFORE → AFTER: was "older scored YouTube finds can appear: /api/leads never filters on source", the evidence
-// for a sentence the tip no longer has. Now the evidence for "kept for at most 30 days" and "removed with it".
-const RET = FILES[RETENTION];
-check("L. YouTube finds are kept for at most 30 days: the retention job deletes source youtube older than 30 days, daily at 09:00 UTC, on unless ENABLE_YOUTUBE_RETENTION is exactly \"false\"",
-  /var YOUTUBE_RETENTION_DAYS = 30;/.test(RET) && /\.from\("bsky_leads"\)\n      \.delete\(\)[\s\S]{0,120}\.eq\("source", "youtube"\)/.test(RET) &&
-  /ENABLE_YOUTUBE_RETENTION !== "false"/.test(RET) && /if \(youtubeRetentionEnabled\(process\.env\)\) \{\n    cron\.schedule\("0 9 \* \* \*"/.test(FILES[SERVER]));
-check("L. a Sales pipeline entry built on a YouTube find is removed with it: the job deletes sales_lead_pipeline rows on the batch's leads before the leads",
-  /\.from\("sales_lead_pipeline"\)\n      \.delete\(\)\n      \.in\("lead_post_uri", deletableUris\)/.test(RET) &&
-  RET.indexOf(".from(\"sales_lead_pipeline\")") < RET.indexOf("// (b) THE LEADS."));
-// NAMED BEFORE → AFTER (YouTube quota build): both said "…and are not currently captured".
-check("L. the subtitle and the Sales Pipeline say the same: capture only when switched on, kept for at most 30 days, a pipeline entry removed with it",
-  /YouTube capture also runs only when switched on; its finds are listed apart, never scored, and kept for at most 30 days\./.test(radarSub0()) &&
-  /<p class="sales-pipeline-note">YouTube finds are kept for at most 30 days, and YouTube capture runs only when switched on\. A pipeline entry built on a YouTube find is removed with it\.<\/p>/.test(FILES[SALES]) &&
-  !/not currently captured/.test(radarSub0() + FILES[SALES]), radarSub0());
-// The section the tip and the subtitle name: its own route, its own list, no Draft button.
-const ytSection = (/<section class="yt-section" id="ytSection"[^>]*>[\s\S]*?<\/section>/.exec(FILES[RADAR_PAGE]) || [""])[0];
-const ytBuilder = (/function buildYoutubeFind\(find\) \{[\s\S]*?\n    \}\n/.exec(FILES[RADAR_PAGE]) || [""])[0];
-check("L. lead-radar.html has the YouTube section, titled as the tip says, outside #leadsList, fed by /api/leads/youtube-signals",
-  /<h2 class="yt-title">YouTube finds — not scored, cannot be replied to from here, kept 30 days<\/h2>/.test(ytSection) &&
-  ytSection.indexOf('id="leadsList"') === -1 && /fetch\(API \+ "\/api\/leads\/youtube-signals"/.test(FILES[RADAR_PAGE]) &&
-  /app\.get\("\/api\/leads\/youtube-signals", requireAuth,/.test(FILES[SERVER]), ytSection.slice(0, 200));
-check("L. a YouTube find has no Draft button, no score and no reply control", ytBuilder.length > 0 && !/draft|score|reply|copy-btn/i.test(ytBuilder), ytBuilder.slice(0, 300));
-// NAMED BEFORE → AFTER (YouTube filter build): new. Each rule the tip names is the filter's, and the count it names is shown.
-const YT_FILTER = fs.readFileSync(path.join(REPO, "lib", "youtubeFilter.js"), "utf8");
-// NAMED BEFORE → AFTER (Oct 28 2026, one standard): the tip had to state "A YouTube comment is shown only if it has no
-// link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why." AFTER,
-// the section's own count line says it on the page; the code evidence is unchanged, and checkYoutubeFilter G holds any
-// word minimum a tip states to the filter's.
-check("L. the YouTube rules and the hidden count are real and shown in the section: the filter's link test, its 6-word minimum, its topic test, used at capture and display, and the page's count line (named after: was also stated in the tip)",
-  lrTips.every(t => !/YouTube comment is shown only if/.test(t) || /at least 6 words/.test(t)) &&
-  /var YOUTUBE_MIN_WORDS = 6;/.test(YT_FILTER) && /reason: "link"/.test(YT_FILTER) && /reason: "off_topic"/.test(YT_FILTER) &&
-  /isUsefulYoutubeComment\(commentText, keyword\)/.test(FILES["youtubeRadar.js"]) && /isUsefulYoutubeComment\(page\[i\]\.post_text, page\[i\]\.matched_keyword\)/.test(FILES[SERVER]) &&
-  /id="ytHidden"/.test(ytSection) && /" hidden: " \+ link \+ " with links, " \+ short \+ " too short, " \+ off \+ " off topic"/.test(FILES[RADAR_PAGE]), lrTip);
-const radarSub = (/<p class="agent-subtitle">([^<]*)<\/p>/.exec(FILES[RADAR_PAGE]) || ["", ""])[1];
-const UNCONDITIONAL = /Mastodon &amp; YouTube every|Bluesky, Mastodon(,| and| &amp;) YouTube|(?:and|,) scored by intent|scores them,|\bscans? Mastodon|\bscans? YouTube/i;
-// NAMED (Nov 23 2026, LR-1): BEFORE "...; Mastodon capture and intent scoring run only when switched on."
-check("L. the subtitle says Bluesky every 5 minutes and that intent scoring runs only when switched on, and names no Mastodon",
-  /captured from Bluesky every 5 minutes; intent scoring runs only when switched on\./.test(radarSub) && !/Mastodon/.test(radarSub), radarSub);
-check("L. no Lead Radar tip and not the subtitle claims Mastodon, YouTube or scoring unconditionally",
-  !UNCONDITIONAL.test(radarSub) && lrTips.every(t => !UNCONDITIONAL.test(t)), [radarSub].concat(lrTips).filter(t => UNCONDITIONAL.test(t)).join(" | "));
+const lrFp = tipWith(lrTips, 'Open "Fingerprint"'), lrPost = tipWith(lrTips, 'press "Draft a reply"'), lrOwn = tipWith(lrTips, "own connected Bluesky account"), lrStuck = tipWith(lrTips, "No leads yet?");
+check("L. the old tips are gone: Business Profile tracking, the fixed phrase list, the switches, Draft Engagement and Copy, Show Noise, \"Not enabled on this account\"",
+  lrTips.every(t => !/tracks against your Business Profile|Competitors and Industry|fixed set of buyer-intent phrases|wait on their own switch|Draft Engagement|clipboard|Show Noise|High-Intent|Not enabled on this account|Mastodon/.test(t)) &&
+  !!lrFp && !!lrPost && !!lrOwn && !!lrStuck, JSON.stringify(lrTips));
+check("L. \"Fingerprint\" is a tab with what you do, where, and the words people use, saved by PUT /api/leads/fingerprint",
+  /role="tab"[^>]*><span class="lr-tbf">Fingerprint<\/span>/.test(LRP) && ["What you do", "Where", "Words people use"].every(l => LRP.indexOf('<p class="lr-lbl">' + l + "</p>") !== -1) &&
+  LRP.indexOf('call("PUT", "/api/leads/fingerprint", body)') !== -1);
+check("L. \"Draft a reply\" opens the sheet; nothing posts until \"Post my reply\", and what posts is the box's text",
+  /then "Post my reply"; nothing posts until you press it\./.test(lrPost) && LRP.indexOf('btn("Draft a reply", ') !== -1 &&
+  LRP.indexOf('if (e.target.closest("#lrPost")) { send(); return; }') !== -1 && LRP.indexOf("var text = box.value.trim();") !== -1 &&
+  LRP.split('/send"').length === 2 && !/setInterval|EventSource|WebSocket/.test(LRP));
+check("L. replies go from the member's own account, one per post, up to 5 a day: the page's line, the server's default cap and its own-account rule say the same",
+  /one per post and up to 5 a day/.test(lrOwn) && LRP.indexOf("'. One reply per post, up to 5 a day.</p>'") !== -1 &&
+  /if \(raw == null \|\| String\(raw\)\.trim\(\) === ""\) return 5;/.test((/const OUTREACH_DAILY_CAP = \(function \(\) \{[\s\S]{0,300}/.exec(FILES[SERVER]) || [""])[0]) &&
+  LRP.indexOf('"Posted from your own connected " + (PLATFORM[d.platform] || "Bluesky") + " account"') !== -1);
+check("L. a BizForce Need opens its post for \"I can help\" (Home's strip)",
+  /A BizForce Need opens its post for "I can help"/.test(lrOwn) && LRP.indexOf('link("I can help", "/home.html?post=" + encodeURIComponent(l.need_post_id), true)') !== -1);
+check("L. \"Words people use\" and \"Where to look\" are on the Fingerprint, and its switches save",
+  LRP.indexOf('<p class="lr-lbl">Where to look</p>') !== -1 && LRP.indexOf("save({ sources: src }); return;") !== -1 && !!lrStuck);
+check("L. no tip uses a watching word or claims anything happens automatically", lrTips.every(t => !WATCHING.test(t) && !/\bautomatically\b/i.test(t)), lrTips.join(" | "));
+check("L. neither the page nor a tip names Mastodon or Reddit as a source", !/Mastodon|Reddit/.test(LRP) && lrTips.every(t => !/Mastodon|Reddit/.test(t)));
 
 /* ── R4–R7. the template pages whose report sections were removed ──────── */
 console.log("\n══ R4–R7. broker, publicist, community — report sections rewritten ══");
@@ -876,8 +821,9 @@ const A = [
   ["1 rd 217", rdTips, 'Pick "Market Research" or "Competitive Intelligence"', /differentiation scores/, () => offers(RD, "Market Research") && offers(RD, "Competitive Intelligence")],
   ["1 social 132", socTips, 'Pick "Content Calendar" or "Platform Playbook"', /content pillars/i,
     () => ["Social Campaign", "Content Calendar", "Engagement Strategy", "Platform Playbook", "Audience Growth Plan"].every(n => offers(SOCIAL, n))],
-  ["1 sales 119", salesTips, "They come from Lead Radar", /pipeline recommendations/,
-    () => offers(SALES, "Lead Generation") && RADARS.every(f => !PROFILE_READ.test(FILES[f]))],
+  // NAMED (Nov 23 2026, LR-2): BEFORE "No leads listed? They come from Lead Radar, which works only for the account that owns its
+  // keyword set"; AFTER Lead Radar is every member's, so the tip is gone (R2 proves its replacement); its old wordings stay banned.
+  ["1 sales 119", salesTips, null, /pipeline recommendations|works only for the account that owns its keyword set/, "Nov 23 2026, LR-2"],
   // group 2 — a field that does not exist
   ["2 rd 216", rdTips, "current in your Business Profile; I read them first", /Market Goals|Research Goals/,
     () => ["Industry", "Description", "Target Audience", "Business Goals", "Competitors"].every(f => PROFILE_FIELDS.indexOf(f) !== -1) &&
@@ -887,11 +833,9 @@ const A = [
   ["3 dashboard 36", dashTips, "Figures are fetched once, as the page loads", /live read-only summary/,
     () => !/setInterval|EventSource|WebSocket/.test(FILES[DASH])],
   // groups 3 and 4 — Lead Radar 145 (146 is proven in L)
-  ["3/4 lead-radar 145", lrTips, "YouTube and scoring each wait on their own switch",   // NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon, YouTube and ..."
-   /\blive Bluesky|by matched keyword|scans for buying-intent posts every 5 minutes, scores them/,
-    () => /id="refreshBtn" onclick="loadLeads\(\)">Refresh</.test(FILES[RADAR_PAGE]) &&
-      /l\.suggested_product && l\.suggested_product !== "none" && \(l\.intent_score \|\| 0\) >= 40/.test(FILES[RADAR_PAGE]) &&
-      !/setInterval|EventSource|WebSocket/.test(FILES[RADAR_PAGE]) && gated("ENABLE_LEAD_SCORING", "scoreNewLeads()")],
+  // NAMED (Nov 23 2026, LR-2): BEFORE "New Bluesky finds arrive every 5 minutes; YouTube and scoring each wait on their own
+  // switch" (the owner's radar); AFTER the tip is gone (L proves the new four); its old wordings stay banned.
+  ["3/4 lead-radar 145", lrTips, null, /\blive Bluesky|by matched keyword|scans for buying-intent posts every 5 minutes, scores them|wait on their own switch/, "Nov 23 2026, LR-2"],
   // group 5 — social connect, publish and schedule are off. The Zernio code behind SOCIAL_ACCOUNTS_SCOPED was deleted
   // (launch audit #22c), so "off" is now: server.js names no zernio.com and reads no ZERNIO_ variable (socialShut).
   ["5 content 125", conTips, "Approved drafts are saved, not published or scheduled", /approve and schedule/,
@@ -924,12 +868,13 @@ const A = [
     () => /<\/svg>BizForce AI Member<\/div>/.test(FILES[BIZID]) && /profile = data\.profile;\s*renderCard\(profile\);\s*status\.textContent = "Saved successfully!";/.test(FILES[BIZID])]
 ];
 // A retired row: its tip is gone in the Oct 28 2026 rewrite, and only its old-wording ban is still asserted.
-function retired(block, id, tips, old) {
-  check(block + ". " + id + ": RETIRED (tip removed Oct 28 2026) — the old untrue wording is still gone from the whole entry",
+// NAMED (Nov 23 2026, LR-2): the row's fifth slot may name when its tip was removed (BEFORE always Oct 28 2026)
+function retired(block, id, tips, old, when) {
+  check(block + ". " + id + ": RETIRED (tip removed " + (typeof when === "string" ? when : "Oct 28 2026") + ") — the old untrue wording is still gone from the whole entry",
     tips.length > 0 && tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
 }
 A.forEach(([id, tips, fragment, old, proof]) => {
-  if (fragment === null) return retired("A", id, tips, old);
+  if (fragment === null) return retired("A", id, tips, old, proof);
   const t = tipWith(tips, fragment);
   check("A. " + id + ": the new wording is there", !!t, fragment);
   check("A. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
@@ -940,12 +885,14 @@ A.forEach(([id, tips, fragment, old, proof]) => {
 console.log("\n── A. page copy ──");
 check("A. 3 analytics-dashboard.html subtitle: \"real-time\" gone, says it is read when the page opens",
   /<p class="agent-subtitle">Your business intelligence, read when the page opens\.<\/p>/.test(FILES[DASH]) && !/real-?time/i.test(FILES[DASH]));
-check("A. 3 sales.html: \"Live Leads & Activity\" and \"Live Leads from Lead Radar\" are now \"Leads & Activity\" and \"Leads from Lead Radar\"",
+// NAMED (Nov 23 2026, LR-2): BEFORE the list's heading was "Leads from Lead Radar"; AFTER "Leads are in Lead Radar" (the pointer)
+check("A. 3 sales.html: no \"Live Leads\"; \"Leads & Activity\" and \"Leads are in Lead Radar\"",
   !/>[^<>\n]*Live Leads[^<>\n]*<|aria-label="Live Leads/.test(FILES[SALES]) && /<span class="mc-module-title">Leads &amp; Activity<\/span>/.test(FILES[SALES]) &&
-  /aria-label="Leads and Activity"/.test(FILES[SALES]) && />Leads from Lead Radar<\/h2>/.test(FILES[SALES]));
+  /aria-label="Leads and Activity"/.test(FILES[SALES]) && />Leads are in Lead Radar<\/h2>/.test(FILES[SALES]));
 const MC_REFRESH = (/async function mcRefreshConsole\(\) \{([\s\S]*?)\n      \}\n/.exec(FILES[SALES]) || ["", ""])[1];
-check("A. 3 sales.html: the lead list is not polled — it loads once and on its Refresh button; the 20 s poll does not call loadLeads",
-  /id="salesLeadsRefreshBtn">Refresh</.test(FILES[SALES]) && !!MC_REFRESH && !/loadLeads/.test(MC_REFRESH));
+// NAMED (Nov 23 2026, LR-2): BEFORE "it loads once and on its Refresh button"; AFTER the archive is read once and shared
+check("A. 3 sales.html: the archive is not polled — read once (one shared promise); the 20 s poll fetches nothing of it",
+  /if \(archiveRead\) return archiveRead;/.test(FILES[SALES]) && !!MC_REFRESH && !/fetch\(|showArchive/.test(MC_REFRESH));
 check("A. 3 sales.html: \"Live Activity\" is kept, and a 20 s setInterval renders its feed (#mcActivityFeed via mcRenderFeed)",
   /<h2 class="section-label">Live Activity<\/h2>\s*<div id="mcActivityFeed">/.test(FILES[SALES]) &&
   /mcTaskTimer = setInterval\(mcRefreshConsole, 20000\);/.test(FILES[SALES]) && /mcRenderFeed\(tasks\);/.test(MC_REFRESH) &&
@@ -1124,12 +1071,9 @@ const B = [
       // A fail shows the result screen, with Try Again on it. The server grades now, so it is the server's fail.
       /if \(!result\.passed\) \{\s*render\(pct, false, null, res\.data\.already_earned === true \? "kept" : null\);/.test(FILES[CERTS]) &&
       !/cooldown|max_?attempts|attempt_?limit|lockout/i.test(SV.slice(SV.indexOf('app.post("/api/certifications/award"'), SV.indexOf("async function creditWallet(")))],
-  ["8 lead-radar 147", lrTips, "to your clipboard and post it on Bluesky yourself", /Sort by score|Copy it straight to Bluesky/,
-    () => /leads\.sort\(function \(a, b\) \{ return \(b\.intent_score \|\| 0\) - \(a\.intent_score \|\| 0\); \}\);/.test(FILES[RADAR_PAGE]) &&
-      !/<select|>[^<>\n]*\bSort\b[^<>\n]*</i.test(FILES[RADAR_PAGE]) &&
-      /return \(l\.intent_score \|\| 0\) >= 60;/.test(FILES[RADAR_PAGE]) && /label: "High-Intent"/.test(FILES[RADAR_PAGE]) &&
-      /function copyReply\(idx\) \{[\s\S]{0,200}?navigator\.clipboard\.writeText\(text\)/.test(FILES[RADAR_PAGE]) && />Draft Engagement<\/button>/.test(FILES[RADAR_PAGE]) &&
-      !/bsky\.social|createRecord|app\.bsky/.test(FILES[RADAR_PAGE])],
+  // NAMED (Nov 23 2026, LR-2): BEFORE 'Press "Draft Engagement" ... then "Copy" it to your clipboard and post it on Bluesky yourself';
+  // AFTER the tip is gone (L proves the new four); its old wordings stay banned.
+  ["8 lead-radar 147", lrTips, null, /Sort by score|Copy it straight to Bluesky|Draft Engagement|to your clipboard/, "Nov 23 2026, LR-2"],
   // group 7 — wallet and certification payouts
   ["7 wallet 66", walTips, "your history, which lists your latest 50 transactions", /full Transaction History/,
     () => HISTORY_50() && ["Available Balance", "Total Earned", "Total Spent"].every(l => FILES[WALLET].indexOf(">" + l + "<") !== -1) && /\n    Transaction History\n/.test(FILES[WALLET])],
@@ -1184,7 +1128,7 @@ const B = [
 ];
 const NO_CLAIM = t => !WATCHING.test(t) && !/\bautomatic(ally)?\b|\binstant(ly)?\b|\bauto-/i.test(t);
 B.forEach(([id, tips, fragment, old, proof]) => {
-  if (fragment === null) return retired("B", id, tips, old);
+  if (fragment === null) return retired("B", id, tips, old, proof);
   const t = tipWith(tips, fragment);
   check("B. " + id + ": the new wording is there", !!t, fragment);
   check("B. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
@@ -1211,7 +1155,7 @@ const BCOPY = [
   ["6 community-agent.html subtitle", COMMUNITY, '<p class="agent-subtitle">Community growth plans, engagement strategy, referral loops, and retention systems.</p>', /Community health|growth intelligence/i,
     () => ["Community Growth Plan", "Engagement Strategy", "Referral Loop", "Retention System"].every(n => offers(COMMUNITY, n))],
   ["6 sales.html subtitle", SALES, '<p class="agent-subtitle">Funnels, outreach scripts, and offers from your business profile, plus the leads Lead Radar captures.</p>', /revenue intelligence/i,
-    () => ["Sales Funnel", "Outreach Script", "Offer Builder"].every(n => offers(SALES, n)) && />Leads from Lead Radar<\/h2>/.test(FILES[SALES])],
+    () => ["Sales Funnel", "Outreach Script", "Offer Builder"].every(n => offers(SALES, n)) && />Leads are in Lead Radar<\/h2>/.test(FILES[SALES])],   // NAMED (Nov 23 2026, LR-2): BEFORE >Leads from Lead Radar</h2>
   // the optimize route fetches the site itself (guardedFetch) and reads nothing from Google
   ["6 seo.html report heading", SEO, '<h3 class="seo-opt-report-title">Website SEO Report</h3>', /Google SEO Report/,
     () => /guardedFetch/.test(OPTIMIZE) && /EXTRACTED ON-PAGE DATA \(fetched live from the URL above\)/.test(OPTIMIZE) && !/googleapis|google\.com|search ?console|serpapi|pagespeed/i.test(OPTIMIZE)],
@@ -1261,7 +1205,7 @@ const tablesRead = text => (text.match(/\.from\("(\w+)"\)/g) || []).map(m => /"(
 const TASK_TABLES = tablesRead(TASK_ROUTE + LIVE_STATS + TASK_COUNTS + NOTES).join(",");
 const NO_PIPELINE = () => TASK_TABLES === "agent_memory,ai_tasks,business_profiles,content_library,sms_campaigns,sms_subscribers,social_post_drafts" &&
   /buildAgentSystemPrompt\(agentBrain, businessProfile, liveStats, combinedMemoriesForBrain, specialistNotes\);/.test(TASK_ROUTE) &&
-  /"\\n\\nUSER REQUEST:\\n" \+ userPrompt;/.test(TASK_ROUTE) && />Leads from Lead Radar<\/h2>/.test(FILES[SALES]);
+  /"\\n\\nUSER REQUEST:\\n" \+ userPrompt;/.test(TASK_ROUTE) && />Leads are in Lead Radar<\/h2>/.test(FILES[SALES]);   // NAMED (Nov 23 2026, LR-2): BEFORE >Leads from Lead Radar</h2>
 const DOCX_ONLY = () => /"application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document": true, \/\/ \.docx/.test(SV) && !/application\/msword/.test(SV);
 const C = [
   // group 11 — one-off tips
@@ -1293,7 +1237,8 @@ const C = [
       /new URLSearchParams\(window\.location\.search\)\.get\("token"\)/.test(FILES[CARDVIEW]) &&
       /\/\^\\\/c\\\/\(\[a-z0-9-\]\{3,40\}\)\\\/\?\$\/\.exec\(window\.location\.pathname\)/.test(FILES[CARDVIEW]) &&
       /var url = window\.bfCard\.publicUrl\(\{ slug: activeSlug, share_token: st \}\);/.test(FILES[CARDS])],
-  ["11 sales 118", salesTips, "read none of the leads or pipeline on this page", /revenue intelligence|from your business data/,
+  ["11 sales 118", salesTips, "read none of the leads on this page",   // NAMED (Nov 23 2026, LR-2): BEFORE "the leads or pipeline" (the pipeline is an archive now)
+ /revenue intelligence|from your business data/,
     () => NO_PIPELINE() && ["Sales Funnel", "Lead Generation", "Outreach Script", "Offer Builder", "Objection Handling"].every(n => offers(SALES, n))],
   ["11 sales 122", salesTips, "so say in your request what has changed in your deals", /stale pipeline data/, NO_PIPELINE],
   ["11 content 129", conTips, "\"Content Library\" keeps saved articles and SMS campaigns", /delete drafts so your queue/,
@@ -1508,7 +1453,7 @@ const CN = [
       /subscriber\.consent_status !== "opted_in"/.test(ENGINE) && !/\/api\/sms\/send["']/.test(FILES[SMS])]
 ];
 C.forEach(([id, tips, fragment, old, proof]) => {
-  if (fragment === null) return retired("C", id, tips, old);
+  if (fragment === null) return retired("C", id, tips, old, proof);
   const t = tipWith(tips, fragment);
   check("C. " + id + ": the new wording is there", !!t, fragment);
   check("C. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));

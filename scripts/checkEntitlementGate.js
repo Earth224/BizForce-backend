@@ -7,6 +7,8 @@
    WHAT WAS WRONG. POST /api/oracle, GET /api/oracle/invocation,
    POST /api/oracle/chat, POST /api/self-reviews/run and
    POST /api/leads/draft-reply were authenticated but not entitlement-gated.
+   (NAMED Nov 23 2026, LR-2: draft-reply is gone; its successor POST
+   /api/leads/:id/draft is the fifth route checked here.)
    Any account with a valid token — never subscribed, cancelled, lapsed —
    could call them, and every one of them calls Anthropic on the platform's
    key. There is no free tier in this product, so that was straightforwardly
@@ -108,10 +110,10 @@ const ROUTES = [
   { path: "/api/oracle/invocation", method: "get"  },
   { path: "/api/oracle/chat",       method: "post" },
   { path: "/api/self-reviews/run",  method: "post" },
-  // NAMED (Nov 23 2026, LR-1): BEFORE draft-reply was M. AFTER it is A (lib/routeAccess.js ADMIN_IN_HANDLER): the owner check by id sits in the
-  // handler, AFTER requireActiveSubscription, which it keeps because it calls the model. This file stops at the gate, so the
-  // entitlement answers below are unchanged; a paying account that is not the owner is refused 403 later, in the handler.
-  { path: "/api/leads/draft-reply", method: "post" }
+  // NAMED (Nov 23 2026, LR-2): BEFORE POST /api/leads/draft-reply (the owner's draft, A after LR-1), which LR-2 removed. AFTER
+  // its successor, POST /api/leads/:id/draft (M, lib/leadRoutes.js): every member drafts a reply on their own allowance, and the
+  // gate stands ahead of the AI limiter and the handler, so an account that is not entitled spends nothing.
+  { path: "/api/leads/:id/draft", method: "post" }
 ];
 
 function layerFor(routePath, method) {

@@ -34,6 +34,13 @@
         sun (the chat box's void and starfield density in the gold ring, no green ring); the mist a 56 px
         button 16 px from the right and 16 px above the bar; the Guide tab and its panel on the phone; the
         chat 8 px from each side, 10 px above the mist, at most 420 px; the still fade under reduced motion.
+     NAMED (Nov 23 2026, LR-2): I. the owner's canvas row 6, three boards (designSpec LEADS): agents/lead-radar.html's
+        header, its two tabs (Leads, Fingerprint; no Inbound or Get found), the stats, the source chips, the lead cards and
+        their badges and buttons, the reply sheet (the quote, the draft box, the three checks, the link switch, Write it again
+        and Post my reply, its line), the Fingerprint (its labels, chips, Where to look and Threads' waiting line); every
+        control a 44 px target with the board's face inside; the site's fonts and music icon; members only (no request
+        signed out or from a free account; bf-access.js MEMBER_PAGES; the dashboard's lead count read by members only);
+        the reply sent is the box's own text.
    Every phone rule is checked to be inside its file's @media (max-width:
    760px) block, so the desktop is unchanged.
 
@@ -49,6 +56,8 @@ const POSTS = "@lib/posts.js", AGV = "scripts/bf-agents-views.js", AGP = "ai-age
 const TMXP = "scripts/termaximus-presence.js", TMXG = "scripts/termaximus-guide.js", ABY = "scripts/bf-abyss.js", DASHB = "dashboard.html";
 // NAMED (Nov 23 2026, P3-3): the owner's canvas row 4, the composer and the Need post
 const COMP = "scripts/bf-composer.js", COMPOSE = "compose.html";
+// NAMED (Nov 23 2026, LR-2): Lead Radar's page and the members' page list
+const LRP = "agents/lead-radar.html", BFA = "scripts/bf-access.js";
 const MUTATIONS = {
   "tab-font": [[HOME, "color:#c9d1e6;font:600 16px/1 system-ui", "color:#c9d1e6;font:600 15px/1 system-ui"]],
   "underline-thin": [[HOME, "bottom:1px;height:3px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}", "bottom:1px;height:2px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}"]],
@@ -85,8 +94,8 @@ const MUTATIONS = {
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter): the anchor "p33", the mutant "fx3b"
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment. Mutant "p33".
-  // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
-  "shell-rev": [[SW, "var SHELL_REV = \"lr1b\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
+  // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
+  "shell-rev": [[SW, "var SHELL_REV = \"lr2b\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
     // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
@@ -146,9 +155,48 @@ const MUTATIONS = {
   "p33-help-when-found": [[FEED, "if (!p || p.intent !== \"need\" || p.can_help !== true || p.mine || isFound(p)) return \"\";", "if (!p || p.intent !== \"need\" || p.can_help !== true || p.mine) return \"\";"]],
   "p33-help-words": [[FEED, "var HELP = { title: \"You offer this nearby\", sub: \"Reply privately with your work\", go: \"I can help\" };", "var HELP = { title: \"You offer this\", sub: \"Reply privately with your work\", go: \"Help\" };"]],
   "p33-backdrop": [[FEED, "radial-gradient(circle at 77% 28%,#123a4a 0,", "radial-gradient(circle at 50% 50%,#123a4a 0,"]],
-  "p33-found-tag": [[FEED, "(isFound(p) ? \"FOUND\" : \"NEED\")", "\"NEED\""]]
+  "p33-found-tag": [[FEED, "(isFound(p) ? \"FOUND\" : \"NEED\")", "\"NEED\""]],
+  // NAMED (Nov 23 2026, LR-2): the owner's canvas row 6 (section I)
+  "lr2-head-gap": [[LRP, ".lr-head { display: flex; align-items: center; gap: 6px; padding: 12px 8px 4px; }", ".lr-head { display: flex; align-items: center; gap: 10px; padding: 12px 8px 4px; }"]],
+  "lr2-board-font": [[LRP, ".lr-title { flex: 1; min-width: 0; margin: 0; font: 700 18px system-ui,", ".lr-title { flex: 1; min-width: 0; margin: 0; font: 700 18px 'Space Grotesk', system-ui,"]],
+  "lr2-no-music": [[LRP, "<span class=\"brand-badge\" data-bf-boombox-anchor>BizForce AI</span>", "<span class=\"brand-badge\">BizForce AI</span>"]],
+  "lr2-inbound-tab": [[LRP, "<span class=\"lr-tbf\">Fingerprint</span></button>", "<span class=\"lr-tbf\">Fingerprint</span></button>\n      <button type=\"button\" role=\"tab\" class=\"lr-tb\" aria-selected=\"false\"><span class=\"lr-tbf\">Inbound</span></button>"]],
+  "lr2-tab-tall": [[LRP, ".lr-tbf { display: flex; align-items: center; height: 40px;", ".lr-tbf { display: flex; align-items: center; height: 44px;"]],
+  "lr2-tab-small-hit": [[LRP, ".lr-tb { flex: none; min-width: 44px; height: 44px; margin: -2px 0;", ".lr-tb { flex: none; min-width: 44px; height: 40px; margin: 0;"]],
+  "lr2-card-radius": [[LRP, ".lr-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 16px;", ".lr-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px;"]],
+  "lr2-won-white": [[LRP, ".lr-num.is-won { color: #f5c46b; }", ".lr-num.is-won { color: #e6eaf5; }"]],
+  "lr2-chip-radius": [[LRP, "height: 34px; padding: 0 12px; border-radius: 17px;", "height: 34px; padding: 0 12px; border-radius: 12px;"]],
+  "lr2-chip-sources": [[LRP, "[\"bizforce\", \"Inside BizForce\"], ", ""]],
+  "lr2-badge-colour": [[LRP, ".lr-b-bsky { background: #1b2350; color: #b79cfa; }", ".lr-b-bsky { background: #1b2350; color: #e6eaf5; }"]],
+  "lr2-yt-opaque": [[LRP, ".lr-card.is-yt { opacity: .8; }", ".lr-card.is-yt { opacity: 1; }"]],
+  "lr2-button-tall": [[LRP, "width: 100%; height: 38px; padding: 0 14px; border-radius: 19px;", "width: 100%; height: 44px; padding: 0 14px; border-radius: 19px;"]],
+  "lr2-button-words": [[LRP, "btn(\"Draft a reply\", ", "btn(\"Reply\", "]],
+  "lr2-foot-words": [[LRP, "<p class=\"lr-foot\">You approve every reply. BizForce never messages anyone for you.</p>", "<p class=\"lr-foot\">You approve every reply.</p>"]],
+  "lr2-sheet-short": [[LRP, "gap: 12px; height: 640px; max-height:", "gap: 12px; height: 600px; max-height:"]],
+  "lr2-sheet-over-bar": [[LRP, ".lr-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;", ".lr-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 95;"]],
+  "lr2-quote-line": [[LRP, "border-left: 3px solid var(--bf-accent-b, #8b5cf6);", "border-left: 2px solid var(--bf-accent-b, #8b5cf6);"]],
+  "lr2-draft-box": [[LRP, "min-height: 132px; padding: 12px; border-radius: 14px;", "min-height: 100px; padding: 12px; border-radius: 14px;"]],
+  "lr2-check-words": [[LRP, "c.no_hard_sell, \"No hard sell, no promises\"]", "c.no_hard_sell, \"No hard sell\"]"]],
+  "lr2-link-on": [[LRP, "S.sheetLead = l; S.sheetLink = false;", "S.sheetLead = l; S.sheetLink = true;"]],
+  "lr2-knob": [[LRP, "right: 3px; top: 3px; width: 20px; height: 20px;", "right: 3px; top: 3px; width: 18px; height: 18px;"]],
+  "lr2-fp-pad": [[LRP, ".lr-fp { gap: 12px; padding: 0 16px; }", ".lr-fp { gap: 12px; padding: 0 12px; }"]],
+  "lr2-label-spacing": [[LRP, "letter-spacing: 1.6px; color: #8e9bbf; text-transform: uppercase;", "letter-spacing: 1px; color: #8e9bbf; text-transform: uppercase;"]],
+  "lr2-threads-words": [[LRP, "\"Waiting for Meta's approval\"", "\"Waiting\""]],
+  "lr2-free-calls": [[LRP, "        if (a.tier === \"free\") { showState(\"members_only\"); return; }\n", ""]],
+  "lr2-signed-out-calls": [[LRP, "      if (!tok()) { showState(\"signed_out\"); return; }\n", ""]],
+  "lr2-not-member-page": [[BFA, "    \"agents/lead-radar.html\"\n  ];", "    \"campaigns.html\"\n  ];"]],
+  // NAMED (Nov 23 2026, LR-2 pages fallout): BEFORE "lr2-dash-free-call" (the removed inline script). AFTER the orbit calls them scored leads again.
+  "lr2-orbit-scored": [[ORB, "case \"lead-radar\": return count(\"leads\", \"new lead\", \"new leads\");", "case \"lead-radar\": return count(\"leads\", \"scored lead\", \"scored leads\");"]],
+  // the dashboard reads the leads itself again
+  "lr2-dash-call": [[DASHB, "</body>", "<script>fetch(\"/api/leads/summary\");</script>\n</body>"]],
+  "lr2-send-the-draft": [[LRP, "var text = box.value.trim();", "var text = (box.defaultValue || \"\").trim();"]],
+  // NAMED (Nov 23 2026, LR-2): the page drops under the theme's fixed backdrop (PHONE_LR2's first screenshot showed only the YouTube card)
+  "lr2-under-backdrop": [[LRP, ".lr-page { position: relative; z-index: 1;", ".lr-page {"]],
+  // NAMED (Nov 23 2026, LR-2): a slow read that started before Save lands after it and shows the lead unsaved again
+  "lr2-stale-read": [[LRP, "        if (mine !== seq) return;\n", ""]]
 };
-const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB, COMP, COMPOSE]);   // NAMED (Nov 23 2026, P3-3): + the composer and its page   // NAMED (Nov 22 2026, FX3): + the four boards' files
+// NAMED (Nov 23 2026, LR-2): + Lead Radar's page and bf-access.js
+const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB, COMP, COMPOSE, LRP, BFA]);   // NAMED (Nov 23 2026, P3-3): + the composer and its page   // NAMED (Nov 22 2026, FX3): + the four boards' files
 const { FILES, check, J } = T;
 
 /* The text of the block that opens at `marker` (its "{"), to the matching "}". The CSS in a .js file is an array of
@@ -333,8 +381,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
 // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
 // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-// NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
-check("E1. sw.js SHELL_REV is \"lr1b\"", /\nvar SHELL_REV = "lr1b";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
+// NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
+check("E1. sw.js SHELL_REV is \"lr2b\"", /\nvar SHELL_REV = "lr2b";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
@@ -541,5 +589,116 @@ check("E1. sw.js SHELL_REV is \"lr1b\"", /\nvar SHELL_REV = "lr1b";[ \t]*(?:\/\/
   check("H17. a Need without a photo: the board's backdrop, a " + K0.GLOW + " glow at " + K0.GLOW_AT + " over " + K0.TOP + " to " + K0.BOTTOM + ", its text in the caption",
     fd.indexOf("radial-gradient(circle at " + K0.GLOW_AT + "," + K0.GLOW + " 0,rgba(18,58,74,0) 52%),linear-gradient(180deg," + K0.TOP + " 0%,#080d22 50%," + K0.BOTTOM + " 100%)") !== -1 &&
     fd.indexOf("(textPost && !needText ? \"\" : (p.body ?") !== -1);
+
+  /* ── I ── NAMED (Nov 23 2026, LR-2) */
+  console.log("\n══ I. LR-2: the owner's canvas row 6 (" + DS.LEADS.BOARDS.join(", ") + ") ══");
+  const LD = DS.LEADS, lr = FILES[LRP] || "", F0 = LD.FONT;
+  const r = sel => rule(lr, "    " + sel + " ");
+  const rc = (name, sel, want) => check(name, holds(r(sel), want), J({ sel, want, got: r(sel) }));
+  const has = t => lr.indexOf(t) !== -1;
+  const lift = (hit, face) => "-" + px((hit - face) / 2) + " 0";
+  const HD = LD.HEADER, TB = LD.TABS, CD = LD.CARD, ST = LD.STATS, CH = LD.CHIP, BG = LD.BADGE, LE = LD.LEAD, BT = LD.BUTTON, SH = LD.SHEET, SWC = LD.SWITCH, FP = LD.FINGERPRINT, LB = LD.LABEL;
+  check("I1. LeadsHome's header: " + HD.PAD + ", " + HD.GAP + " px apart; Back and \"" + HD.SETTINGS + "\" " + HD.BUTTON + " px; the " + HD.MARK + " px mark (radius " + HD.MARK_RADIUS + ", " + HD.MARK_BG + "); \"" + HD.TITLE + "\" " + HD.TITLE_WEIGHT + " " + HD.TITLE_FONT + " px in the site's font (never Space Grotesk or Inter); the music icon kept",
+    holds(r(".lr-head"), { display: "flex", "align-items": "center", gap: px(HD.GAP), padding: HD.PAD }) && holds(r(".lr-hbtn"), { width: px(HD.BUTTON), height: px(HD.BUTTON) }) &&
+    holds(r(".lr-mark"), { width: px(HD.MARK), height: px(HD.MARK), "border-radius": px(HD.MARK_RADIUS), background: HD.MARK_BG, color: ACC }) &&
+    holds(r(".lr-title"), { flex: "1", font: HD.TITLE_WEIGHT + " " + px(HD.TITLE_FONT) + " " + F0 }) && has('<h1 class="lr-title">' + HD.TITLE + "</h1>") &&
+    has('aria-label="Back"') && has('aria-label="' + HD.SETTINGS + '"') && has("<span class=\"brand-badge\" data-bf-boombox-anchor>BizForce AI</span>") &&
+    !/Space Grotesk|\bInter\b/.test(lr), J([r(".lr-head"), r(".lr-title")]));
+  const tabs = [...lr.matchAll(/role="tab"[^>]*><span class="lr-tbf">([^<]+)<\/span>/g)].map(m => m[1]);
+  check("I2. the tabs: " + TB.ITEMS.join(" and ") + " only (" + TB.NOT_DRAWN.join(" and ") + " not drawn); a " + TB.H + " px face (padded " + TB.PAD_X + ", radius " + TB.RADIUS + ", " + TB.WEIGHT + " " + TB.FONT + " px, " + TB.COLOR + "; chosen " + TB.ON_BG + " and cyan) in a " + LD.HIT + " px target; the row " + TB.PAD + ", " + TB.GAP + " px apart",
+    J(tabs) === J(TB.ITEMS) && !TB.NOT_DRAWN.some(t => has(">" + t + "<")) && holds(r(".lr-tabs"), { display: "flex", gap: px(TB.GAP), padding: TB.PAD }) &&
+    holds(r(".lr-tb"), { height: px(LD.HIT), "min-width": px(LD.HIT), margin: lift(LD.HIT, TB.H) }) &&
+    holds(r(".lr-tbf"), { height: px(TB.H), padding: "0 " + px(TB.PAD_X), "border-radius": px(TB.RADIUS), color: TB.COLOR, font: TB.WEIGHT + " " + px(TB.FONT) + " " + F0 }) &&
+    holds(r('.lr-tb[aria-selected="true"] .lr-tbf'), { background: TB.ON_BG, color: ACC }), J([tabs, r(".lr-tb"), r(".lr-tbf")]));
+  check("I3. the cards (padded " + CD.PAD + ", radius " + CD.RADIUS + ", " + CD.BORDER + " on " + CD.BG + ", " + CD.GAP + " px inside), " + LD.CONTENT.GAP + " px apart, " + LD.CONTENT.PAD_X + " px sides; the three stats (" + ST.LABELS.join(", ") + "): " + ST.NUM_WEIGHT + " " + ST.NUM_FONT + " px figures, won in " + ST.WON,
+    holds(r(".lr-main"), { display: "flex", "flex-direction": "column", gap: px(LD.CONTENT.GAP), padding: "0 " + px(LD.CONTENT.PAD_X) }) &&
+    holds(r(".lr-card"), { display: "flex", "flex-direction": "column", gap: px(CD.GAP), padding: px(CD.PAD), "border-radius": px(CD.RADIUS), border: "1px solid " + CD.BORDER, background: CD.BG }) &&
+    holds(r(".lr-stats"), { display: "flex", gap: px(ST.GAP) }) && holds(r(".lr-stat"), { flex: "1", "align-items": "center", gap: "2px", padding: px(ST.PAD) }) &&
+    holds(r(".lr-num"), { font: ST.NUM_WEIGHT + " " + px(ST.NUM_FONT) + " " + F0 }) && holds(r(".lr-num.is-won"), { color: ST.WON }) &&
+    holds(r(".lr-slbl"), { "font-size": px(ST.LABEL_FONT), color: "#a9b3cc" }) && ST.LABELS.every(t => has('<span class="lr-slbl">' + t + "</span>")), J([r(".lr-card"), r(".lr-num.is-won")]));
+  check("I4. the source chips " + CH.SOURCES.join(", ") + " (Threads too once it is on): " + CH.H + " px faces (padded " + CH.PAD_X + ", radius " + CH.RADIUS + ", " + CH.BORDER + " on " + CH.BG + ", " + CH.WEIGHT + " " + CH.FONT + " px), chosen cyan on " + CH.ON_BG + ", in " + LD.HIT + " px targets " + CH.GAP + " px apart; the row swipes",
+    has('  var SOURCES = [["all", "' + CH.SOURCES[0] + '"], ["bizforce", "' + CH.SOURCES[1] + '"], ["bluesky", "' + CH.SOURCES[2] + '"], ["youtube", "' + CH.SOURCES[3] + '"], ["threads", "Threads"]];') &&
+    holds(r(".lr-chipf"), { height: px(CH.H), padding: "0 " + px(CH.PAD_X), "border-radius": px(CH.RADIUS), border: "1px solid " + CH.BORDER, background: CH.BG, color: CH.COLOR, font: CH.WEIGHT + " " + px(CH.FONT) + " " + F0 }) &&
+    holds(r('.lr-chip[aria-pressed="true"] .lr-chipf'), { "border-color": ACC, background: CH.ON_BG, color: ACC }) &&
+    holds(r(".lr-chip"), { height: px(LD.HIT), "min-width": px(LD.HIT), margin: lift(LD.HIT, CH.H) }) &&
+    holds(r(".lr-chips"), { display: "flex", gap: px(CH.GAP), "overflow-x": "auto", margin: lift(LD.HIT, CH.H), padding: px((LD.HIT - CH.H) / 2) + " 0" }) &&
+    holds(r(".lr-wrap"), { "flex-wrap": "wrap", gap: px(CH.GAP) }), J([r(".lr-chipf"), r(".lr-chip")]));
+  check("I5. the badges " + BG.H + " px (padded " + BG.PAD_X + ", radius " + BG.RADIUS + ", " + BG.WEIGHT + " " + BG.FONT + " px, spaced " + BG.SPACING + " px): \"" + BG.NEED.TEXT + "\" cyan, \"" + BG.BSKY.TEXT + "\" " + BG.BSKY.COLOR + " on " + BG.BSKY.BG + ", \"" + BG.YT.TEXT + "\" " + BG.YT.COLOR + " on " + BG.YT.BG + " (its card at " + BG.YT.CARD_OPACITY + ")",
+    holds(r(".lr-badge"), { height: px(BG.H), padding: "0 " + px(BG.PAD_X), "border-radius": px(BG.RADIUS), font: BG.WEIGHT + " " + px(BG.FONT) + " " + F0, "letter-spacing": px(BG.SPACING) }) &&
+    holds(r(".lr-b-need"), { background: ACC, color: BG.NEED.COLOR }) && BG.NEED.BG === C.ACCENT && holds(r(".lr-b-bsky"), { background: BG.BSKY.BG, color: BG.BSKY.COLOR }) &&
+    holds(r(".lr-b-yt"), { background: BG.YT.BG, color: BG.YT.COLOR }) && holds(r(".lr-card.is-yt"), { opacity: String(BG.YT.CARD_OPACITY).replace(/^0/, "") }) &&
+    has('<span class="lr-badge lr-b-need">' + BG.NEED.TEXT + "</span>") && has('(l.reply_invited ? "' + BG.BSKY.TEXT +'" : "BLUESKY")') &&
+    has('<span class="lr-badge lr-b-yt">' + BG.YT.TEXT + "</span>"), J([r(".lr-badge"), r(".lr-b-bsky"), r(".lr-card.is-yt")]));
+  check("I6. a lead: meta " + LE.META_FONT + " px, text " + LE.TEXT_FONT + "/" + LE.TEXT_LINE + ", the match line " + LE.MATCH_FONT + " px " + LE.MATCH + "; buttons " + BT.H + " px faces (padded " + BT.PAD_X + ", radius " + BT.RADIUS + ", " + BT.WEIGHT + " " + BT.FONT + " px; the first cyan) in " + LD.HIT + " px targets, " + BT.GAP + " px apart: " + BT.NEED.join(", ") + " / " + BT.BSKY.join(", "),
+    holds(r(".lr-meta"), { "font-size": px(LE.META_FONT) }) && holds(r(".lr-text"), { "font-size": px(LE.TEXT_FONT), "line-height": String(LE.TEXT_LINE) }) &&
+    holds(r(".lr-match"), { "font-size": px(LE.MATCH_FONT), color: LE.MATCH }) &&
+    holds(r(".lr-btnf"), { height: px(BT.H), padding: "0 " + px(BT.PAD_X), "border-radius": px(BT.RADIUS), border: "1px solid " + BT.BORDER, color: BT.COLOR, font: BT.WEIGHT + " " + px(BT.FONT) + " " + F0 }) &&
+    holds(r(".lr-btn.is-p .lr-btnf"), { border: "0", background: ACC, color: BT.PRIMARY_TEXT }) && holds(r(".lr-btn"), { height: px(LD.HIT), "min-width": px(LD.HIT), margin: lift(LD.HIT, BT.H) }) &&
+    holds(r(".lr-acts"), { gap: px(BT.GAP) }) && has('link("' + BT.NEED[0] + '", "/home.html?post=" + encodeURIComponent(l.need_post_id), true)') &&
+    has('btn(saved ? "Saved" : "' + BT.NEED[1] + '"') && has('btn("' + BT.NEED[2] + '", ') && has('btn("' + BT.BSKY[0] + '", ') && has('link("' + BT.BSKY[1] + '", l.url'), J([r(".lr-btnf"), r(".lr-btn")]));
+  rc("I7. the line under the leads: \"" + LD.FOOT.TEXT + "\" " + LD.FOOT.FONT + " px " + LD.FOOT.COLOR + ", centred", ".lr-foot",
+    { "font-size": px(LD.FOOT.FONT), color: LD.FOOT.COLOR, "line-height": String(LD.FOOT.LINE), "text-align": "center", padding: "0 " + px(LD.FOOT.PAD_X) });
+  check("I7b. ...its words", has('<p class="lr-foot">' + LD.FOOT.TEXT + "</p>"));
+  const sh = r(".lr-sheet") || {}, vz = parseInt((r(".lr-veil") || {})["z-index"], 10), sz = parseInt(sh["z-index"], 10);
+  check("I8. LeadsReply: the sheet " + SH.H + " px from the bottom (radius " + SH.RADIUS + " at its top, " + SH.BG + ", a " + SH.TOP_LINE + " top line, " + SH.PAD + ", " + SH.GAP + " px apart) over a " + SH.VEIL + " veil, both under the site's bar (z-index " + SH.UNDER_BAR + "); the " + SH.GRAB.W + " x " + SH.GRAB.H + " grabber; \"" + SH.TITLE + "\" " + SH.TITLE_FONT + " px; Close " + SH.CLOSE + " px",
+    holds(sh, { position: "fixed", bottom: "0", height: px(SH.H), "border-radius": px(SH.RADIUS) + " " + px(SH.RADIUS) + " 0 0", background: SH.BG, "border-top": "1px solid " + SH.TOP_LINE, padding: SH.PAD, gap: px(SH.GAP) }) &&
+    holds(r(".lr-veil"), { position: "fixed", background: SH.VEIL }) && vz < sz && sz < SH.UNDER_BAR &&
+    holds(r(".lr-grab"), { width: px(SH.GRAB.W), height: px(SH.GRAB.H), "border-radius": px(SH.GRAB.RADIUS), background: SH.GRAB.COLOR }) &&
+    holds(r(".lr-sh-title"), { font: "700 " + px(SH.TITLE_FONT) + " " + F0 }) && has('id="lrSheetTitle">' + SH.TITLE + "</h2>") && has('"Your reply on " + (PLATFORM[l.reply_platform || l.source] || "Bluesky")') &&
+    has('class="lr-hbtn lr-close" id="lrSheetClose" aria-label="Close"'), J([sh, vz, sz]));
+  check("I9. the quote (a " + SH.QUOTE.LINE + " px " + SH.QUOTE.COLOR + " edge, " + SH.QUOTE.PAD + ", " + SH.QUOTE.FONT + " px), \"" + SH.DRAFT_LABEL + "\", the draft box (at least " + SH.DRAFT.MIN_H + " px, padded " + SH.DRAFT.PAD + ", radius " + SH.DRAFT.RADIUS + ", a cyan line on " + SH.DRAFT.BG + ", " + SH.DRAFT.FONT + "/" + SH.DRAFT.LINE_H + "), the member's to edit",
+    // NAMED (Nov 23 2026, LR-2 pages fallout): BEFORE the edge was the literal #8b5cf6. AFTER the theme's violet token
+    // (checkThemeSpectrums: no original-palette colour outside a token), #8b5cf6 when no theme is set.
+    SH.QUOTE.COLOR === C.VIOLET && holds(r(".lr-quote"), { "border-left": SH.QUOTE.LINE + "px solid " + VIO, padding: SH.QUOTE.PAD, "font-size": px(SH.QUOTE.FONT), "line-height": String(SH.QUOTE.LINE_H), color: SH.QUOTE.TEXT }) &&
+    has('<label class="lr-lbl" for="lrDraft">Draft (edit anything)</label>') && "Draft (edit anything)".toUpperCase() === SH.DRAFT_LABEL &&
+    holds(r(".lr-draft"), { "min-height": px(SH.DRAFT.MIN_H), padding: px(SH.DRAFT.PAD), "border-radius": px(SH.DRAFT.RADIUS), border: "1px solid " + ACC, background: SH.DRAFT.BG, font: px(SH.DRAFT.FONT) + "/" + SH.DRAFT.LINE_H + " " + F0 }) &&
+    has('<textarea class="lr-draft" id="lrDraft"'), J([r(".lr-quote"), r(".lr-draft")]));
+  check("I10. the three checks (" + SH.CHECKS.join("; ") + ") with a " + SH.TICK + " tick, " + SH.CHECK_GAP + " px apart, " + SH.CHECK_FONT + " px; \"" + SH.LINK + "\" (off); \"" + SH.AGAIN + "\" and \"" + SH.POST + "\" (" + SH.BIG_H + " px, radius " + SH.BIG_RADIUS + ", " + SH.POST_FLEX + " to 1); its line",
+    // NAMED (Nov 23 2026, LR-2 pages fallout): BEFORE [[c.answers, ...], ...]. AFTER each row also carries its key
+    // (data-check, so "No hard sell" is re-tested as the member edits) and is hidden when not met.
+    has('[["answers", c.answers, ' + J(SH.CHECKS[0]) + '], ["no_hard_sell", c.no_hard_sell, ' + J(SH.CHECKS[1]) + '], ["invited", c.invited, ' + J(SH.CHECKS[2]) + "]]") &&
+    has("(x[1] === true ? \"\" : \" hidden\")") && has('<span class="lr-ok" aria-hidden="true">&#10003;</span>') &&
+    holds(r(".lr-checks"), { gap: px(SH.CHECK_GAP), "font-size": px(SH.CHECK_FONT) }) && holds(r(".lr-ok"), { color: SH.TICK }) &&
+    holds(r(".lr-linkrow"), { padding: SH.LINK_PAD, "font-size": px(SH.LINK_FONT) }) && has('<span id="lrLinkLabel">' + SH.LINK + "</span>") && has("S.sheetLead = l; S.sheetLink = false;") &&
+    holds(r(".lr-big"), { flex: "1", height: px(SH.BIG_H), "border-radius": px(SH.BIG_RADIUS) }) && holds(r(".lr-big.is-p"), { flex: String(SH.POST_FLEX), background: ACC }) &&
+    has('id="lrAgain">' + SH.AGAIN + "</button>") && has('id="lrPost">' + SH.POST + "</button>") &&
+    has('"Posted from your own connected " + (PLATFORM[d.platform] || "Bluesky") + " account"') && has("'. One reply per post, up to 5 a day.</p>'") &&
+    SH.FOOT === "Posted from your own connected Bluesky account. One reply per post, up to 5 a day.", J([r(".lr-big"), r(".lr-checks")]));
+  check("I11. the switches: " + SWC.W + " x " + SWC.H + " (radius " + SWC.RADIUS + "), on cyan with a " + SWC.KNOB + " px " + SWC.KNOB_ON + " knob " + SWC.INSET + " px in at the right, off " + SWC.OFF + " with a " + SWC.KNOB_OFF + " knob at the left, in " + LD.HIT + " px targets",
+    holds(r(".lr-swf"), { width: px(SWC.W), height: px(SWC.H), "border-radius": px(SWC.RADIUS), background: ACC }) &&
+    holds(r(".lr-swf::after"), { right: px(SWC.INSET), top: px(SWC.INSET), width: px(SWC.KNOB), height: px(SWC.KNOB), background: SWC.KNOB_ON }) &&
+    holds(r('.lr-sw[aria-checked="false"] .lr-swf'), { background: SWC.OFF }) && holds(r('.lr-sw[aria-checked="false"] .lr-swf::after'), { left: px(SWC.INSET), background: SWC.KNOB_OFF }) &&
+    holds(r(".lr-sw"), { width: px(LD.HIT), height: px(LD.HIT), margin: lift(LD.HIT, SWC.H) }) && SWC.ON === C.ACCENT, J([r(".lr-swf"), r(".lr-swf::after")]));
+  const lbls = [...lr.matchAll(/<p class="lr-lbl">([^<]+)<\/p>/g)].map(m => m[1].toUpperCase());
+  check("I12. LeadsFingerprint: " + px(FP.PAD_X) + " sides, " + FP.GAP + " px apart; the intro (" + FP.INTRO_FONT + "/" + FP.INTRO_LINE + " " + FP.INTRO_COLOR + "); the labels " + FP.LABELS.join(", ") + " (" + LB.WEIGHT + " " + LB.FONT + " px, spaced " + LB.SPACING + ", " + LB.COLOR + "); " + FP.REACH.join(", ") + "; \"" + FP.ADD + "\"; Where to look's rows (" + FP.LOOK.PAD + ", " + FP.LOOK.TITLE_WEIGHT + " " + FP.LOOK.TITLE_FONT + " px over " + FP.LOOK.SUB_FONT + " px) and Threads' \"" + FP.LOOK.THREADS_WAITING + "\"",
+    holds(r(".lr-fp"), { gap: px(FP.GAP), padding: "0 " + px(FP.PAD_X) }) && holds(r(".lr-intro"), { "font-size": px(FP.INTRO_FONT), "line-height": String(FP.INTRO_LINE), color: FP.INTRO_COLOR }) &&
+    has('<p class="lr-intro">' + FP.INTRO + "</p>") && J(lbls) === J(FP.LABELS) &&
+    holds(r(".lr-lbl"), { font: LB.WEIGHT + " " + px(LB.FONT) + " " + F0, "letter-spacing": px(LB.SPACING), color: LB.COLOR, "text-transform": "uppercase" }) &&
+    has('  var REACH = [["city", "' + FP.REACH[0] + '"], ["25mi", "' + FP.REACH[1] + '"], ["online", "' + FP.REACH[2] + '"]];') && has('chip("", "' + FP.ADD + '", false') &&
+    holds(r(".lr-look"), { padding: FP.LOOK.PAD }) && holds(r(".lr-look-t"), { font: FP.LOOK.TITLE_WEIGHT + " " + px(FP.LOOK.TITLE_FONT) + " " + F0 }) && holds(r(".lr-look-s"), { "font-size": px(FP.LOOK.SUB_FONT), color: "#a9b3cc" }) &&
+    FP.LOOK.ROWS.every((x, i) => has('lookRow("' + ["bizforce", "bluesky", "youtube"][i] + '", "' + x[0] + '", "' + x[1] + '"')) &&
+    has('threads = lookRow("threads", "Threads", ' + J(FP.LOOK.THREADS_WAITING) + ");"), J([lbls, r(".lr-fp"), r(".lr-lbl")]));
+  const bfa = FILES[BFA] || "", dash = FILES[DASHB] || "";
+  // NAMED (Nov 23 2026, LR-2 pages fallout): BEFORE the dashboard asked GET /api/leads/summary for a member only (its own
+  // inline script). AFTER that script is gone: the Lead Radar box's figure is the orbit's counts.leads, which the server
+  // now fills with the member's own new leads, so the dashboard makes no lead call of its own.
+  check("I13. members only: signed out, the sign-in prompt and no request; a free account, the members panel (bf-access.js MEMBER_PAGES lists the page) and no request; the dashboard's figure is the orbit's own new leads, with no lead call of its own",
+    has('      if (!tok()) { showState("signed_out"); return; }') && has('        if (a.tier === "free") { showState("members_only"); return; }') && has("Sign in to see Lead Radar.") &&
+    has('data-members-only id="lrJoin"') && bfa.indexOf('    "agents/lead-radar.html"\n  ];') !== -1 &&
+    dash.indexOf("/api/leads") === -1 && (FILES[ORB] || "").indexOf('case "lead-radar": return count("leads", "new lead", "new leads");') !== -1);
+  check("I14. the reply sent is the box's own text, as the member left it, and only from \"" + SH.POST + "\"; with no account the sheet says \"" + SH.CONNECT + "\" with Connect",
+    has("var text = box.value.trim();") && has('call("POST", "/api/leads/" + encodeURIComponent(l.id) + "/send", { text: text, add_link: S.sheetLink })') &&
+    lr.split('/send"').length === 2 && has('if (e.target.closest("#lrPost")) { send(); return; }') &&
+    has('"Connect your " + name + " account to reply"') && SH.CONNECT === "Connect your Bluesky account to reply");
+  check("I15. the logo's words show on a desktop only (on a phone the music icon docks at the bottom, as on every page)",
+    /@media \(max-width: 760px\) \{\n\s+\.brand-badge \{ display: none; \}/.test(lr));
+  // NAMED (Nov 23 2026, LR-2): bf-theme.js paints html::before and body::before fixed at z-index var(--bf-backdrop-z) (0); an
+  // unpositioned page is painted under them. The page wrapper is positioned at z 1, as every themed page's content is.
+  check("I16. the page is drawn over the theme's backdrop: .lr-page is position relative, z-index 1",
+    /^ {4}\.lr-page \{ position: relative; z-index: 1;/m.test(lr));
+  // NAMED (Nov 23 2026, LR-2): PHONE_LR2 found it (a chip's read landing after Save showed the lead unsaved again)
+  check("I17. a list read that lands after a newer read or a Save is dropped, and a Save that dropped one reads the list again",
+    has("mine = ++seq;") && has("        if (mine !== seq) return;\n") && has("var dropped = reading; seq++; reading = false;") && has("if (dropped) { loadLeads(); return; }"));
+
   T.finish();
 })();

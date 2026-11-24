@@ -16,13 +16,14 @@
 
    WHAT THIS PROVES
 
-     1. BLOCKED TOOLS. Each of the seven CHAIN_NON_DISPATCHABLE_TOOLS —
+     1. BLOCKED TOOLS. Each of the five CHAIN_NON_DISPATCHABLE_TOOLS —
         store/generate-proposals, seo/generate-post, seo/optimize,
-        sales/convert, sales/lead-status, email/propose-sequence,
-        social/propose-post — is mounted, and a dispatch to it is
+        email/propose-sequence, social/propose-post — is mounted
+        (NAMED Nov 23 2026, LR-2: BEFORE seven, with sales/convert and
+        sales/lead-status, whose routes LR-2 removed), and a dispatch to it is
         refused tool_takes_external_action, with a body that satisfies its
         spec, from an entitled account. The handler never runs. The list in
-        server.js is exactly those seven.
+        server.js is exactly those five.
      2. ANOTHER USER'S PLAN. POST /api/assignments/dispatch, given an
         executive/plan row that belongs to someone else, refuses plan_not_found
         and runs nothing. The same assignment in the caller's own plan runs, so
@@ -50,7 +51,7 @@
    production. The model is stubbed; no request leaves the machine.
 
    MUTATE=blocked     the CHAIN_NON_DISPATCHABLE_TOOLS test in dispatchToolCall
-                      is disabled at compile time. All seven must go red (the
+                      is disabled at compile time. All five must go red (the
                       tripwires fire); 2 and 3 must stay green.
    MUTATE=cross-user  the dispatch route's .eq("user_id", userId) scope is
                       removed at compile time. 2 must go red; 1 and 3 green.
@@ -86,7 +87,9 @@ const SERVER_PATH = path.join(REPO, "server.js");
 
 // NAMED (Nov 23 2026, LR-1): unchanged. sales/convert now only drafts (it never posts) but still writes the pipeline and spends a model call,
 // so it stays blocked; POST /api/agents/sales/send-approved is not in the tool catalogue, so a chain cannot reach it.
-const BLOCKED = ["store/generate-proposals", "seo/generate-post", "seo/optimize", "sales/convert", "sales/lead-status",
+// NAMED (Nov 23 2026, LR-2): BEFORE + "sales/convert" and "sales/lead-status". AFTER LR-2 removed both routes (and their specs); the
+// one Lead Radar send, POST /api/leads/:id/send, is not in the tool catalogue, so a chain cannot reach it.
+const BLOCKED = ["store/generate-proposals", "seo/generate-post", "seo/optimize",
   "email/propose-sequence",     // File an email sequence for approval
   "social/propose-post"];       // Publish approved posts to Bluesky
 
@@ -97,7 +100,7 @@ const MUTATION_EDITS = {
        line pins this anchor to the dispatcher's own test. */
     from: "  // 4. the target must be a real, dispatchable tool\n  if (CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(key) !== -1) {\n",
     to:   "  // 4. the target must be a real, dispatchable tool\n  if (false && CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(key) !== -1) {\n",
-    say:  "the CHAIN_NON_DISPATCHABLE_TOOLS test is disabled — all seven blocked tools must reach their tripwires."
+    say:  "the CHAIN_NON_DISPATCHABLE_TOOLS test is disabled — all five blocked tools must reach their tripwires."
   },
   "cross-user": {
     from: "        .eq(\"id\", executiveTaskId)\n        .eq(\"user_id\", userId)\n",
@@ -280,12 +283,12 @@ async function recordActorRowsSince(actorGuard, actorId, sinceIso) {
   const sinceRun = new Date(Date.now() - 2000).toISOString();
 
   try {
-    /* ── 1. the seven blocked tools ───────────────────────────────────── */
-    console.log("\n══ 1. the seven tools a chain may not run ══");
+    /* ── 1. the five blocked tools ───────────────────────────────────── */
+    console.log("\n══ 1. the five tools a chain may not run ══");
     const src = require("fs").readFileSync(SERVER_PATH, "utf8").replace(/\r\n/g, "\n");
     const listMatch = /var CHAIN_NON_DISPATCHABLE_TOOLS = \[([^\]]*)\]/.exec(src);
     const listed = listMatch ? (listMatch[1].match(/"[^"]+"/g) || []).map(function (s) { return s.slice(1, -1); }) : [];
-    check("CHAIN_NON_DISPATCHABLE_TOOLS in server.js is exactly the seven",
+    check("CHAIN_NON_DISPATCHABLE_TOOLS in server.js is exactly the five",
       JSON.stringify(listed.slice().sort()) === JSON.stringify(BLOCKED.slice().sort()), JSON.stringify(listed));
 
     const mounted = installTripwires();

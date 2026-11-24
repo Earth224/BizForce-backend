@@ -85,15 +85,19 @@ const ANALYTICS_ROSTER_NOW = "KPI and funnel review on figures you supply, repor
    for itself plus the rule, read from the module, so the rule's wording is pinned once (checkNoEmoji N6). */
 /* NAMED (Nov 23 2026, LR-1): BEFORE four swaps. AFTER five; the Lead Radar sentence no longer says Mastodon collection
    exists (Mastodon lead search is removed) and says no reply is posted without a person approving the exact text. */
+/* NAMED (Nov 23 2026, LR-2): BEFORE the LR-1 swap of one Lead Radar sentence, and the platform and pricing swaps ending
+   "Lead Radar works on one account only" and "and Lead Radar works only on". AFTER Lead Radar is every member's: its whole
+   description is swapped, baseline's for today's (the same rule as the roster lines; checkAgentBriefTruth 6 and 13 pin its
+   wording against the code), and the platform and pricing sentences end in their LR-2 wording. Still five swaps. */
 const SYSTEM_SWAPS = [
-  ["Mastodon and YouTube collection exist behind switches that are off by default; Reddit is disabled.",
-   "YouTube collection exists behind a switch that is off by default. There is no Mastodon or Reddit lead search, and nothing is ever replied to without a person approving the exact text first."],
+  [require("child_process").execSync("git show " + BASELINE + ":config/brain.js", { cwd: path.join(__dirname, "..") }).toString("utf8").match(/"(A background job that every 5 minutes collects public Bluesky posts[^"]*)"/)[1],
+   require("../config/brain").PLATFORM_KNOWLEDGE.systems.lead_radar.description],
   ["Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all.",
    "Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all." + "\n\n" + require("../config/brain").NO_EMOJI_RULE],
   ["Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only; see Other systems.",
-   "Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only; see Other systems."],
-  ["SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on",
-   "SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on"],
+   "Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar is a members' feature; see Other systems."],
+  ["SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on the one account that holds the platform's connected social credentials.",
+   "SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar is for members only, so a free account does not have it."],
   ["Agents write social posts and calendars, but connecting a social account and publishing to it are currently unavailable. An approved draft is saved and marked not published; nothing is posted. Never tell a user a post has gone out or is queued to go out.",
    'Agents write social posts and calendars. Bluesky is the only platform a post can go to: a member connects their own Bluesky account on the Social Agent page with their handle and a Bluesky app password (never their main password), and a Bluesky post the Social Agent drafts is then filed for approval and goes out from that account only when the member approves it, or as soon as it is filed if the member has turned on "Post approved drafts automatically"; every screen runs first either way. No other social platform is connected yet: a draft approved for any other platform is saved and marked not published; nothing is posted. Never tell a user a post has gone out unless it was published to their Bluesky account, and never that a post is queued to go out.']
 ];
@@ -125,7 +129,8 @@ if (MUTATE === "nocap") SERVER = mutate(SERVER, "\"Prompt: \" + excerptWithMarke
 if (MUTATE === "silentcut") SERVER = mutate(SERVER, "  return cut + \" [cut: the first \" + cut.length + \" of \" + text.length + \" characters; the rest is not included]\";", "  return cut;", "silentcut");
 if (MUTATE === "midword") SERVER = mutate(SERVER, "  if (lastBreak > maxLength * 0.6) cut = cut.slice(0, lastBreak);", "", "midword");
 if (MUTATE === "oracle") SERVER = mutate(SERVER, "var SPECIALIST_NOTE_EXCLUDED_AGENTS = [\"oracle\"];", "var SPECIALIST_NOTE_EXCLUDED_AGENTS = [];", "oracle");
-if (MUTATE === "leadnotes") SERVER = mutate(SERVER, "var SPECIALIST_NOTE_EXCLUDED_KEYS = [\"sales_convert_\", \"sales_lead_status_\"];", "var SPECIALIST_NOTE_EXCLUDED_KEYS = [];", "leadnotes");
+// NAMED (Nov 24 2026, LR-2B): the list also holds lead_radar_spare_words; BEFORE the anchor ended after "sales_lead_status_".
+if (MUTATE === "leadnotes") SERVER = mutate(SERVER, "var SPECIALIST_NOTE_EXCLUDED_KEYS = [\"sales_convert_\", \"sales_lead_status_\", \"lead_radar_spare_words\"];", "var SPECIALIST_NOTE_EXCLUDED_KEYS = [];", "leadnotes");
 if (MUTATE === "peragent") SERVER = mutate(SERVER, "    if (!type || type === agentType || seen[type]) continue;", "    if (!type || type === agentType) continue;", "peragent");
 if (MUTATE === "limit") SERVER = mutate(SERVER, "var SPECIALIST_NOTE_AGENTS = 3;", "var SPECIALIST_NOTE_AGENTS = 99;", "limit");
 if (MUTATE === "self") SERVER = mutate(SERVER, "    if (!type || type === agentType || seen[type]) continue;", "    if (!type || seen[type]) continue;", "self");

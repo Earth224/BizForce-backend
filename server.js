@@ -299,7 +299,6 @@ const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 
-
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY,
@@ -922,9 +921,6 @@ app.use(
 app.use(compression());
 
 
-
-
-
 // ── SINGLE REPLICA. Read this before scaling. ────────────────────────────
 //
 // express-rate-limit stores its counters in the memory of ONE Node process.
@@ -1500,6 +1496,32 @@ app.post(
 
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
+
+/* NAMED (Nov 23 2026, LR-2): THE FINGERPRINT FOLLOWS THE MEMBER. After a member saves a listing or service, an Offer
+   post, their profile or their business profile (a 2xx answer), their Lead Radar Fingerprint is rebuilt
+   (lib/leadFingerprint.js rebuildQuietly): fields they edited themselves are kept, a member who never opened Lead
+   Radar gets none made, and it never delays or fails the save (it runs after the answer is sent). */
+var FINGERPRINT_TRIGGERS = [
+  ["POST", /^\/api\/marketplace\/listings\/?$/], ["PUT", /^\/api\/marketplace\/listings\/[^/]+\/?$/],
+  ["PUT", /^\/api\/profile\/me\/?$/], ["PUT", /^\/api\/bfp\/profile\/me\/?$/], ["POST", /^\/api\/business-profile\/?$/], ["PUT", /^\/api\/business-profile\/?$/],
+  ["POST", /^\/api\/posts\/?$/, "offer"], ["PATCH", /^\/api\/posts\/[^/]+\/?$/, "offer"]
+];
+function fingerprintTrigger(req) {
+  var path = String(req.path || "");
+  return FINGERPRINT_TRIGGERS.find(function (t) {
+    return t[0] === req.method && t[1].test(path) && (!t[2] || (req.body && req.body.intent === t[2]));
+  }) || null;
+}
+app.use(function (req, res, next) {
+  var trigger = fingerprintTrigger(req);
+  if (trigger) {
+    res.on("finish", function () {
+      if (res.statusCode < 200 || res.statusCode > 299 || !req.user || !req.user.id) return;
+      require("./lib/leadFingerprint").rebuildQuietly(supabase, req.user.id, req.method + " " + req.path);
+    });
+  }
+  next();
+});
 
 function nowIso() {
   return new Date().toISOString();
@@ -2126,6 +2148,7 @@ async function orchestrateAgentWorkflow(options) {
         .select("agent_type, memory_type, title, content, created_at")
         .eq("user_id", userId)
         .eq("agent_type", "sales")
+        .neq("memory_key", "lead_radar_spare_words")   // NAMED (Nov 24 2026, LR-2B): a member's spare words are not a memory for a prompt
         .order("created_at", { ascending: false })
         .limit(5);
 
@@ -11853,17 +11876,19 @@ async function agentSignatureReads(type, userId, now, read, agent) {
           .order("id", { ascending: true });
       }, "your pipeline");
     });
-    // bsky_leads has no user_id: every row is the credential owner's, so no one else's answer reads it.
-    if (OUTREACH_CREDENTIAL_OWNER_ID === userId) {
+    /* NAMED (Nov 23 2026, LR-2): BEFORE the owner's finds in the shared bsky_leads pool (owner only). AFTER every member's
+       own Lead Radar leads (member_leads), by source. */
+    {
       r.radar = {};
-      var sources = ["bluesky", "youtube"];   // NAMED (Nov 23 2026, LR-1): Mastodon lead search is removed
+      var sources = ["bizforce", "bluesky", "youtube", "threads"];
       for (var s = 0; s < sources.length; s++) {
         for (var d = 0; d < 2; d++) {
           var days = d === 0 ? 7 : 30, src = sources[s];
           r.radar[src + "_" + days] = await read(src + " finds", function () {
             return headCount(src + " finds in " + days + " days", supabase
-              .from("bsky_leads")
+              .from("member_leads")
               .select("id", { count: "exact", head: true })
+              .eq("user_id", userId)
               .eq("source", src)
               .gte("created_at", new Date(now.getTime() - days * 86400000).toISOString()));
           });
@@ -14241,6 +14266,11 @@ app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscriptio
 const STORE_API_BASE = process.env.RAILWAY_PUBLIC_DOMAIN
   ? "https://" + process.env.RAILWAY_PUBLIC_DOMAIN
   : "https://dynamic-prosperity-production-5382.up.railway.app";
+/* NAMED (Nov 23 2026, LR-2): a member's own Threads account (lib/threadsRoutes.js): connect (M), callback (P, signed
+   state), status (F) and disconnect (F). Connect answers 503 "Threads is not set up yet" until THREADS_APP_ID and
+   THREADS_APP_SECRET are set. Lead Radar searches and replies with it (lib/threadsLeads.js). */
+require("./lib/threadsRoutes").mountThreadsRoutes(app, { requireAuth: requireAuth, requireActiveSubscription: requireActiveSubscription, supabase: supabase,
+  crypt: require("./lib/apiKeyCrypto"), frontendUrl: FRONTEND_URL, apiBase: STORE_API_BASE, OWNER_ACCOUNT_ID: require("./lib/ownerAccount").OWNER_ACCOUNT_ID, logger: console });
 /* W-T4 (Nov 15 2026, migration 185): where each connected shop's APP_UNINSTALLED
    subscription points (lib/shopifyUninstallHook.js); the route below receives it. */
 const SHOPIFY_WEBHOOK_ADDRESS = STORE_API_BASE + "/api/webhooks/shopify";
@@ -15156,6 +15186,7 @@ app.post("/api/store/changes/:id/undo", requireAuth, requireActiveSubscription, 
 async function executeUpdateStoreItem(proposal) {
   return require("./lib/storeWrite").executeChange(storeSyncDeps(), proposal);
 }
+
 
 // The SEO writer used to answer in JSON, which meant embedding a whole HTML
 // article inside a JSON string value. Every quote in every href had to be
@@ -18807,13 +18838,12 @@ async function getLiveStats(userId, options) {
     campaigns: softCountNullable(campaignsResult, "campaigns"),
     socialDrafts: softCount(socialDraftsResult, "socialDrafts"),
     byAgent: byAgent,
-    /* Whether this account holds the platform's connected social credentials —
-       the one account the lead routes serve. Stated here so an agent can tell
-       the owner of Lead Radar from a customer refused it; PLATFORM_KNOWLEDGE
-       points at this line by name. The same comparison the routes make. */
-    leadRadar: userId === OUTREACH_CREDENTIAL_OWNER_ID
-      ? "available on this account (it holds the platform's connected social credentials)"
-      : "not available on this account",
+    /* Whether this account has Lead Radar. PLATFORM_KNOWLEDGE points at this line by name.
+       NAMED (Nov 23 2026, LR-2): BEFORE available only to OUTREACH_CREDENTIAL_OWNER_ID (the one account holding the
+       platform's social credentials). AFTER Lead Radar is every member's (lib/leadRoutes.js, route group M): the same
+       accessTier(getUserPlan) the routes' requireActiveSubscription reads, so the owner's pass counts as a member.
+       A plan that cannot be read is null (rendered as unreadable), never a guess either way. */
+    leadRadar: await leadRadarStatLine(userId),
     _unreadable: unreadable
   };
 }
@@ -19214,7 +19244,8 @@ var SPECIALIST_NOTE_TITLE_CAP = 80;
 var SPECIALIST_NOTE_AGENTS = 3;
 var SPECIALIST_NOTE_SCAN = 60;
 var SPECIALIST_NOTE_EXCLUDED_AGENTS = ["oracle"];
-var SPECIALIST_NOTE_EXCLUDED_KEYS = ["sales_convert_", "sales_lead_status_"];
+// NAMED (Nov 24 2026, LR-2B): + lead_radar_spare_words, a member's Lead Radar spare words (lib/leadFingerprint.js SPARE_KEY).
+var SPECIALIST_NOTE_EXCLUDED_KEYS = ["sales_convert_", "sales_lead_status_", "lead_radar_spare_words"];
 
 function excerptWithMarker(value, maxLength) {
   var text = String(value || "").trim();
@@ -19364,6 +19395,7 @@ if (memoryResult.error) {
       .from("agent_memory")
       .select("agent_type, memory_type, title, content, created_at")
       .eq("user_id", userId)
+      .neq("memory_key", "lead_radar_spare_words")   // NAMED (Nov 24 2026, LR-2B): a member's spare words are not a memory for a prompt
       .eq("agent_type", agentType)
       .order("created_at", { ascending: false })
       .limit(5);
@@ -21511,7 +21543,6 @@ app.get("/api/guide/suggestions", requireAuth, recordsLimiter, async function (r
 });
 
 
-
 /* ═══ MEMBER GATES AND "WHY?" (intelligence layer B2) ═══════════════════════
    A member's own gates (member_gates, migration 159; the language is
    lib/gateRules.js) and the read side of gate_decisions: the Decisions list,
@@ -22854,7 +22885,6 @@ app.get("/api/moon", async function (req, res) {
 });
 
 
-
 // ── Public contact capture — writes the contacts spine ───────────────────
 //
 // Public for the same reason /api/charts/preview and /api/places/resolve above
@@ -23674,7 +23704,6 @@ app.get("/api/confirm", async function (req, res, next) {
     next(error);
   }
 });
-
 
 
 /* GATED EVEN THOUGH IT IS A GET. The method is not what decides this: the
@@ -35842,6 +35871,12 @@ async function postRetentionTick() {
     return null;
   }
 }
+/* NAMED (Nov 23 2026, LR-2): the last step of the 04:45 UTC chain: Lead Radar's retention (lib/memberRadar.js purgeTick,
+   job_runs member_leads_purge): a member's leads not saved, replied or won are deleted after 30 days, YouTube's among
+   them. Never rejects. */
+function memberLeadsPurgeTick() {
+  return require("./lib/memberRadar").purgeTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });
+}
 async function copyrightRestoreTick() {
   try {
     return await require("./lib/safety").restoreTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });
@@ -38639,13 +38674,12 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
   });
 
 /* ── Demand signals: the radar's captured posts, read as evidence ──────────────
-   POST /api/agents/rd/demand-signals reads bsky_leads — public posts the lead
-   radars captured because they matched a search phrase — and reports what they
+   POST /api/agents/rd/demand-signals reads the MEMBER'S OWN leads (member_leads; NAMED (Nov 23 2026, LR-2):
+   BEFORE bsky_leads, owner only) — public posts and BizForce Needs that matched their Fingerprint — and reports what they
    say about demand for one theme. NEVER A YOUTUBE ROW: every read filters out
    source 'youtube' in the query (DEMAND_EXCLUDED_SOURCE), because YouTube's
-   API terms forbid combining its data with data from other sources. OWNER
-   ONLY: every row in that table is the owner's, captured by the owner's
-   keyword lists (see LEAD_RADAR_UNAVAILABLE).
+   API terms forbid combining its data with data from other sources. EVERY
+   MEMBER, OWN ROWS ONLY: each read is filtered to the caller's user_id.
 
    TWO VOICES, KEPT APART. MEASURED is counted in code: rows in the window, by
    keyword, source and month, dated and undated, and the scorer's real intent
@@ -38668,55 +38702,10 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
    in no month, no window and no sample: it is never given a date it does not
    have. */
 
-/* Theme → the stored matched_keyword values it reads. Every keyword the radars
-   have written or search today (leadRadar.js KEYWORDS and BIZFORCE_KEYWORDS,
-   mastodonRadar.js HASHTAGS, and the earlier lists still present in stored
-   rows) sits in exactly one theme. "all" reads every row, whatever its
-   keyword, YouTube's excepted.
-
-   NO YOUTUBE-ONLY KEYWORD. Seven keywords were only ever searched on YouTube
-   (youtubeRadar.js KEYWORDS today, and its list at 5746f53) and appear on no
-   Bluesky or Mastodon row: "boost energy naturally", "how to boost energy
-   naturally", "why am i always tired", "low libido help", "natural male
-   vitality", "how to increase libido naturally" and "tongkat ali reviews".
-   Demand Signals reads no YouTube row, so a theme listing them would name a
-   keyword it can never count; they are in no theme. */
-var DEMAND_THEME_KEYWORDS = {
-  manifestation: [
-    "am i manifesting wrong", "anyone had luck manifesting", "does manifestation actually work",
-    "does manifestation work", "how do i actually manifest", "how to manifest", "how to manifest faster",
-    "is law of assumption real", "law of assumption", "law of attraction", "lawofassumption",
-    "lawofattraction", "living in the end", "manifestation", "manifestation isn't working for me",
-    "manifestation method", "manifestation not working", "manifesting", "neville goddard",
-    "neville goddard method", "nevillegoddard", "revision method neville", "sats manifestation",
-    "struggling with law of assumption", "what helped you manifest", "why isn't my manifestation working"
-  ],
-  quantum_jumping: [
-    "anyone tried quantum jumping", "does quantum jumping actually work", "how to quantum jump",
-    "quantum jumping", "quantum jumping method"
-  ],
-  supplements: [
-    "anyone had luck with ashwagandha", "anyone recommend an energy supplement", "anyone tried tongkat ali",
-    "aphrodisiac", "biohacking", "does tongkat ali actually work", "herbal aphrodisiac", "herbalism",
-    "natural energy supplement", "supplement recommendations for fatigue", "what supplements actually work"
-  ],
-  libido: [
-    "get my sex drive back", "help with low libido", "libido", "low libido", "male vitality",
-    "malehealth", "struggling with low libido", "testosterone", "virility", "what helped your low libido",
-    "what worked for low libido", "why is my libido low"
-  ],
-  energy: [
-    "always tired no energy", "anyone else always tired", "anything to eat for energy",
-    "boost my energy naturally", "cant focus tired all day", "natural remedy for energy",
-    "recommendations for low energy"
-  ],
-  bizforce: [
-    "ad account disabled", "can't advertise supplements", "meta rejected my ad", "my account got flagged selling",
-    "payment processor dropped me", "shadowbanned my business", "stripe froze my account"
-  ]
-};
-var DEMAND_THEMES = Object.keys(DEMAND_THEME_KEYWORDS).concat(["all"]);
-
+/* NAMED (Nov 23 2026, LR-2): THE THEMES ARE THE MEMBER'S OWN WORDS. BEFORE five fixed themes (manifestation,
+   quantum_jumping, supplements, libido, bizforce) mapped to the owner's radar keyword lists, over the shared bsky_leads
+   pool, owner only. AFTER a theme is "all" or one of the words in the member's own Fingerprint, and only that
+   member's own leads (member_leads) are read. */
 var DEMAND_SMALL_COUNT = 5;
 var DEMAND_POST_CHARS = 600;
 var DEMAND_QUOTE_WORDS = 6;
@@ -38725,7 +38714,7 @@ var DEMAND_SCORE_BUCKETS = ["0-9", "10-19", "20-29", "30-39", "40-49", "50-59", 
 var DEMAND_NOT_MEASURED = [
   "Who the authors are: no person, account or profile is read, counted as a person, or reported",
   "Whether the sample represents everyone who feels this way: it is drawn only from posts the radar captured",
-  "Posts the radar never searched for: anything outside its keyword and hashtag lists, and every network it does not read",
+  "Posts the radar never searched for: anything outside your Fingerprint's words, and every source you did not switch on",   // NAMED (Nov 23 2026, LR-2)
   "Anything before collection began: the radars capture forward from when they started, so earlier demand is absent, not low",
   "YouTube: excluded. YouTube's API terms forbid combining YouTube data with data from other sources, so no YouTube comment is read, counted or sampled here"
 ];
@@ -38856,7 +38845,7 @@ function demandMeasure(rows, undated, datedBefore, theme, windowDays, windowStar
   DEMAND_SCORE_BUCKETS.forEach(function (b) { bucketCounts[b] = demandCount(buckets[b]); });
   return {
     theme: theme,
-    keywords_in_theme: theme === "all" ? "every stored keyword" : DEMAND_THEME_KEYWORDS[theme].slice(),
+    keywords_in_theme: theme === "all" ? "every word in your Fingerprint" : [theme],   // NAMED (Nov 23 2026, LR-2)
     window_days: windowDays,
     window_start: windowStart,
     rows_in_window: demandCount(rows.length),
@@ -38921,37 +38910,47 @@ function demandSignalsPrompt(measured, sample, keywordsInScope) {
 /* The rows a theme reads: dated rows in the window, paged, with only the
    columns the measurement and the sample need; and two counts beside them. */
 var DEMAND_PAGE = 1000;
-async function loadDemandRows(theme, windowStart) {
+/* NAMED (Nov 23 2026, LR-2): the member's own leads only (member_leads, user_id), in the shape the measurement reads:
+   a BizForce Need counts under "inside bizforce"; a scored lead's score is its real score. YouTube is never read.
+   A score that could not be read (lib/memberRadar.js scoreMember: score null, SCORE_UNREAD_REASON, scored_at set; NAMED (Nov 23
+   2026, LR-2): BEFORE it was stored as 0 with no reason, still accepted here) is scored but failed: intent_score null and
+   LEAD_SCORE_FAILED_REASON, so leadHasRealScore leaves it out of every score figure and it is never "new". */
+function demandRowOf(l) {
+  var scored = !!l.scored_at;
+  var failed = scored && (typeof l.score !== "number" || !l.match_reason);   // null: unreadable (LR-2); 0 with no reason: the first LR-2 rows
+  return { id: l.id, matched_keyword: l.source === "bizforce" ? "inside bizforce" : (l.matched_keyword || ""), source: l.source,
+    post_created_at: l.posted_at, status: scored ? "scored" : "new", intent_score: failed ? null : l.score,
+    intent_reason: failed ? LEAD_SCORE_FAILED_REASON : l.match_reason, post_text: l.text };
+}
+async function loadDemandRows(userId, theme, windowStart) {
   function scoped(q) {
-    q = q.neq("source", DEMAND_EXCLUDED_SOURCE).neq("status", "archived");   // NAMED (Nov 23 2026, LR-1): archived rows are not demand
-    return theme === "all" ? q : q.in("matched_keyword", DEMAND_THEME_KEYWORDS[theme]);
+    q = q.eq("user_id", userId).neq("source", DEMAND_EXCLUDED_SOURCE).neq("status", "archived");
+    return theme === "all" ? q : q.eq("matched_keyword", theme);
   }
   var rows = [];
   for (var from = 0; ; from += DEMAND_PAGE) {
     var page = await scoped(supabase
-      .from("bsky_leads")
-      .select("id, matched_keyword, source, post_created_at, status, intent_score, intent_reason, post_text"))
-      .not("post_created_at", "is", null)
-      .gte("post_created_at", windowStart)
+      .from("member_leads")
+      .select("id, matched_keyword, source, posted_at, status, score, scored_at, match_reason, text"))
+      .not("posted_at", "is", null)
+      .gte("posted_at", windowStart)
       .order("id", { ascending: true })
       .range(from, from + DEMAND_PAGE - 1);
     if (page.error) throw page.error;
     var got = page.data || [];
-    rows = rows.concat(got);
+    rows = rows.concat(got.map(demandRowOf));
     if (got.length < DEMAND_PAGE) break;
   }
-  var undated = await scoped(supabase.from("bsky_leads").select("id", { count: "exact", head: true }))
-    .is("post_created_at", null);
+  var undated = await scoped(supabase.from("member_leads").select("id", { count: "exact", head: true }))
+    .is("posted_at", null);
   if (undated.error) throw undated.error;
-  var before = await scoped(supabase.from("bsky_leads").select("id", { count: "exact", head: true }))
-    .lt("post_created_at", windowStart);
+  var before = await scoped(supabase.from("member_leads").select("id", { count: "exact", head: true }))
+    .lt("posted_at", windowStart);
   if (before.error) throw before.error;
   return { rows: rows, undated: undated.count || 0, datedBefore: before.count || 0 };
 }
 
-var DEMAND_OWNER_ONLY =
-  "Demand signals read the lead radar's captured posts, which belong to the owner account's keyword lists, " +
-  "so this tool is limited to the owner account.";
+// NAMED (Nov 23 2026, LR-2): DEMAND_OWNER_ONLY is gone: every member reads their own leads here.
 
 // An integer in [min, max], the default when absent, or null when present and invalid.
 function demandIntParam(value, min, max, dflt) {
@@ -38966,10 +38965,7 @@ app.post("/api/agents/rd/demand-signals", requireAuth, requireActiveSubscription
     try {
       var userId = req.user.id;
 
-      // NAMED (Nov 23 2026, LR-1): the owner by id (OWNER_ACCOUNT_ID), not any admin by role: these are the owner's leads
-      if (userId !== OWNER_ACCOUNT_ID) {
-        return res.status(403).json({ error: DEMAND_OWNER_ONLY });
-      }
+      // NAMED (Nov 23 2026, LR-2): BEFORE the owner only; AFTER every member, over their own leads (member_leads)
       /* B6/B7: these runs read the Sales agent's Lead Radar posts, the
          sales>rd link. Switched off by the member, refused as G26. */
       if (await memberLinkOff(userId, "sales", "rd")) {
@@ -38979,8 +38975,11 @@ app.post("/api/agents/rd/demand-signals", requireAuth, requireActiveSubscription
       }
 
       var theme = String(safeText(req.body.theme, 40) || "").toLowerCase().trim();
-      if (DEMAND_THEMES.indexOf(theme) === -1) {
-        return res.status(400).json({ error: "theme must be one of: " + DEMAND_THEMES.join(", ") + ".", valid_themes: DEMAND_THEMES });
+      // NAMED (Nov 23 2026, LR-2): "all", or one of the words in the member's own Fingerprint
+      var demandFp = require("./lib/leadFingerprint").shape(await require("./lib/leadFingerprint").getOrBuild(supabase, userId));
+      var demandThemes = demandFp.keywords.concat(["all"]);
+      if (demandThemes.indexOf(theme) === -1) {
+        return res.status(400).json({ error: "theme must be \"all\" or one of the words in your Fingerprint: " + demandThemes.join(", ") + ".", valid_themes: demandThemes });
       }
       var windowDays = demandIntParam(req.body.window_days, 7, 365, 90);
       if (windowDays === null) {
@@ -38998,7 +38997,7 @@ app.post("/api/agents/rd/demand-signals", requireAuth, requireActiveSubscription
       });
 
       var windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
-      var loaded = await loadDemandRows(theme, windowStart);
+      var loaded = await loadDemandRows(userId, theme, windowStart);
       var measured = demandMeasure(loaded.rows, loaded.undated, loaded.datedBefore, theme, windowDays, windowStart);
 
       var seed = demandSeed(run.taskId || "");
@@ -42606,9 +42605,11 @@ app.post("/api/agents/content/audit", requireAuth, requireActiveSubscription, ai
    spec and every spec with no route. It logs rather than throws: a missing spec
    should not take the product down, but it must not pass unnoticed either.
 
-   Five entries are routes the catalogue's regex has always admitted that are
+   Three entries are routes the catalogue's regex has always admitted that are
    not "measured/provenance" tools — store/generate-proposals, seo/generate-post,
-   seo/optimize, sales/convert, sales/lead-status. They are specified because the
+   seo/optimize. NAMED (Nov 23 2026, LR-2): BEFORE five, with sales/convert and
+   sales/lead-status; LR-2 removed both routes, so their specs went with them
+   (a spec with no route is the drift the guard logs). They are specified because the
    catalogue lists them; a spec that covered only the routes it would prefer to
    exist would be exactly the drift the guard is for. */
 function toolField(name, type, required, description, aliases) {
@@ -42792,14 +42793,7 @@ var TOOL_INPUT_SPECS = {
     toolField("site_context", "string", false, "Context about the site, up to 600 characters."),
     toolField("compliance_profile", "string", false, "Must be a key of COMPLIANCE_PROFILES when given; an unknown name is a 422.")
   ],
-  "sales/convert": [
-    // NAMED (Nov 23 2026, LR-1): BEFORE lead_post_uri optional plus a segment object; the route now drafts one lead and never posts
-    toolField("lead_post_uri", "string", true, "The lead's post URI; one lead is drafted at a time, nothing is posted. Missing is a 400, unknown a 404.")
-  ],
-  "sales/lead-status": [
-    toolField("lead_post_uri", "string", true, "The lead's post URI, up to 500 characters."),
-    toolField("status", "string", true, "One of SALES_LEAD_STATUSES (new, drafted, contacted, replied, converted); anything else is a 400.")
-  ],
+  // NAMED (Nov 23 2026, LR-2): sales/convert and sales/lead-status removed with their routes.
   "store/generate-proposals": [],
   "email/propose-sequence": [
     toolField("task_id", "string", true, "The id of a completed email/sequence run of yours; its stored steps are the steps filed. Unknown or not yours is a 404."),
@@ -43040,8 +43034,7 @@ var CHAIN_NON_DISPATCHABLE_TOOLS = [
   "store/generate-proposals",
   "seo/generate-post",
   "seo/optimize",
-  "sales/convert",
-  "sales/lead-status",
+  // NAMED (Nov 23 2026, LR-2): BEFORE + sales/convert and sales/lead-status, whose routes LR-2 removed.
   "email/propose-sequence",
   "social/propose-post"
 ];
@@ -45469,19 +45462,16 @@ async function dashboardTopBody(userId, now) {
       return dashboardTopCount(await supabase.from(spec[1]).select("id", { count: "exact", head: true }).eq(spec[2], userId), spec[0]);
     });
   }
-  // bsky_leads has no owner column, so every row is the credential owner's (GET /api/leads); anyone else reads none.
-  if (userId === OUTREACH_CREDENTIAL_OWNER_ID) {
-    counts.leads = await figure("counts.leads", async function () {
-      return dashboardTopCount(await supabase
-        .from("bsky_leads")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "scored")
-        .not("intent_score", "is", null), "leads");
-    });
-  } else {
-    counts.leads = null;
-    unreadable.push("counts.leads (Lead Radar reads the owner account's leads only)");
-  }
+  /* NAMED (Nov 23 2026, LR-2): BEFORE the owner's scored rows in the shared bsky_leads pool, null for everyone else.
+     AFTER the member's own new leads, as GET /api/leads/summary counts them (weaker matches left out). */
+  counts.leads = await figure("counts.leads", async function () {
+    return dashboardTopCount(await supabase
+      .from("member_leads")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("status", "new")
+      .or("source.eq.bizforce,source.eq.youtube,score.gt.39"), "leads");
+  });
   body.counts = counts;
 
   body.media = await figure("media", async function () {
@@ -48222,7 +48212,6 @@ app.post("/api/billing/portal", requireAuth, async function (req, res) {
     return res.status(500).json({ error: "Could not open billing portal" });
   }
 });
-
 
 
 /* /health's admin detail. The public /health answers a word and nothing else;
@@ -56535,121 +56524,54 @@ function leadHasRealScore(lead) {
     lead.intent_reason !== LEAD_SCORE_FAILED_REASON;
 }
 
-// For a list that shows a lead whatever its score (the pipeline): a lead
-// without a real score keeps its row but loses the number, and says why.
-function leadScoreForDisplay(lead) {
-  if (!lead || leadHasRealScore(lead)) return lead;
-  var failed = lead.status === "score_failed" || lead.intent_reason === LEAD_SCORE_FAILED_REASON;
-  return Object.assign({}, lead, { intent_score: null, score_label: failed ? "scoring failed" : "not scored" });
+
+/* ── LEAD RADAR FOR EVERY MEMBER (NAMED Nov 23 2026, LR-2; migration 204) ─────────────────────────────────
+   BEFORE: GET /api/leads, GET /api/leads/youtube-signals, POST /api/leads/draft-reply, GET /api/agents/sales/leads,
+   POST /api/agents/sales/convert, POST /api/agents/sales/send-approved, POST /api/agents/sales/lead-status and
+   GET /api/agents/sales/pipeline read and replied to the owner's shared bsky_leads pool, owner only.
+   AFTER: every member's own Fingerprint and leads (lib/leadRoutes.js, lib/leadFingerprint.js, lib/memberRadar.js,
+   lib/leadReplies.js), members only; the owner keeps one read-only archive view (GET /api/leads/archive). */
+function leadRadarModelCall(userId, prompt, maxTokens, route) {
+  return callAnthropicText(prompt, maxTokens, userId, "claude-haiku-4-5-20251001", { user_id: userId, agent_type: "lead_radar", route: route });
 }
-
-app.get("/api/leads", requireAuth, async function (req, res, next) {
-  try {
-    /* The same restriction POST /api/agents/sales/convert applies, for the
-       same reason, in the same position: first thing after the caller is
-       known, ahead of the read, so a refused request costs a string
-       comparison and reads zero rows. bsky_leads has no owner column, so
-       every row this query would return belongs to the credential owner —
-       see OUTREACH_CREDENTIAL_OWNER_ID. */
-    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) {
-      console.warn("[/api/leads] REFUSING user " + req.user.id +
-        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        ". bsky_leads has no owner column, so every row is theirs. No rows were read.");
-      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
-    }
-
-    var { data, error } = await supabase
-      .from("bsky_leads")
-      .select("*")
-      .eq("status", "scored")
-      .not("intent_score", "is", null)
-      .order("intent_score", { ascending: false, nullsFirst: false })
-      .limit(100);
-
-    if (error) {
-      console.error("[/api/leads] Supabase error:", error.message);
-      return res.status(500).json({ error: error.message });
-    }
-
-    return res.json({ leads: (data || []).filter(leadHasRealScore) });
-  } catch (err) {
-    console.error("[/api/leads] Error:", err.message || err);
-    next(err);
-  }
+async function leadRadarNames(ids) {
+  var out = {};
+  var list = (ids || []).filter(function (id) { return /^[0-9a-f-]{36}$/i.test(String(id)); });
+  if (!list.length) return out;
+  var r = await supabase.from("bf_profiles").select("user_id, display_name, username").in("user_id", list);
+  if (r.error) throw r.error;
+  (r.data || []).forEach(function (p) { out[p.user_id] = p.display_name || (p.username ? "@" + p.username : null); });
+  return out;
+}
+/* Threads for Lead Radar (lib/threadsApi.js, lib/threadsAuth.js): the member's connection state and their own reply. */
+function leadRadarThreads() {
+  var T = require("./lib/threadsLeads");
+  return { state: function (userId) { return T.state(supabase, userId); },
+    reply: function (userId, replyToId, text) { return T.reply(supabase, userId, replyToId, text); },
+    search: function (userId, q, sinceIso) { return T.search(supabase, userId, q, sinceIso); } };
+}
+var leadRadarMemberDeps = {
+  ownerId: OWNER_ACCOUNT_ID,
+  tierOf: async function (userId) { return accessTier(await getUserPlan(userId)); },
+  names: leadRadarNames,
+  categoryName: async function (slug) { var c = await require("./lib/categories").find(supabase, slug); return c ? c.name : null; },
+  categoryNames: async function (slugs) { var all = await require("./lib/categories").list(supabase); return (slugs || []).map(function (s) { return require("./lib/categories").nameOf(all, s) || s; }); },
+  callModel: leadRadarModelCall,
+  threadsSearch: function (userId, q, sinceIso) { return leadRadarThreads().search(userId, q, sinceIso); }
+};
+require("./lib/leadRoutes").mountLeadRoutes(app, {
+  sb: supabase, requireAuth: requireAuth, requireActiveSubscription: requireActiveSubscription, aiLimiter: aiLimiter,
+  ownerId: OWNER_ACCOUNT_ID, siteOrigin: FRONTEND_URL, callModel: leadRadarModelCall,
+  postingAccount: blueskyPostingAccount, actAs: blueskyActAs, actFailure: blueskyActFailure,
+  linkFacets: detectOutreachLinkFacets, replyRefsFor: require("./lib/memberBluesky").replyRefsFor,
+  recordGate: recordGateDecision,   // NAMED (Nov 23 2026, LR-2): G23 and G22 at the send (action outreach_send), as send-approved recorded them
+  // Getters: both constants are declared further down this file.
+  caps: { get perMember() { return OUTREACH_DAILY_CAP; }, get ceiling() { return OUTREACH_ACCOUNT_DAILY_CEILING; } },
+  sendLive: function () { return process.env.SALES_SEND_LIVE === "true"; },
+  threads: { state: function (userId) { return leadRadarThreads().state(userId); }, reply: function (userId, id, text) { return leadRadarThreads().reply(userId, id, text); } }
 });
 
-/* GET /api/leads/youtube-signals — YouTube finds, shown apart.
 
-   youtubeRadar.js writes rows with source 'youtube' and status 'signal': never
-   scored (youtube is not in SCORABLE_SOURCES) and never sendable (not in
-   OUTREACH_SENDABLE_SOURCES), so GET /api/leads, which lists scored rows, never
-   shows them. This lists them on their own, for Lead Radar's separate YouTube
-   section: the newest YOUTUBE_SIGNALS_LIMIT, four fields each, never merged
-   with Bluesky or Mastodon rows. Each row is kept for at most 30 days
-   (lib/youtubeRetention.js).
-
-   OWNER ONLY, on the same gate and in the same position as GET /api/leads: a
-   refused request reads nothing. capture_on says whether ENABLE_YOUTUBE_RADAR
-   is exactly "true", so the page can say why the list is empty.
-
-   FILTERED HERE TOO (lib/youtubeFilter.js, the same test the radar stores
-   by): rows captured before the filter existed are read and tested, newest
-   first, a page at a time, until YOUTUBE_SIGNALS_LIMIT are kept or the rows
-   run out (at most YOUTUBE_SIGNALS_MAX_READ). The limit counts KEPT rows, so
-   it is applied after the filter, never to the query. hidden_counts are the
-   rows read and not kept, by reason; rows_read is how many were tested. */
-var YOUTUBE_SIGNALS_LIMIT = 50;
-var YOUTUBE_SIGNALS_PAGE = 1000;
-var YOUTUBE_SIGNALS_MAX_READ = 5000;
-app.get("/api/leads/youtube-signals", requireAuth, async function (req, res, next) {
-  try {
-    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) {
-      console.warn("[/api/leads/youtube-signals] REFUSING user " + req.user.id +
-        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        ". bsky_leads has no owner column, so every row is theirs. No rows were read.");
-      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
-    }
-
-    var finds = [];
-    var hidden = { link: 0, too_short: 0, off_topic: 0 };
-    var offset = 0;
-    var rowsRead = 0;
-    for (;;) {
-      var result = await supabase
-        .from("bsky_leads")
-        .select("post_uri, matched_keyword, post_created_at, post_text")
-        .eq("source", "youtube")
-        .eq("status", "signal")
-        .order("created_at", { ascending: false })
-        .range(offset, offset + YOUTUBE_SIGNALS_PAGE - 1);
-
-      if (result.error) {
-        console.error("[/api/leads/youtube-signals] Supabase error:", result.error.message);
-        return res.status(500).json({ error: result.error.message });
-      }
-
-      var page = result.data || [];
-      offset += page.length;
-      for (var i = 0; i < page.length && finds.length < YOUTUBE_SIGNALS_LIMIT; i++) {
-        rowsRead++;
-        var verdict = isUsefulYoutubeComment(page[i].post_text, page[i].matched_keyword);
-        if (verdict.keep) finds.push(page[i]); else hidden[verdict.reason]++;
-      }
-      if (finds.length >= YOUTUBE_SIGNALS_LIMIT || page.length < YOUTUBE_SIGNALS_PAGE || offset >= YOUTUBE_SIGNALS_MAX_READ) break;
-    }
-
-    return res.json({
-      finds: finds,
-      hidden_counts: hidden,
-      rows_read: rowsRead,
-      capture_on: process.env.ENABLE_YOUTUBE_RADAR === "true",
-      kept_days: 30
-    });
-  } catch (err) {
-    console.error("[/api/leads/youtube-signals] Error:", err.message || err);
-    next(err);
-  }
-});
 
 app.post("/api/content-library", requireAuth, async function (req, res, next) {
   try {
@@ -56917,68 +56839,6 @@ app.post("/api/content-library/:id/external-published", requireAuth, async funct
   }
 });
 
-/* Drafting a reply is a model call, so it is entitlement-gated like every
-   other one. The lead radar's own capture and scoring passes are unaffected:
-   they never call this route. */
-app.post("/api/leads/draft-reply", requireAuth, requireActiveSubscription, async function (req, res, next) {
-  try {
-    // NAMED (Nov 23 2026, LR-1): owner only for now: the prompt is about the owner's own book (LR-2 makes it per member)
-    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
-    var postText        = String(req.body.post_text        || "").trim();
-    var suggestedProduct = String(req.body.suggested_product || "").trim();
-
-    if (!postText) {
-      return res.status(400).json({ error: "post_text is required" });
-    }
-
-    var prompt;
-
-    if (suggestedProduct === "Quantum Jumping book") {
-      prompt =
-        "You are a thoughtful person who has personally explored manifestation and reality-shifting methods.\n" +
-        "Read the post below carefully and write a genuine 2-3 sentence reply that:\n" +
-        "1. Speaks directly to what this specific person actually said — acknowledge their feeling, question, or situation.\n" +
-        "2. Offers ONE real, human insight from your own experience — something that feels true, not motivational-poster fluff.\n" +
-        "3. Only if it fits naturally, mention in passing that there is a method called Quantum Jumping that helped you think differently — as a gentle pointer, not a recommendation or a sell. Never include a URL or price.\n" +
-        "Sound like a real person in a comment section, not a marketer. No hashtags, no exclamation spam, no 'DM me'.\n\n" +
-        "Post: " + postText + "\n\n" +
-        "Reply:";
-    } else {
-      prompt =
-        "You are helping a small business owner engage authentically on social media.\n" +
-        "Write a short, genuine reply (2-3 sentences) to the following post. The reply should sound like a real, helpful person — not a brand or a sales pitch.\n" +
-        "If it feels natural, subtly mention how " + (suggestedProduct || "the product") + " might help, but only if it fits the conversation. Never be pushy or salesy.\n\n" +
-        "Post: " + postText + "\n\n" +
-        "Reply:";
-    }
-
-    const draftReplyApiKey = await resolveAnthropicKey(req.user.id);
-    await enforceDailyModelCallLimit(req.user.id, "POST /api/leads/draft-reply");
-
-    const draftReplyAnthropicClient = new Anthropic({ apiKey: draftReplyApiKey });
-
-    var response = await draftReplyAnthropicClient.messages.create({
-      model:      "claude-haiku-4-5-20251001",
-      max_tokens: 300,
-      messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
-    });
-
-    await recordModelCall({
-      userId:    req.user.id,
-      agentType: "sales",
-      route:     "POST /api/leads/draft-reply",
-      model:     response.model || "claude-haiku-4-5-20251001",
-      usage:     response.usage
-    });
-
-    var reply = (response.content && response.content[0] && response.content[0].text) || "";
-
-    return res.json({ reply: reply.trim() });
-  } catch (err) {
-    console.error("[/api/leads/draft-reply] Error:", err.message || err);
-    next(err);
-  }
-});
 
 // ── Sales Agent lead-conversion pipeline ──
 // bsky_leads (Lead Radar's capture table) is a single shared, platform-wide
@@ -56991,119 +56851,6 @@ app.post("/api/leads/draft-reply", requireAuth, requireActiveSubscription, async
    deliberately NOT in this list: a member cannot set it, and every read above skips it. */
 var SALES_LEAD_STATUSES = ["new", "drafted", "contacted", "replied", "converted"];
 
-// The subset of the above meaning "this person has already been engaged" —
-// the leads the auto-loop and the segment path must never draft again. Named
-// once because both eligibility sites must agree; they drifted apart from the
-// ceiling check below when this was an inline array literal in two places.
-var SALES_ENGAGED_STATUSES = ["contacted", "replied", "converted"];
-
-// Ceiling on paid draft attempts per (user, lead). Every attempt is a billed
-// Anthropic call — see the comment above the counter write in
-// convertSingleLead. Deliberately a constant here and not a CHECK constraint
-// in migration 076: raising or lowering the ceiling is a spend decision, not
-// a schema change.
-var DRAFT_ATTEMPT_CEILING = 3;
-
-// Attaches this user's sales_lead_pipeline status/last_draft onto each lead
-// (defaulting to "new" for leads this user hasn't touched yet).
-async function annotateLeadsWithSalesPipeline(userId, leads) {
-  if (!leads.length) return leads;
-
-  var pipelineResult = await supabase
-    .from("sales_lead_pipeline")
-    .select("lead_post_uri, status, last_draft, updated_at")
-    .eq("user_id", userId)
-    .neq("status", "archived");   // NAMED (Nov 23 2026, LR-1): an archived pipeline row reads as a lead not yet touched
-
-  var pipelineByUri = {};
-  (pipelineResult.error ? [] : (pipelineResult.data || [])).forEach(function (row) {
-    pipelineByUri[row.lead_post_uri] = row;
-  });
-
-  return leads.map(function (lead) {
-    var pipeline = pipelineByUri[lead.post_uri];
-    return Object.assign({}, lead, {
-      sales_status: pipeline ? pipeline.status : "new",
-      sales_last_draft: pipeline ? pipeline.last_draft : null,
-      sales_pipeline_updated_at: pipeline ? pipeline.updated_at : null
-    });
-  });
-}
-
-// GET /api/agents/sales/leads — the Sales Agent's view of Lead Radar's
-// captured leads, annotated with this user's own pipeline status. Optional
-// filters: min_score, high_intent=true (score >= 60), buyer=true (has a
-// suggested product and score >= 40 — mirrors lead-radar.html's own
-// buyer-vs-competitor heuristic).
-// exclude_contacted=true additionally drops any lead already contacted/
-// replied/converted for this user — opt-in, so the existing "Live Leads"
-// display (which shows every lead with its status badge) is unaffected;
-// an automated conversion loop can pass this to get only fresh candidates.
-app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-
-    /* Same guard as GET /api/leads and POST /api/agents/sales/convert, same
-       position: before the bsky_leads read and before the pipeline
-       annotation, so a refused request reads nothing. */
-    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
-      console.warn("[sales/leads] REFUSING user " + userId +
-        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        ". bsky_leads has no owner column, so every row is theirs. No rows were read.");
-      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
-    }
-
-    var minScore = Number(req.query.min_score);
-    var buyerOnly = String(req.query.buyer || "").toLowerCase() === "true";
-    var highIntentOnly = String(req.query.high_intent || "").toLowerCase() === "true";
-    var excludeContacted = String(req.query.exclude_contacted || "").toLowerCase() === "true";
-
-    var query = supabase
-      .from("bsky_leads")
-      .select("*")
-      .eq("status", "scored")
-      .not("intent_score", "is", null)
-      .order("intent_score", { ascending: false, nullsFirst: false })
-      .limit(200);
-
-    if (Number.isFinite(minScore)) {
-      query = query.gte("intent_score", minScore);
-    }
-    if (highIntentOnly) {
-      query = query.gte("intent_score", 60);
-    }
-    if (buyerOnly) {
-      query = query.neq("suggested_product", "none").gte("intent_score", 40);
-    }
-
-    var leadsResult = await query;
-    if (leadsResult.error) {
-      throw leadsResult.error;
-    }
-
-    var enrichedLeads = await annotateLeadsWithSalesPipeline(userId, (leadsResult.data || []).filter(leadHasRealScore));
-
-    if (excludeContacted) {
-      enrichedLeads = enrichedLeads.filter(function (lead) {
-        return lead.sales_status !== "contacted" && lead.sales_status !== "replied" && lead.sales_status !== "converted";
-      });
-    }
-
-    return res.json({ leads: enrichedLeads });
-  } catch (error) {
-    console.error("[sales/leads] Error:", error.message || error);
-    next(error);
-  }
-});
-
-// Truncates to Bluesky's 300-grapheme post limit, safely (counts Unicode
-// code points via Array.from so surrogate-pair characters aren't split).
-function truncateToBlueskyLimit(text) {
-  var str = String(text || "");
-  var chars = Array.from(str);
-  if (chars.length <= 300) return str;
-  return chars.slice(0, 297).join("") + "…";
-}
 
 /* ── Link facets for outreach replies ───────────────────────────────────────
    Bluesky stores post text as plain text and carries formatting alongside it
@@ -57189,33 +56936,22 @@ function detectOutreachLinkFacets(text) {
    the same comparison, code "lead_radar_unavailable", before they read
    anything. Until there is a column to scope on, "not the owner" and "has
    no leads" are the same statement, and a page full of somebody else's
-   leads is not an acceptable way to say it. */
+   leads is not an acceptable way to say it.
+   NAMED (Nov 23 2026, LR-2): AFTER those five routes are gone; each member reads their own member_leads (user_id), and
+   bsky_leads is read only by the owner's archive route (GET /api/leads/archive, lib/leadRoutes.js). */
 const OUTREACH_CREDENTIAL_OWNER_ID = OWNER_ACCOUNT_ID;
 
-/* The refusal the five lead-reading routes send (NAMED (Nov 23 2026, LR-1): and POST /api/leads/draft-reply). One string, because a
-   customer will read it on two pages and they must agree. A statement of
-   what is, with no timeline attached: this product has shipped interfaces
-   that promised what nothing delivered, and a refusal that says "yet" is
-   that defect in a smaller box. */
-const LEAD_RADAR_UNAVAILABLE = {
-  error: "Lead Radar runs against a single connected social account and is not enabled for your account. " +
-         "Leads, scoring and public replies are only available on the account that owns those credentials.",
-  code: "lead_radar_unavailable"
-};
+/* NAMED (Nov 23 2026, LR-2): the leadRadar line of LIVE PLATFORM STATS (getLiveStats). A member has Lead Radar; a free
+   account does not; a plan that cannot be read says nothing either way (null). */
+async function leadRadarStatLine(userId) {
+  var tier;
+  try { tier = accessTier(await getUserPlan(userId)); } catch (e) { return null; }
+  return tier === "member" ? "available on this account (a member: their own Lead Radar)" : "not available on this account (a members' feature)";
+}
 
-/* The same statement of fact for the outreach send path, in the same shape and
-   for the same reason. This deployment holds one Bluesky login and one Mastodon
-   token, so a reply sent on behalf of anyone else would be posted from the
-   owner's accounts. It says what is true and promises nothing about later: the
-   refusal a caller reads should not commit the project to work nobody has
-   scheduled, and "until per-user credentials exist" did exactly that. Whether
-   those credentials are ever built is a product decision, and an error message
-   is not the place it gets made. */
-const OUTREACH_UNAVAILABLE = {
-  error: "Outreach runs against a single connected social account and is not enabled for your account. " +
-         "Drafting and sending replies are only available on the account that owns those credentials.",
-  code: "outreach_unavailable"
-};
+/* NAMED (Nov 23 2026, LR-2): BEFORE LEAD_RADAR_UNAVAILABLE, the 403 the owner-only lead routes sent every other account.
+   AFTER those routes are removed and Lead Radar is every member's (lib/leadRoutes.js); nothing read it, so it is removed. */
+
 
 /* ── Outreach send cap ──────────────────────────────────────────────────────
    Deliberately low, and env-overridable so it can be raised knowingly rather
@@ -57290,938 +57026,28 @@ const OUTREACH_ACCOUNT_DAILY_CEILING = (function () {
   return Math.max(0, parsed);
 })();
 
-/* The intent score a lead must reach before outreach will consider it. Tuning
-   this is the difference between drafting for 105 leads and drafting for 1,690,
-   which is a spend decision an operator should be able to make from a Railway
-   variable rather than a deploy.
-
-   Deliberately NOT the `process.env.X || default` shape used by the cap above.
-   That pattern cannot express zero: "0" is falsy, so it would be replaced by
-   the default and a deliberate "score everything" would silently become the
-   opposite of what was typed. Parsed first, then tested with Number.isFinite,
-   so absent, empty and unparseable all fall back while a real 0 survives.
-
-   Clamped to 0..100 because that is the range the scorer writes — leadRadar
-   rounds and clamps to it before storing. A value outside it is a typo, and
-   the two directions fail differently: 600 admits nothing and stops outreach
-   dead, -5 admits every unscored row. Neither should be reachable by a
-   mistyped variable. */
-const OUTREACH_MIN_INTENT = (function () {
-  // Emptiness is tested before parsing, not after. Number("") and Number("   ")
-  // are both 0, not NaN, so a variable that is present but blank would survive
-  // the isFinite check below and read as a deliberate zero — the exact
-  // confusion the parse-then-check shape exists to prevent.
-  var raw = process.env.OUTREACH_MIN_INTENT;
-  if (raw == null || String(raw).trim() === "") return 60;
-
-  var parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return 60;
-
-  return Math.min(100, Math.max(0, parsed));
-})();
-
-// Counts this user's sends since the start of the current UTC day. head:true
-// with count:"exact" asks Postgres for the count and no rows.
-//
-// THROWS rather than returning 0 on error, because those two are not the same
-// answer and the caller must not be able to confuse them: a failed count is
-// unknown, and unknown is the one case that must never read as "under the
-// cap". canSendOutreach turns that throw into a refusal.
-async function outreachSendsToday(userId) {
-  var startOfUtcDay = new Date();
-  startOfUtcDay.setUTCHours(0, 0, 0, 0);
-
-  var { count, error } = await supabase
-    .from("outreach_sends")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .gte("sent_at", startOfUtcDay.toISOString());
-
-  if (error) {
-    throw error;
-  }
-
-  return count || 0;
-}
-
-// Counts EVERY send since the start of the current UTC day, across all users.
-// The same query as outreachSendsToday with the .eq("user_id", ...) removed,
-// deliberately the only difference, so the two numbers are always measured the
-// same way over the same window and one can be read against the other.
-//
-// The UTC boundary is computed identically rather than shared through a
-// helper, matching how outreachSendsToday computes its own. Both compare
-// against sent_at, which Postgres stamps by default, so the application
-// supplies only the boundary and never the timestamp.
-//
-// THROWS on error, exactly as outreachSendsToday does and for exactly the same
-// reason: a failed count is unknown, and unknown must never read as
-// under-ceiling. canSendOutreach turns the throw into a refusal.
-async function outreachSendsAccountToday() {
-  var startOfUtcDay = new Date();
-  startOfUtcDay.setUTCHours(0, 0, 0, 0);
-
-  var { count, error } = await supabase
-    .from("outreach_sends")
-    .select("id", { count: "exact", head: true })
-    .gte("sent_at", startOfUtcDay.toISOString());
-
-  if (error) {
-    throw error;
-  }
-
-  return count || 0;
-}
-
-// The gate every send passes through. Returns { allowed: true } or
-// { allowed: false, reason }.
-//
-// FAILS CLOSED. If either query throws, this refuses the send — an
-// unverifiable count is not a verified under-cap, and the failure mode of
-// guessing wrong is a public reply that cannot be unposted. A refused send
-// costs one lead's outreach and the lead stays eligible; a wrongly permitted
-// one spends against a cap nobody can measure.
-async function canSendOutreach(userId, lead) {
-  try {
-    var existing = await supabase
-      .from("outreach_sends")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("lead_post_uri", lead.post_uri)
-      .maybeSingle();
-
-    if (existing.error) {
-      throw existing.error;
-    }
-
-    // The ledger, not sales_lead_pipeline: pipeline status is editable by
-    // hand through /api/agents/sales/lead-status, so it records intent
-    // rather than what was actually posted. This table only ever gets a row
-    // from a send that returned sent: true.
-    if (existing.data) {
-      return { allowed: false, reason: "already_contacted" };
-    }
-
-    var sentToday = await outreachSendsToday(userId);
-    if (sentToday >= OUTREACH_DAILY_CAP) {
-      return { allowed: false, reason: "daily_cap_reached" };
-    }
-
-    /* The account ceiling, checked last. The order is deliberate: the
-       per-user checks above are the ones an operator can reason about and
-       act on, and reaching this line means they were all satisfied. A stop
-       here is not about this user at all — it says the shared account has
-       had enough for the day, on everyone’s behalf.
-
-       Its own reason string for that reason. "daily_cap_reached" tells an
-       operator to wait for their own window to reset; this one means the
-       account is done regardless of whose window it is, and collapsing the
-       two would hide the only condition that involves other users. Nothing
-       outside this function branches on the value — it is logged and
-       returned — so a new string is additive. */
-    var accountSentToday = await outreachSendsAccountToday();
-    if (accountSentToday >= OUTREACH_ACCOUNT_DAILY_CEILING) {
-      console.warn("[outreach] ACCOUNT CEILING REACHED — " + accountSentToday +
-        " send(s) recorded across all users since UTC midnight, ceiling is " +
-        OUTREACH_ACCOUNT_DAILY_CEILING + " (OUTREACH_ACCOUNT_DAILY_CEILING)." +
-        " Refusing this send for user " + userId + ", who is still under their" +
-        " own per-user cap of " + OUTREACH_DAILY_CAP + "/day. This is the one" +
-        " limit measured over the shared social account rather than one user.");
-      return { allowed: false, reason: "account_ceiling_reached" };
-    }
-
-    return { allowed: true };
-  } catch (err) {
-    console.error("[outreach] Cap check failed for user " + userId + " — refusing to send:", err.message || err);
-    return { allowed: false, reason: "check_failed" };
-  }
-}
-
-/* The only sources a reply can actually be posted to, and therefore the only
-   ones worth drafting for. sendBlueskyReply is the only sender (NAMED (Nov 23 2026, LR-1):
-   sendMastodonReply is removed). The convert route refuses a lead from any
-   other source before drafting, so no generation is paid for a lead that
-   could never be replied to. bsky_leads holds youtube rows
-   today (youtubeRadar writes them) and the column has no CHECK constraint, so
-   a future radar adds a fourth value without touching this file.
-
-   Kept next to the senders deliberately: adding a sender and forgetting to
-   widen this list makes that sender unreachable, and the two are only
-   findable together if they sit together. */
-// NAMED (Nov 23 2026, LR-1): BEFORE ["bluesky", "mastodon"]; Mastodon replies are removed
-const OUTREACH_SENDABLE_SOURCES = ["bluesky"];
-
-/* Which offer a lead gets drafted against, keyed on the scorer's
-   suggested_product. The six Mr. Earth Rose products share one instruction
-   because they share one compliance regime — all are sold from
-   MrEarthRose.com, and the structure-function language, the disease-claim ban
-   and the prescription-drug comparison ban apply identically to each. Three of
-   them are topicals, labelled For External Use Only; the instruction says
-   nothing about form, so OUTREACH_PRODUCT_FACTS below tells the drafter what
-   each product is, and a topical is never written up as something to take.
-   The book is a different offer
-   under different rules entirely, so it gets its own instruction rather than a
-   conditional clause inside the supplement one.
-
-   Anything not named here — "none" above all, which is what the scorer assigns
-   to teachers, coaches and sellers — has no offer to write about, and there is
-   nothing to draft. The values are the scorer's exact strings; leadRadar.js
-   already refuses to store anything off-list, so an exact match here cannot be
-   defeated by a near-miss upstream. */
-const OUTREACH_SUPPLEMENT_PRODUCTS = ["War Horse", "War Horse Black", "Tongkat Ali", "Sword Vitality XXL Xtreme",
-  "War Horse Xtreme", "War Horse Midnight"];
-
-/* What each product IS, in MrEarthRose.com's own words, handed to the drafter
-   with the lead. The name alone does not say whether a product is swallowed or
-   applied, and the label on three of them says For External Use Only. Keyed on
-   the same exact strings as the list above; nothing here is a claim the site
-   does not make. */
-const OUTREACH_PRODUCT_FACTS = {
-  "War Horse":                 "a liquid herbal shot, taken by mouth",
-  "War Horse Black":           "an extra-strength 2 oz liquid herbal shot, taken by mouth",
-  "Tongkat Ali":               "Tongkat Ali Supreme, a vitality formula sold by the bottle, taken by mouth",
-  "Sword Vitality XXL Xtreme": "a topical blend of botanical oils, the flagship Mr. Earth Rose formula. For External Use Only: never describe it as taken, drunk or swallowed",
-  "War Horse Xtreme":          "a 5 oz topical cream of botanicals and amino acids. For External Use Only: never describe it as taken, drunk or swallowed",
-  "War Horse Midnight":        "a 2 fl oz intimate vitality oil for men, positioned around control and pacing. For External Use Only: never describe it as taken, drunk or swallowed"
-};
-const OUTREACH_BOOK_PRODUCT = "Quantum Jumping book";
-
-/* WHERE A LEAD IS SENT. The drafter used to write "MrEarthRose.com" from
-   memory — the instruction allowed it and the business profile and past drafts
-   repeated it — and five drafts on 2026-07-08 pointed at MrEarthRose.com/libido,
-   a path the model made up that answers 404. Since detectOutreachLinkFacets
-   (2026-08-19) every URL in a reply goes out as a working link, so an invented
-   path would now be posted as a clickable 404.
-
-   All six products point at the homepage, by decision. It is the only page that
-   carries every product with its description and a Buy button. Not /products:
-   its store module renders an empty list. Not mrearthrose.net/warhorse: a
-   JavaScript-rendered page titled "Retail Website" that has neither Tongkat Ali
-   nor Sword Vitality on it. And never a Stripe checkout link — a stranger's
-   first contact is not a payment page, the same rule the book instruction sets.
-
-   A map keyed by product name, all six on one value today, so a product can be
-   given its own page later by changing its one entry; every caller already
-   asks for OUTREACH_PRODUCT_DESTINATIONS[product] and needs no change. */
-const OUTREACH_HOME_URL = "https://mrearthrose.com/";
-
-/* BIZFORCE'S OWN OFFER. Lead Radar's BizForce phrases (leadRadar.js
-   BIZFORCE_KEYWORDS) find business owners whose ads, processor or reach was cut
-   off, and its BizForce scorer stores suggested_product "BizForceAI" for them —
-   a value no supplement-pipeline lead can carry. Before this, bizforceai.net was
-   not a destination any reply could link, so nothing the engine did could send
-   a single visitor to the platform the master file's north star says should
-   drive traffic to itself. /suppressed.html, the page written for exactly this
-   person — someone an ad network, platform or payment processor cut off —
-   rather than the homepage, which speaks to a busy generalist. It records the
-   arrival (POST /api/engine-visits) from the ?ref= the code adds. */
-const OUTREACH_BIZFORCE_PRODUCT = "BizForceAI";
-
-const OUTREACH_PRODUCT_DESTINATIONS = {
-  "War Horse":                 OUTREACH_HOME_URL,
-  "War Horse Black":           OUTREACH_HOME_URL,
-  "Tongkat Ali":               OUTREACH_HOME_URL,
-  "Sword Vitality XXL Xtreme": OUTREACH_HOME_URL,
-  "War Horse Xtreme":          OUTREACH_HOME_URL,
-  "War Horse Midnight":        OUTREACH_HOME_URL,
-  "BizForceAI":                "https://bizforceai.net/suppressed.html"
-};
-const OUTREACH_BIZFORCE_DESTINATION = OUTREACH_PRODUCT_DESTINATIONS[OUTREACH_BIZFORCE_PRODUCT];
-/* The book's own site, which its instruction already names as the only link. */
-const OUTREACH_BOOK_DESTINATION = "https://blacksuncircle.com/";
-
-/* The domains a reply may only link to at the supplied destination. A URL on any
-   of them that is not exactly that destination is a page the model chose, not
-   one it was given. */
-const OUTREACH_OWN_DOMAINS = ["mrearthrose.com", "mrearthrose.net", "swordvitality.com", "blacksuncircle.com", "bizforceai.net"];
-
-/* Why a drafted reply may not go out, or null if it may. Run on the clean
-   message right after drafting, before anything else: a non-null answer holds
-   the draft exactly as an empty one is held — cleanMessage becomes null, which
-   the send block already refuses — so no sender is changed or reached.
-
-   It finds URLs the way the sender will: RichText's own detector, which is what
-   turns a URL into a clickable link (bare domains included — "MrEarthRose.com"
-   is linked as https://MrEarthRose.com). Anything on our domains or on Stripe
-   written in a way the detector misses is caught by a plain-text scan as well,
-   so nothing is waved through for being unlinkable today.
-
-   Refused: any Stripe URL at all, and any URL on OUTREACH_OWN_DOMAINS whose host
-   and path are not the destination's (www. ignored, an empty path read as "/",
-   and a query or fragment counting as a different URL). A bare domain that
-   resolves to the destination is the destination. */
-function outreachDraftRejection(message, destination) {
-  var text = String(message || "");
-  var found = [];
-  try {
-    var rt = new RichText({ text: text });
-    rt.detectFacetsWithoutResolution();
-    (rt.facets || []).forEach(function (facet) {
-      (facet.features || []).forEach(function (feature) {
-        if (feature && feature.$type === "app.bsky.richtext.facet#link" && feature.uri) found.push(feature.uri);
-      });
-    });
-  } catch (detectErr) {
-    // The scan below still runs; a detector failure cannot clear a draft.
-  }
-  var scan = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:mrearthrose\.com|mrearthrose\.net|swordvitality\.com|blacksuncircle\.com|bizforceai\.net|stripe\.com)(?:\/[^\s"'<>)\]]*)?/gi;
-  (text.match(scan) || []).forEach(function (m) { found.push(m); });
-
-  function normal(u) {
-    var withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : "https://" + u;
-    try {
-      var p = new URL(withScheme.replace(/[.,;:!?]+$/, ""));
-      return {
-        host: p.hostname.toLowerCase().replace(/^www\./, ""),
-        key: p.hostname.toLowerCase().replace(/^www\./, "") + (p.pathname || "/") + p.search + p.hash
-      };
-    } catch (parseErr) {
-      return null;
-    }
-  }
-  var dest = destination ? normal(destination) : null;
-
-  for (var i = 0; i < found.length; i++) {
-    var u = normal(found[i]);
-    if (!u) continue;
-    if (u.host === "stripe.com" || /\.stripe\.com$/.test(u.host)) {
-      return "it links a Stripe page (" + found[i] + "); outreach never links a checkout, cart, payment or order URL";
-    }
-    var ours = OUTREACH_OWN_DOMAINS.some(function (d) { return u.host === d || u.host.slice(-(d.length + 1)) === "." + d; });
-    if (ours && (!dest || u.key !== dest.key)) {
-      return "it links " + found[i] + ", which is not the destination it was given (" + (destination || "none") + ")";
-    }
-  }
-  return null;
-}
 
 /* ── Knowing that the engine sent someone ─────────────────────────────────────
-   A reply could link bizforceai.net, but nothing recorded that anyone arrived,
-   so whether the engine drives traffic to the platform — the master file's
-   north star — could not be measured at all. The CODE, never the model, adds
-   one parameter to the BizForce destination after the draft has passed
-   outreachDraftRejection:
-
-     https://bizforceai.net/?ref=lr-<10 hex>
-
-   "lr" says Lead Radar sent it. The ten hex characters are the first forty bits
-   of SHA-256 over the lead's post_uri: the same lead always gives the same
-   token, so a visit can be joined back to outreach_sends.lead_post_uri by
-   recomputing it, and nothing in the token is personal — no handle, no DID, no
-   name — and none of it can be read back out of the hash. The reply is posted
-   publicly under that person's post, so anyone can see the token; it says
-   nothing they could not already see, which is that this reply was sent there.
-   One short parameter rather than three utm_ ones, because the reply has 300
-   characters and the parameter spends them.
-
-   The order is the safeguard. Rejection runs first, on what the model wrote,
-   and refuses any query string — so the model still cannot write a parameter
-   of its own, and this function only ever edits a URL that is exactly the
-   destination. Only hosts in OUTREACH_TRACKED_HOSTS are touched: a supplement
-   or book reply is never changed. And if the tracked reply would no longer fit
-   in 300 characters it is left untracked, because truncateToBlueskyLimit would
-   otherwise cut the link itself. */
-const OUTREACH_TRACKED_HOSTS = ["bizforceai.net"];
-
+   NAMED (Nov 23 2026, LR-2): the platform's own outreach (convertSingleLead, the platform Bluesky sender, the
+   product destinations and withOutreachTracking) is REMOVED with the fixed lead lists: replies are now each
+   member's own, approved text only, from their own account (lib/leadReplies.js, POST /api/leads/:id/send), and
+   carry no tracking parameter. The token below is kept because engine_visits rows that arrived through
+   ?ref=lr-<10 hex> before LR-2 are still joined back to outreach_sends.lead_post_uri with it: the first forty
+   bits of SHA-256 over the lead's post_uri, nothing personal in it. */
 function outreachRefToken(lead) {
   return "lr-" + crypto.createHash("sha256").update("leadradar:" + String((lead && lead.post_uri) || "")).digest("hex").slice(0, 10);
 }
 
-function withOutreachTracking(message, destination, lead) {
-  var text = String(message || "");
-  var dest;
-  try { dest = new URL(destination); } catch (e) { return text; }
-  var host = dest.hostname.toLowerCase().replace(/^www\./, "");
-  if (OUTREACH_TRACKED_HOSTS.indexOf(host) === -1 || dest.search || dest.hash) return text;
-  var tracked = dest.origin + dest.pathname + "?ref=" + outreachRefToken(lead);
-  var hostPattern = host.replace(/[.]/g, "\\.");
-  /* The destination's own path: a homepage may be written with or without its
-     slash, any other page only as itself. Rejection has already held a draft
-     whose URL is not exactly the destination, so this matches what survived. */
-  var pathPattern = dest.pathname === "/" ? "\\/?" : dest.pathname.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
-  var mention = new RegExp("(?<![\\w.@/-])(?:https?:\\/\\/)?(?:www\\.)?" + hostPattern + pathPattern + "(?=$|[\\s.,;:!?)\\]\"'])", "gi");
-  var out = text.replace(mention, function () { return tracked; });
-  if (out === text) return text;
-  if (Array.from(out).length > 300) {
-    console.warn("[Draft] Tracking left off a reply to " + String((lead && lead.post_uri) || "") + ": with the parameter it would exceed 300 characters, and truncation would cut the link.");
-    return text;
-  }
-  return out;
-}
-
-/* How old a POST may be and still be worth replying to, in days. Measured on
-   post_created_at (when the author wrote it), never on created_at (when the
-   radar captured it) — a lead captured this morning can easily be a post from
-   last spring, and a warm reply to it reads as exactly what it is.
-
-   One number in one place, because the two sites that care are far apart:
-   this bounds who gets CONTACTED, while CAPTURE_WINDOW_DAYS in leadRadar.js
-   bounds what gets FETCHED. Intentionally not the same constant — capturing
-   wider than you contact costs nothing and leaves scored history behind,
-   whereas making them one number would mean widening the archive silently
-   widened who gets messaged. */
-const OUTREACH_MAX_POST_AGE_DAYS = 7;
 
 /* Rate-limit detection and the wait a 429 asks for live in lib/bskyGate.js now,
    with the one session both the radar and this sender use. */
 
-// Bluesky reply-send. Gated behind SALES_SEND_LIVE, the master switch. Defaults OFF: unset or any value other than the
-// exact string "true" means dry-run — this logs what would have been sent
-// and never calls the Bluesky API. Reuses the single authenticated
-// BskyAgent exported by leadRadar.js; never creates a second login/session.
-/* Exactly one leading at-sign, whatever the radar happened to store.
-
-   The three radars store three different shapes, and no call site can assume
-   any of them:
-
-     Bluesky   stores a bare handle, "someone.bsky.social" (leadRadar.js:206,
-               from post.author.handle).
-     Mastodon  stores "user@instance", also with no leading at-sign
-               (mastodonRadar.js:66, from status.account.acct).
-     YouTube   stores authorDisplayName verbatim (youtubeRadar.js:150), and
-               modern YouTube display names ARE the channel handle, already
-               carrying the at-sign: "@AparecidaTomaz-u9c".
-
-   So prefixing unconditionally, which is what all four sites used to do,
-   produced "@@AparecidaTomaz-u9c" for every YouTube-sourced lead — in log
-   lines, in the prompt's CAPTURED LEAD block, and in the API response. Testing
-   for a prefix at each site would be the same decision made in four places and
-   forgotten in the fifth; normalising is the only thing that works for all
-   three shapes and keeps working when a fourth radar arrives.
-
-   Only LEADING at-signs are stripped. Mastodon's internal one separates user
-   from instance and is part of the handle, not a prefix. */
-function formatLeadHandle(rawHandle) {
-  return "@" + String(rawHandle).replace(/^@+/, "");
-}
-
-/* NAMED (Nov 23 2026, LR-1): reached from ONE place, POST /api/agents/sales/send-approved, with the exact
-   text a person approved. checkLeadRadarRepair holds that. */
-async function sendBlueskyReply(lead, replyText) {
-  var sendLive = process.env.SALES_SEND_LIVE === "true";
-  var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
-  var text = truncateToBlueskyLimit(replyText);
-
-  // AFTER the truncator, never before: facets are byte offsets into whatever
-  // string is actually posted, and truncating a decorated string invalidates
-  // every range in it. A URL the truncator cuts in half simply stops being
-  // detected — the surviving fragment has no valid TLD — so a split link
-  // degrades to plain text rather than to a facet pointing at a broken URL.
-  var facets = detectOutreachLinkFacets(text);
-
-  if (!sendLive) {
-    console.log("[SEND DRY] Would reply to " + handle + " (" + facets.length + " link facet(s)): " + text);
-    return { sent: false, reason: "send_dry" };
-  }
-
-  /* THROUGH THE GATE (lib/bskyGate.js), never a fresh login: the session the
-     radar already holds is reused, a login happens only when there is none,
-     and a back-off in force answers rate_limited here without calling
-     Bluesky at all. */
-  if (bskyGate.backoffRemainingMs() > 0) {
-    var waitSeconds = Math.ceil(bskyGate.backoffRemainingMs() / 1000);
-    console.error("[SendBluesky] Not posting to " + handle + " — Bluesky rate-limit back-off until " +
-      new Date(bskyGate.backoffUntil()).toISOString() + ". Nothing was posted and nothing was recorded.");
-    return { sent: false, reason: "rate_limited", retry_after_seconds: waitSeconds, error: "bluesky_backoff_in_force" };
-  }
-
-  var postRef = { uri: lead.post_uri, cid: lead.post_cid };
-  var postRecord = {
-    text: text,
-    reply: { root: postRef, parent: postRef },
-    createdAt: new Date().toISOString()
-  };
-
-  // Omitted entirely rather than sent as an empty array, so a reply with no
-  // links produces the same record it always has.
-  if (facets.length) {
-    postRecord.facets = facets;
-  }
-
-  try {
-    var posted = await bskyGate.call(function (agent) { return agent.post(postRecord); });
-
-    if (posted.ok) {
-      return { sent: true, uri: posted.value && posted.value.uri };
-    }
-
-    /* A rate limit is not a failed post, it is the account being told to
-       stop, and the two must not return the same thing. NO RETRY, no sleep:
-       the gate has set the back-off, and every later call will be refused
-       until it ends. The wait is returned for the caller to log, not await. */
-    if (posted.reason === "rate_limited") {
-      console.error("[SendBluesky] RATE LIMITED by Bluesky posting to " + handle +
-        " — no Bluesky call until " + posted.resumes_at + ". Nothing was posted and nothing was recorded.");
-      return {
-        sent: false,
-        reason: "rate_limited",
-        retry_after_seconds: posted.retry_after_seconds,
-        error: posted.error || "bluesky_rate_limited"
-      };
-    }
-
-    console.error("[SendBluesky] Not logged in, cannot post reply to " + handle + " (" + posted.reason + ")");
-    return { sent: false, reason: "post_error", error: "bluesky_login_failed" };
-  } catch (err) {
-    console.error("[SendBluesky] Failed to post reply to " + handle + ":", err.message || err);
-    return { sent: false, reason: "post_error", error: err.message || String(err) };
-  }
-}
 
 /* NAMED (Nov 23 2026, LR-1): truncateToMastodonLimit, mastodonRetryAfterSeconds and sendMastodonReply are
    removed with Mastodon lead search; MASTODON_INSTANCE and MASTODON_ACCESS_TOKEN are no
    longer read anywhere for outreach. Members' own Mastodon posting (lib/memberMastodon.js)
    uses each member's own connection and is unchanged. */
 
-/* ── Outreach emoji strip ───────────────────────────────────────────────────
-   The last line of defense, and the only one that is not advice. Three prompt
-   layers now forbid emoji (BRAIN_DIRECTIVES, SALES_AGENT_BRAIN, and the
-   per-draft task instruction), but every one of them is a request to a
-   language model, and a request is not a guarantee. This is the guarantee: it
-   runs on the parsed outreach_message before anything can post it.
-
-   Matched by Unicode property, never by a character list. A hardcoded list
-   only ever bans the emoji someone already saw in production — the next
-   unlisted one posts publicly exactly as the first did. Extended_Pictographic
-   covers emoji and pictographs as a class; the modifier, modifier-base and
-   regional-indicator properties cover skin tones and flags; U+FE0F, U+200D
-   and U+20E3 cover the variation selector, the ZWJ that joins sequences, and
-   the keycap combiner, so a stripped sequence leaves no orphaned joiner.
-
-   Deliberately NOT stripped: U+2026, the ellipsis truncateToBlueskyLimit
-   appends. It is punctuation, not a pictograph, and it
-   is outside every property above — but it is also appended downstream of
-   this function, so it never passes through here in the first place.
-
-   Only spaces and tabs are collapsed. Newlines are left alone so a removed
-   emoji cannot silently reflow a multi-line draft. */
-var OUTREACH_EMOJI_PATTERN =
-  /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Emoji_Modifier_Base}\p{Regional_Indicator}]|[\uFE0F\u200D\u20E3]/gu;
-
-// Returns null, never "", when stripping empties the message. A draft that was
-// nothing but emoji has no content left to post, and null is the value the
-// caller already treats as draft-only.
-function stripOutreachEmoji(text) {
-  var stripped = String(text || "")
-    .replace(OUTREACH_EMOJI_PATTERN, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-
-  return stripped || null;
-}
-
-/* NAMED (Nov 23 2026, LR-1): DRAFT ONLY. Runs the Sales Agent's drafting pass for one lead: builds the
-   per-lead prompt, calls the model, records the draft (ai_tasks, the pipeline's
-   last_draft, agent_memory) and returns the public reply text for a person to read
-   and edit. It never posts. Posting is POST /api/agents/sales/send-approved, with
-   the exact text the person approved. Inherits platform knowledge, the Sales Agent
-   role and the user's business_profile through buildAgentSystemPrompt. */
-async function convertSingleLead(userId, lead, sharedSystemPrompt) {
-  var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
-
-  /* ── Which offer, if any ─────────────────────────────────────────────────
-     First, above even the cap gate, because it is the only check here that
-     costs nothing: no query, no network, just the string the scorer already
-     wrote. A lead with no offer to write about cannot produce a draft no
-     matter what the cap says, so spending two indexed reads to discover that
-     would be work done in the wrong order.
-
-
-     Before the attempt counter for the same reason the cap refusal is: the
-     ceiling exists to bound paid attempts, and no attempt was made. This is
-     also permanent rather than transient, unlike a cap refusal — the scorer's
-     verdict does not change on its own — so counting it would burn a retry
-     budget against a decision that will read the same way forever. */
-  var suggestedProduct = lead.suggested_product;
-  var offerKind =
-    suggestedProduct === OUTREACH_BOOK_PRODUCT ? "book" :
-    (OUTREACH_SUPPLEMENT_PRODUCTS.indexOf(suggestedProduct) !== -1 ? "supplement" :
-    (suggestedProduct === OUTREACH_BIZFORCE_PRODUCT ? "bizforce" : null));
-
-  if (!offerKind) {
-    console.log("[sales/convert] Skipped " + handle + " before drafting — suggested_product " + JSON.stringify(suggestedProduct == null ? null : suggestedProduct) + " has no offer to write about. No model call billed, no attempt counted.");
-    return {
-      conversion:  null,
-      sent:        false,
-      send_reason: "unsupported_product",
-      skipped:     true
-    };
-  }
-
-  /* NAMED (Nov 23 2026, LR-1): no send gate here: this function drafts and never posts. The caps are
-     checked at the send, in POST /api/agents/sales/send-approved (reserveOutreachSend). */
-  var leadBlock =
-    "CAPTURED LEAD (from Lead Radar):\n" +
-    "Handle: " + handle + "\n" +
-    "Post: " + (lead.post_text || "") + "\n" +
-    "Matched keyword: " + (lead.matched_keyword || "") + "\n" +
-    "Intent score: " + (lead.intent_score != null ? lead.intent_score : "unscored") + "\n" +
-    "Intent reason: " + (lead.intent_reason || "") + "\n" +
-    "Suggested product interest: " + (lead.suggested_product || "none") +
-    (OUTREACH_PRODUCT_FACTS[lead.suggested_product]
-      ? "\nWhat the product is (from MrEarthRose.com): " + OUTREACH_PRODUCT_FACTS[lead.suggested_product]
-      : "") +
-    (OUTREACH_PRODUCT_DESTINATIONS[lead.suggested_product]
-      ? "\nThe one link you may give them: " + OUTREACH_PRODUCT_DESTINATIONS[lead.suggested_product]
-      : "");
-
-  /* Two instructions, chosen by offer, rather than one instruction carrying a
-     conditional. The supplement text below names the one URL the reply may carry
-     (OUTREACH_PRODUCT_DESTINATIONS) in place of the domain it used to let the
-     model recall, and forbids checkout links as the book text already does.
-
-     They are not variations on a theme. The supplement copy is governed by
-     structure-function rules, a disease-claim ban and a prescription-drug
-     comparison ban, none of which exist for a book — carrying those clauses
-     into a book reply would not be harmlessly redundant, it would be
-     instructing the model about a compliance regime that does not apply and
-     inviting it to write around rules nobody imposed. The book has the
-     opposite problem to solve: an esoteric title whose natural register is
-     grandiose, being sent to a stranger who did not ask for it, where the
-     failure mode is a reply that reads as recruitment.
-
-     The one line both share and neither can lose is the character budget: 280,
-     under truncateToBlueskyLimit's 300, so no draft is ever cut mid-sentence. */
-  var supplementDestination = OUTREACH_PRODUCT_DESTINATIONS[suggestedProduct] || OUTREACH_HOME_URL;
-  var supplementInstruction =
-    "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
-    "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
-    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype. Must use structure-function language only, such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" NEVER make disease claims — never say it cures, treats, prevents, restores, fixes, or diagnoses anything (no curing ED, no curing low libido, no fixing anything). Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest, low-pressure tone. Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — no pictographs, no ornaments, no novelty characters, plain ASCII text only. You may link to " + supplementDestination + " at most once, written exactly as it is given here, with nothing added to it. It is the only URL this reply may contain: never another page, path or site, and never a URL from memory. Never link a checkout, cart, payment or order URL of any kind, and never a direct-purchase link. " +
-    "internal_analysis: the strategy notes, intent score reasoning, offer framing (which product/offer fits and why), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
-    "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
-
-  var bookInstruction =
-    "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
-    "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
-    "THE OFFER FOR THIS LEAD IS A BOOK, not a supplement: \"Quantum Jumping for The Chosen Ones\", available at BlackSunCircle.com, over 1000 copies sold. This is the only offer relevant to this lead. Ignore any other products or services described in the business profile above — they are not what this person was matched to, and none of the supplement rules apply here. There are no structure-function requirements, no disease claims to avoid, and no prescription drugs to avoid comparing to, because this is a book.\n" +
-    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed; sound like a real person, not a marketer, no hashtags or hype. " +
-    "ANSWER THEM FIRST. The reply must respond to the person's actual question, or to what they actually said, with something genuinely useful, BEFORE the book is mentioned at all. Lead with the useful thing. The book is a natural next step at the end, never the opening line, and never the reason the reply exists. " +
-    "Mention the book at most once, and only if it genuinely fits what they asked. If you can write a useful, honest reply without mentioning it, do that — a reply that helps and never names the book is a better outcome than one that forces it in. Never mention it twice. " +
-    "If you do link, link to BlackSunCircle.com and nothing else. Never link a checkout, cart, payment or order URL of any kind, and never a direct-purchase link. " +
-    "Do NOT tell this person they are chosen, special, awakened, ready, or that they have been searching for something. Do not use grandiose, initiatory, prophetic or recruiting language toward a stranger. The book's own voice is uncompromising; the reply's job is not to match that voice, it is only to be worth reading and to earn a click from someone who was not asking for one. " +
-    "Never promise outcomes or results, never say a method will work for them, or that it will change, fix or transform anything. You may say what the book is about and who it is for. " +
-    "Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — no pictographs, no ornaments, no novelty characters, plain ASCII text only. " +
-    "internal_analysis: the strategy notes, intent score reasoning, offer framing (why the book fits this person and what they actually asked for), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
-    "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
-
-  /* BizForceAI, for a business owner the BizForce phrases found. The business
-     profile in the shared prompt describes the owner's supplement business, so
-     this instruction names the offer and says the profile is not it, the way
-     the book's does. The profile's BANNED TOPICS stay in force: they forbid
-     medical claims, drug comparisons and promised results, none of which a
-     reply about a business platform has any reason to make, and keeping them
-     costs nothing. What governs this reply's claims is the fact list below —
-     only what §1 of the master file says the platform is and what is built —
-     and the list of things it must never say: that it will restore an account,
-     that it processes payments, any customer count, result or partnership. */
-  var bizforceInstruction =
-    "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
-    "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
-    "THE OFFER FOR THIS LEAD IS BIZFORCEAI, a software platform for businesses — not a supplement and not a book. This person runs a business that an ad network, social platform or payment processor has restricted. The business profile above describes a different business (the owner's own products); it is not the offer, and none of its products may be mentioned. Its banned topics still apply.\n" +
-    "FACTS YOU MAY STATE, and nothing beyond them: BizForceAI is a platform for legitimate businesses that ad networks and payment processors refuse or throttle. It runs on owned channels instead of paid ads: search content published only when the user approves it, a blog and a storefront under the user's own handle, email sequences drafted for the user to send from their own email service, and eighteen AI agents working from one business profile. It costs $199 a month.\n" +
-    "NEVER SAY OR IMPLY: that it will get an ad account, a social account or a payment processor reinstated; that it processes payments or replaces a payment processor; any number of customers, any testimonial, result, revenue figure or timeframe; that it is approved by, partnered with or exempt from Meta, Google, TikTok, Stripe or any platform; any legal or compliance advice about their product; anything accusing the platform that restricted them.\n" +
-    "Be plain that you are connected to it — write \"we built\" or \"I built\", never as a neutral user recommending something.\n" +
-    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person said; sound like another business owner, not a marketer, no hashtags or hype. " +
-    "ANSWER THEM FIRST. The reply must respond to what they actually asked or said with something genuinely useful — such as that owned channels like search content and an email list cannot be switched off by an ad network — BEFORE BizForceAI is mentioned at all. Mention it at most once, at the end, and only if it fits. A reply that helps and never names it is better than one that forces it in. " +
-    "You may link to " + OUTREACH_BIZFORCE_DESTINATION + " at most once, written exactly as it is given here, with nothing added to it. It is the only URL this reply may contain: never another page, path or site, and never a URL from memory. Never link a checkout, cart, payment, pricing or signup URL of any kind. " +
-    "Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — plain ASCII text only. " +
-    "internal_analysis: the strategy notes, intent score reasoning, why BizForceAI fits this person and what they actually asked for, the call-to-action, and a next-step recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
-    "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
-
-  var taskInstruction = offerKind === "book" ? bookInstruction : (offerKind === "bizforce" ? bizforceInstruction : supplementInstruction);
-
-  var finalPrompt =
-    sharedSystemPrompt +
-    "\n\n" + leadBlock +
-    "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
-    "\n\nUSER REQUEST:\nConvert this Lead Radar capture into the JSON conversion package described above.";
-
-  // Attempt accounting, deliberately BEFORE the model call, because
-  // callAnthropicText is billed the moment it is made and can throw — a
-  // timeout, a rate limit, an exhausted key. Counting the attempt after the
-  // call would mean exactly the calls that fail are the ones never counted.
-  // NAMED (Nov 23 2026, LR-1): the dry-run paragraph that stood here went with the automatic loop.
-  //
-  // Not atomic: the client has no in-place increment, so this reads then
-  // writes. A lost update under concurrency undercounts, which retries a lead
-  // once more than the ceiling of DRAFT_ATTEMPT_CEILING intends.
-  var attemptTimestamp = nowIso();
-  try {
-    var attemptRead = await supabase
-      .from("sales_lead_pipeline")
-      .select("draft_attempts")
-      .eq("user_id", userId)
-      .eq("lead_post_uri", lead.post_uri)
-      .maybeSingle();
-
-    if (attemptRead.error) {
-      // Never write blind on a failed read: the insert branch below carries
-      // status "new", and applying it over a row that is already "contacted"
-      // would downgrade a real send back into the eligible pool. Skipping the
-      // count is the smaller loss.
-      console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " (read failed) — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptRead.error.message);
-    } else if (attemptRead.data) {
-      var attemptUpdate = await supabase
-        .from("sales_lead_pipeline")
-        .update({
-          draft_attempts:  (attemptRead.data.draft_attempts || 0) + 1,
-          last_attempt_at: attemptTimestamp,
-          updated_at:      attemptTimestamp
-        })
-        .eq("user_id", userId)
-        .eq("lead_post_uri", lead.post_uri);
-
-      if (attemptUpdate.error) {
-        console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptUpdate.error.message);
-      }
-    } else {
-      // First attempt on this lead for this user. Plain insert rather than an
-      // upsert so a concurrent create cannot have its status overwritten with
-      // "new"; 23505 means the other writer won and is handled below.
-      var attemptInsert = await supabase
-        .from("sales_lead_pipeline")
-        .insert({
-          user_id:         userId,
-          lead_post_uri:   lead.post_uri,
-          status:          "new",
-          draft_attempts:  1,
-          last_attempt_at: attemptTimestamp,
-          updated_at:      attemptTimestamp
-        });
-
-      if (attemptInsert.error && attemptInsert.error.code === "23505") {
-        var raceRead = await supabase
-          .from("sales_lead_pipeline")
-          .select("draft_attempts")
-          .eq("user_id", userId)
-          .eq("lead_post_uri", lead.post_uri)
-          .maybeSingle();
-
-        if (!raceRead.error && raceRead.data) {
-          var raceUpdate = await supabase
-            .from("sales_lead_pipeline")
-            .update({
-              draft_attempts:  (raceRead.data.draft_attempts || 0) + 1,
-              last_attempt_at: attemptTimestamp,
-              updated_at:      attemptTimestamp
-            })
-            .eq("user_id", userId)
-            .eq("lead_post_uri", lead.post_uri);
-
-          if (raceUpdate.error) {
-            console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " (concurrent create, increment failed) — every attempt a paid call:", raceUpdate.error.message);
-          }
-        } else {
-          console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " (concurrent create, re-read failed) — every attempt a paid call:", (raceRead.error && raceRead.error.message) || "row vanished");
-        }
-      } else if (attemptInsert.error) {
-        console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptInsert.error.message);
-      }
-    }
-  } catch (attemptErr) {
-    // Never fatal — a counter that cannot be written must not cost the user a
-    // lead. Never silent either: this line is the only warning that the
-    // ceiling has stopped applying to this lead.
-    console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptErr.message || attemptErr);
-  }
-
-  /* NULL HERE IS THE DECISION, NOT AN OVERSIGHT. Every other call site moved
-     onto the user own key; this one did not.
-
-     What this drafts is a reply that may be sent (after a person approves it)
-     from the platform OWN Bluesky account, to a stranger, to find customers for this product. The
-     user_id below is whose lead pipeline the row belongs to — not who asked
-     for the work and not who should pay for it. Billing a user own Anthropic
-     key for the platform marketing would be worse than the bug this commit
-     fixes, because they never asked for it and would have no way to see why
-     their spend went up.
-
-     Its ledger row is still attributed to the user and now also records
-     funded_by = platform with fallback_reason = no_user, so this shows up in
-     the same query as everything else rather than being invisible. */
-  var generation = await callAnthropicText(finalPrompt, 700, null, undefined, {
-    user_id: userId,
-    agent_type: "sales",
-    route: "convertSingleLead"
-  });
-  var output = generation.text;
-
-  // Parse the model's strict-JSON response into the clean public reply
-  // (cleanMessage) vs. operator-only strategy notes (analysis). A malformed
-  // response must never fall back to posting the raw blob — cleanMessage
-  // stays null and the lead is simply held as draft-only.
-  var cleanMessage = null;
-  var analysis = null;
-  try {
-    var jsonText = String(output || "").trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
-    var parsedDraft = JSON.parse(jsonText);
-    var rawMessage = typeof parsedDraft.outreach_message === "string" && parsedDraft.outreach_message.trim()
-      ? parsedDraft.outreach_message.trim()
-      : null;
-
-    // The emoji strip, at the boundary and nowhere else. cleanMessage is the
-    // single value that becomes a public post, so stripping it here covers
-    // the draft returned for approval and the richDraft written to
-    // sales_lead_pipeline.last_draft. The send route strips again, on the
-    // approved text, because a person may have edited it.
-    //
-    // Applied to the public reply ONLY. `analysis` is operator-only and never
-    // posted, and `output` stays verbatim so the ai_tasks and agent_memory
-    // rows keep recording what the model actually returned rather than a
-    // cleaned-up version of it. When the two differ, the log line below is the
-    // evidence that the prompt rules alone were not enough.
-    cleanMessage = rawMessage ? stripOutreachEmoji(rawMessage) : null;
-
-    if (rawMessage && cleanMessage !== rawMessage) {
-      console.warn("[Draft] Stripped emoji/pictographic characters from the outreach message for " + handle + " — three prompt-level rules forbid them and the model emitted them anyway.");
-    }
-
-    analysis = typeof parsedDraft.internal_analysis === "string" ? parsedDraft.internal_analysis.trim() : null;
-    if (!rawMessage) {
-      console.warn("[Draft] JSON parse failed, holding lead as draft-only");
-    } else if (!cleanMessage) {
-      console.warn("[Draft] Outreach message for " + handle + " was entirely emoji — nothing left to post after stripping, holding lead as draft-only");
-    }
-  } catch (parseErr) {
-    console.warn("[Draft] JSON parse failed, holding lead as draft-only");
-    cleanMessage = null;
-    analysis = null;
-  }
-
-  /* A draft that links anywhere but the destination it was given is held: no
-     draft text is offered for approval (cleanMessage becomes null).
-     The reason is recorded on the ai_tasks row (error) and at the top of the
-     pipeline's last_draft, and the draft is kept out of agent_memory, which the
-     next prompt is told to build on. */
-  var draftRejection = cleanMessage
-    ? outreachDraftRejection(cleanMessage, offerKind === "book" ? OUTREACH_BOOK_DESTINATION : OUTREACH_PRODUCT_DESTINATIONS[suggestedProduct])
-    : null;
-  if (draftRejection) {
-    console.warn("[Draft] REJECTED for " + handle + ": " + draftRejection + ". Held as draft-only; it will not be sent.");
-    cleanMessage = null;
-  }
-
-  /* After the rejection, never before: what the model wrote has been checked,
-     and only now does the code add the arrival parameter, to a BizForce
-     destination only (withOutreachTracking). */
-  if (cleanMessage && offerKind === "bizforce") {
-    cleanMessage = withOutreachTracking(cleanMessage, OUTREACH_BIZFORCE_DESTINATION, lead);
-  }
-
-  // NAMED (Nov 23 2026, LR-1): the send block that stood here is gone; nothing in this function posts.
-
-  // ai_tasks.status, which the Live Activity feed reads for its badge. NAMED (Nov 23 2026, LR-1): always
-  // "drafted" now; a send is recorded by send-approved, never here.
-  var conversionStatus = "drafted";
-
-  var taskInsert = await supabase
-    .from("ai_tasks")
-    .insert({
-      user_id: userId,
-      agent_type: "sales",
-      prompt: "Sales draft: " + handle,
-      result: output,
-      status: conversionStatus,
-      error: draftRejection ? "draft rejected, not sent: " + draftRejection : null
-    })
-    .select("*")
-    .single();
-
-  if (taskInsert.error) {
-    console.error("[sales/convert] ai_tasks insert failed:", taskInsert.error.message);
-  }
-
-  /* NAMED (Nov 23 2026, LR-1): a draft (not a rejected one) is the agent's memory of what it proposed;
-     the dry-run rule that stood here went with the automatic loop. */
-  if (!draftRejection) {
-    try {
-      var memTimestamp = nowIso();
-      var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
-
-      var memInsert = await supabase
-        .from("agent_memory")
-        .insert({
-          user_id: userId,
-          agent: "sales",
-          agent_type: "sales",
-          memory_key: "sales_convert_" + (taskInsert.data ? taskInsert.data.id : Date.now()),
-          memory_value: memContent,
-          memory_type: "insight",
-          title: "Converted lead: " + handle,
-          content: memContent,
-          metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri }),
-          created_at: memTimestamp,
-          updated_at: memTimestamp
-        });
-
-      if (memInsert.error) {
-        console.error("[sales/convert] agent_memory write failed:", memInsert.error.message);
-      }
-    } catch (memErr) {
-      console.error("[sales/convert] agent_memory write error:", memErr.message || memErr);
-    }
-  }
-
-  {
-    // Bump this user's pipeline status new -> drafted (never downgrade a
-    // lead that's already further along, e.g. already contacted).
-    try {
-      var existingPipeline = await supabase
-        .from("sales_lead_pipeline")
-        .select("status")
-        .eq("user_id", userId)
-        .eq("lead_post_uri", lead.post_uri)
-        .maybeSingle();
-
-      var pipelineTimestamp = nowIso();
-      var richDraft = cleanMessage
-        ? cleanMessage + "\n\n---\nInternal notes:\n" + (analysis || "(none)")
-        : (draftRejection ? "DRAFT REJECTED, NOT SENT: " + draftRejection + "\n\n" + output : output);
-      var draftPreview = truncateOrchestratorPreview(richDraft, 4000);
-
-      if (!existingPipeline.data || existingPipeline.data.status === "new") {
-        var pipelineUpsert = await supabase
-          .from("sales_lead_pipeline")
-          .upsert({
-            user_id: userId,
-            lead_post_uri: lead.post_uri,
-            status: "drafted",
-            last_draft: draftPreview,
-            updated_at: pipelineTimestamp
-          }, { onConflict: "user_id,lead_post_uri" });
-
-        if (pipelineUpsert.error) {
-          console.error("[sales/convert] pipeline upsert failed:", pipelineUpsert.error.message);
-        }
-      } else {
-        var pipelineUpdate = await supabase
-          .from("sales_lead_pipeline")
-          .update({ last_draft: draftPreview, updated_at: pipelineTimestamp })
-          .eq("user_id", userId)
-          .eq("lead_post_uri", lead.post_uri);
-
-        if (pipelineUpdate.error) {
-          console.error("[sales/convert] pipeline update failed:", pipelineUpdate.error.message);
-        }
-      }
-
-      // NAMED (Nov 23 2026, LR-1): "contacted" is written by send-approved after a real post, never here.
-    } catch (pipelineErr) {
-      console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
-    }
-  }
-
-  return {
-    conversion:      output,
-    draft:           cleanMessage,      // the public reply offered for approval; null when none is usable
-    analysis:        analysis,
-    draft_rejection: draftRejection,
-    sent:            false              // NAMED (Nov 23 2026, LR-1): this function never posts
-  };
-}
 
 /* NAMED (Nov 23 2026, LR-1): runSalesAutoConvert (the automatic sales loop) is RETIRED by the owner's rule:
    nothing is posted, replied or sent to anyone outside BizForce unless a person
@@ -58229,510 +57055,6 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt) {
    ENABLE_SALES_AUTOLOOP, SALES_AUTOLOOP_DRY_RUN and SALES_AUTOLOOP_DAILY_DRAFT_CAP
    variables are gone with it. */
 
-/* NAMED (Nov 23 2026, LR-1): DRAFT ONLY. Drafts the public reply for ONE lead and returns it for a person
-   to read and edit; it never posts (convertSingleLead has no send). Segment mode
-   (up to 10 leads a click) is removed. Posting is POST /api/agents/sales/send-approved. */
-app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-
-    /* Owner only: there is one Bluesky login in this process, and the leads are
-       the owner's (bsky_leads has no owner column).
-
-       A refusal rather than a skip, because this call has someone waiting on
-       it. The loop is choosing work nobody asked for by name and can drop a
-       user silently; a request an operator made about a lead they picked has
-       to be answered, and an empty 200 here would read as "converted" for a
-       send that never happened.
-
-       403 rather than 404 or 400: the route exists, the request is
-       well-formed, the caller is authenticated and subscribed, and the answer
-       is still no. Nothing about the request can be changed to make it
-       succeed, which is what separates this from a validation failure.
-
-       Placed before every query, every model call and every send — the first
-       thing after reading the caller's id, so a refused request costs a string
-       comparison and nothing else. */
-    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
-      console.warn("[sales/convert] REFUSING user " + userId +
-        " — drafting replies is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        ". No lead was read and no draft was generated.");
-
-      return res.status(403).json(OUTREACH_UNAVAILABLE);
-    }
-
-    var leadPostUri = safeText(req.body.lead_post_uri, 500);
-
-    var targetLeads = [];
-
-    /* The same freshness cutoff the auto-loop computes, for the same reason and
-       recomputed per request rather than derived once at startup. Both branches
-       below share it so a single request cannot apply two different windows. */
-    var freshnessCutoff = new Date(Date.now() - OUTREACH_MAX_POST_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
-
-    if (leadPostUri) {
-      /* Deliberately NOT filtered in the query, which is the one place this
-         route diverged from the retired runSalesAutoConvert (NAMED (Nov 23 2026, LR-1))
-         in mechanism while matching it exactly in outcome.
-
-         The auto-loop is picking leads out of a pool, so a lead that fails a
-         filter should simply not be picked — silence is the correct answer to
-         "find me something to do". This branch is answering a specific request
-         about a specific lead that an operator clicked, and there the same
-         silence is a bug: a filtered query returns no row, which is
-         indistinguishable from a post_uri that does not exist, and the button
-         appears to do nothing for two completely different reasons.
-
-         So the row is read unfiltered and the identical conditions are applied
-         below, where a failure still refuses but can say which check refused
-         it. */
-      var singleResult = await supabase
-        .from("bsky_leads")
-        .select("*")
-        .eq("post_uri", leadPostUri)
-        .single();
-
-      if (singleResult.error || !singleResult.data) {
-        return res.status(404).json({ error: "Lead not found." });
-      }
-
-      var requestedLead = singleResult.data;
-      var refusals = [];
-
-      // A lead whose scoring failed has no score, so nothing has judged it.
-      // NAMED (Nov 23 2026, LR-1): only a source the send route can post to is worth drafting for
-      if (OUTREACH_SENDABLE_SOURCES.indexOf(requestedLead.source) === -1) {
-        refusals.push({ code: "unsupported_source", detail: "A reply can only be posted to a Bluesky lead." });
-      }
-      if (requestedLead.status === "archived") {
-        refusals.push({ code: "archived", detail: "This lead is archived." });
-      }
-
-      if (!leadHasRealScore(requestedLead)) {
-        refusals.push({
-          code:   "not_scored",
-          detail: requestedLead.status === "score_failed" || requestedLead.intent_reason === LEAD_SCORE_FAILED_REASON
-            ? "Scoring this lead failed, so it has no score and nothing has judged its intent."
-            : "This lead has not been scored, so nothing has judged its intent."
-        });
-      }
-
-      /* Freshness, evaluated to the same verdict PostgREST would reach:
-         post_created_at not null AND >= the cutoff. An unparseable timestamp
-         cannot be compared, so it joins null on the ineligible side rather
-         than being given the benefit of the doubt. */
-      var postCreatedMs = requestedLead.post_created_at ? Date.parse(requestedLead.post_created_at) : NaN;
-
-      if (requestedLead.post_created_at == null) {
-        refusals.push({
-          code:   "post_age_unknown",
-          detail: "This lead has no recorded post date. It was captured before the post timestamp was stored, so its age cannot be established and it is not eligible for outreach."
-        });
-      } else if (!Number.isFinite(postCreatedMs)) {
-        refusals.push({
-          code:   "post_age_unreadable",
-          detail: "This lead's recorded post date (" + String(requestedLead.post_created_at) + ") could not be read as a date, so its age cannot be established."
-        });
-      } else if (postCreatedMs < Date.parse(freshnessCutoff)) {
-        var ageDays = Math.floor((Date.now() - postCreatedMs) / (24 * 60 * 60 * 1000));
-        refusals.push({
-          code:   "post_too_old",
-          detail: "This post is " + ageDays + " days old and the outreach window is " + OUTREACH_MAX_POST_AGE_DAYS + " days. Replying to it now would read as a reply to a conversation that has long since ended."
-        });
-      }
-
-      // Suitability, evaluated to the same verdict as eq(outreach_safe, true):
-      // only an explicit true clears, and null is "never screened" rather than
-      // a quiet yes.
-      if (requestedLead.outreach_safe == null) {
-        refusals.push({
-          code:   "not_screened",
-          detail: "This lead has never been through the suitability screen, so nothing has judged whether a public product reply is appropriate to send this person. Leads captured before that screen existed are permanently in this state."
-        });
-      } else if (requestedLead.outreach_safe !== true) {
-        refusals.push({
-          code:   "unsafe_recipient",
-          detail: "The suitability screen judged this person an inappropriate recipient of an unsolicited public product reply — for example a post about medication, a diagnosis, care from a doctor, distress, or a minor. Intent score does not override this."
-        });
-      }
-
-      // Invitation, on the same terms as eq(reply_invited, true). Deliberately
-      // its own refusal rather than folded into the one above: "we should not
-      // reply to this person" and "this person did not ask" are different
-      // findings, and an operator who sees them merged will read every uninvited
-      // lead as an unsafe one.
-      if (requestedLead.reply_invited == null) {
-        refusals.push({
-          code:   "invitation_unscreened",
-          detail: "This lead has never been through the invitation screen, so nothing has judged whether the post actually asked for replies. Leads scored before that screen existed are permanently in this state."
-        });
-      } else if (requestedLead.reply_invited !== true) {
-        refusals.push({
-          code:   "reply_not_invited",
-          detail: "This post did not ask for replies — it is narration, commentary, or a statement rather than a question to the room. Having the problem the product addresses is not the same as asking for help with it, and a stranger answering an unasked post reads as someone monitoring the author's timeline. Intent score does not override this."
-        });
-      }
-
-      if (refusals.length) {
-        var unsuitableLead = refusals.filter(function (r) { return r.code === "not_screened" || r.code === "unsafe_recipient"; })[0];
-        if (unsuitableLead) recordGateDecision(userId, "outreach_send", "lead", { G23: { result: "fail", code: unsuitableLead.code } }, { facts: { agent: "sales" } });
-        console.log("[sales/convert] Refused " + leadPostUri + " for user " + userId + " — " + refusals.map(function (r) { return r.code; }).join(", "));
-        return res.status(422).json({
-          error:   "This lead is not eligible for outreach: " + refusals.map(function (r) { return r.detail; }).join(" "),
-          reasons: refusals
-        });
-      }
-
-      targetLeads = [requestedLead];
-    } else {
-      // NAMED (Nov 23 2026, LR-1): BEFORE a segment filter drafted up to 10 leads a click; removed
-      return res.status(400).json({ error: "Provide lead_post_uri: one lead is drafted at a time." });
-    }
-
-    if (!targetLeads.length) {
-      return res.status(404).json({ error: "No matching leads found." });
-    }
-
-    var profileResult = await supabase
-      .from("business_profiles")
-      .select("*")
-      .eq("user_id", userId)
-      .single();
-    var businessProfile = profileResult.data || {};
-
-    var liveStats = {};
-    try {
-      liveStats = await getLiveStats(userId);
-    } catch (statsErr) {
-      console.error("[sales/convert] getLiveStats failed:", statsErr.message || statsErr);
-    }
-
-    var agentMemoryResult = await supabase
-      .from("agent_memory")
-      .select("agent_type, memory_type, title, content, created_at")
-      .eq("user_id", userId)
-      .eq("agent_type", "sales")
-      .order("created_at", { ascending: false })
-      .limit(5);
-
-    var memoriesForBrain = (agentMemoryResult.error ? [] : (agentMemoryResult.data || [])).map(function (row) {
-      return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
-    });
-
-    var sharedSystemPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, businessProfile, liveStats, memoriesForBrain);
-    var results = [];
-
-    for (var i = 0; i < targetLeads.length; i++) {
-      var lead = targetLeads[i];
-      var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
-      var converted = await convertSingleLead(userId, lead, sharedSystemPrompt);
-
-      results.push({
-        lead_post_uri:   lead.post_uri,
-        handle:          handle,
-        conversion:      converted.conversion,
-        draft:           converted.draft,
-        draft_rejection: converted.draft_rejection,
-        sent:            false
-      });
-    }
-
-    return res.json({ success: true, results: results });
-  } catch (error) {
-    console.error("[sales/convert] Error:", error);
-    next(error);
-  }
-});
-
-/* NAMED (Nov 23 2026, LR-1): THE ONE SEND. Posts exactly the text a person approved, for one Bluesky lead,
-   through sendBlueskyReply. Owner only for now (group M plus the owner check).
-
-   Refuses unless: SALES_SEND_LIVE is exactly "true" (the master switch); the text is
-   present, at most 300 characters after the emoji strip, and links nowhere but the
-   lead's own destination (outreachDraftRejection); the lead is a Bluesky lead,
-   scored, not archived, posted within OUTREACH_MAX_POST_AGE_DAYS, outreach_safe = true
-   and reply_invited = true; nobody has replied to that post yet; and the caps allow it.
-
-   THE CAPS ARE CHECKED AT THE SEND, inside one guarded step (reserveOutreachSend): the
-   send is first RESERVED as an outreach_sends row (the unique index on user and post
-   makes a second reservation for the same post fail), then today's sends are counted
-   WITH the reservation in them. Over OUTREACH_DAILY_CAP or OUTREACH_ACCOUNT_DAILY_CEILING
-   the reservation is removed and nothing is posted. Two racing requests both see each
-   other's reservation, so neither can take the last slot twice: at worst both refuse.
-   A send that does not go out removes its reservation; one that does fills in its uri. */
-var outreachSendQueue = Promise.resolve();
-function outreachSerial(fn) {
-  var run = outreachSendQueue.then(fn, fn);
-  outreachSendQueue = run.then(function () {}, function () {});
-  return run;
-}
-
-async function reserveOutreachSend(userId, lead) {
-  var anyReply = await supabase.from("outreach_sends").select("id").eq("lead_post_uri", lead.post_uri).limit(1);
-  if (anyReply.error) return { ok: false, reason: "check_failed" };
-  if ((anyReply.data || []).length) return { ok: false, reason: "already_contacted" };
-
-  var reserved = await supabase.from("outreach_sends")
-    .insert({ user_id: userId, lead_post_uri: lead.post_uri, source: lead.source || "bluesky", platform_uri: null })
-    .select("id").single();
-  if (reserved.error) {
-    return { ok: false, reason: reserved.error.code === "23505" ? "already_contacted" : "check_failed" };
-  }
-  var id = reserved.data.id;
-  async function release() { await supabase.from("outreach_sends").delete().eq("id", id); }
-  try {
-    var mine = await outreachSendsToday(userId);
-    if (mine > OUTREACH_DAILY_CAP) { await release(); return { ok: false, reason: "daily_cap_reached" }; }
-    var all = await outreachSendsAccountToday();
-    if (all > OUTREACH_ACCOUNT_DAILY_CEILING) { await release(); return { ok: false, reason: "account_ceiling_reached" }; }
-  } catch (countErr) {
-    await release();
-    console.error("[outreach] Cap check failed at the send — refusing:", (countErr && countErr.message) || countErr);
-    return { ok: false, reason: "check_failed" };
-  }
-  return { ok: true, id: id, release: release };
-}
-
-const SEND_APPROVED_MAX_CHARS = 300;
-
-app.post("/api/agents/sales/send-approved", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) return res.status(403).json(OUTREACH_UNAVAILABLE);
-
-    if (process.env.SALES_SEND_LIVE !== "true") {
-      return res.status(409).json({ error: "Posting replies is switched off (SALES_SEND_LIVE). Nothing was posted.", code: "send_off" });
-    }
-
-    var leadPostUri = safeText(req.body && req.body.lead_post_uri, 500);
-    if (!leadPostUri) return res.status(400).json({ error: "Provide lead_post_uri." });
-
-    var rawText = typeof (req.body && req.body.text) === "string" ? req.body.text : "";
-    var text = stripOutreachEmoji(rawText);
-    if (!text) return res.status(400).json({ error: "Write the reply you approve first.", field: "text" });
-    if (Array.from(text).length > SEND_APPROVED_MAX_CHARS) {
-      return res.status(400).json({ error: "A reply can be at most " + SEND_APPROVED_MAX_CHARS + " characters.", field: "text" });
-    }
-
-    var leadRead = await supabase.from("bsky_leads").select("*").eq("post_uri", leadPostUri).maybeSingle();
-    if (leadRead.error) throw leadRead.error;
-    var lead = leadRead.data;
-    if (!lead) return res.status(404).json({ error: "Lead not found." });
-
-    var refusals = [];
-    if (OUTREACH_SENDABLE_SOURCES.indexOf(lead.source) === -1) refusals.push("unsupported_source");
-    if (lead.status !== "scored" || !leadHasRealScore(lead)) refusals.push("not_scored");
-    if (lead.outreach_safe !== true) refusals.push("not_outreach_safe");
-    if (lead.reply_invited !== true) refusals.push("reply_not_invited");
-    var postMs = lead.post_created_at ? Date.parse(lead.post_created_at) : NaN;
-    if (!Number.isFinite(postMs) || postMs < Date.now() - OUTREACH_MAX_POST_AGE_DAYS * 24 * 60 * 60 * 1000) refusals.push("post_too_old");
-    if (refusals.length) {
-      return res.status(422).json({ error: "This lead cannot be replied to.", reasons: refusals });
-    }
-
-    var offerDestination = lead.suggested_product === OUTREACH_BOOK_PRODUCT ? OUTREACH_BOOK_DESTINATION : OUTREACH_PRODUCT_DESTINATIONS[lead.suggested_product];
-    /* The draft carries this lead's own arrival link (withOutreachTracking adds ?ref=<token> to a
-       BizForce destination after the draft's link check). That one exact form reads as the
-       destination here; any other query, token or page is still refused. */
-    var checkText = text;
-    if (offerDestination) {
-      try {
-        var destUrl = new URL(offerDestination);
-        checkText = text.split(destUrl.origin + destUrl.pathname + "?ref=" + outreachRefToken(lead)).join(offerDestination);
-      } catch (destErr) { checkText = text; }
-    }
-    var linkRejection = outreachDraftRejection(checkText, offerDestination);
-    if (linkRejection) return res.status(400).json({ error: "This reply can't be posted: " + linkRejection + ".", field: "text" });
-
-    var outcome = await outreachSerial(async function () {
-      var slot = await reserveOutreachSend(userId, lead);
-      recordGateDecision(userId, "outreach_send", "lead", { G23: { result: "pass" }, G22: slot.ok ? { result: "pass" } : { result: "fail", code: slot.reason } },
-        { facts: { agent: "sales" } });
-      if (!slot.ok) return { sent: false, reason: slot.reason };
-      var result;
-      try {
-        result = await sendBlueskyReply(lead, text);
-      } catch (sendErr) {
-        result = { sent: false, reason: "post_error", error: (sendErr && sendErr.message) || String(sendErr) };
-      }
-      if (!result || !result.sent) { await slot.release(); return result || { sent: false, reason: "post_error" }; }
-      var filled = await supabase.from("outreach_sends").update({ platform_uri: result.uri || null }).eq("id", slot.id);
-      if (filled.error) console.error("[outreach] reply posted but its uri was not recorded:", filled.error.message);
-      return result;
-    });
-
-    if (!outcome.sent) {
-      var status = outcome.reason === "rate_limited" ? 429 : (outcome.reason === "post_error" ? 502 : 409);
-      return res.status(status).json({ error: "Nothing was posted.", reason: outcome.reason, retry_after_seconds: outcome.retry_after_seconds || null });
-    }
-
-    var at = nowIso();
-    var pipe = await supabase.from("sales_lead_pipeline").upsert({ user_id: userId, lead_post_uri: lead.post_uri, status: "contacted", last_draft: text, updated_at: at },
-      { onConflict: "user_id,lead_post_uri" });
-    if (pipe.error) console.error("[sales/send-approved] pipeline update failed:", pipe.error.message);
-    var task = await supabase.from("ai_tasks").insert({ user_id: userId, agent_type: "sales", prompt: "Sales reply posted (approved): " + formatLeadHandle(lead.author_handle || "unknown"),
-      result: text, status: "sent", error: null });
-    if (task.error) console.error("[sales/send-approved] ai_tasks insert failed:", task.error.message);
-
-    return res.json({ sent: true, uri: outcome.uri || null, text: text });
-  } catch (error) {
-    console.error("[sales/send-approved] Error:", error);
-    next(error);
-  }
-});
-
-// POST /api/agents/sales/lead-status — mark a lead contacted/replied/
-// converted (or back to drafted), scoped strictly to the authenticated
-// user_id. Logs the change to ai_tasks and agent_memory (agent_type "sales").
-app.post("/api/agents/sales/lead-status", requireAuth, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-
-    /* Same guard as the other lead routes, ahead of validation as well as
-       ahead of the write: this route upserts any post_uri the caller names
-       into their own pipeline and GET /api/agents/sales/pipeline then joins
-       it back to bsky_leads, which is a second door onto the owner's rows.
-       A refused request writes nothing and reads nothing. */
-    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
-      console.warn("[sales/lead-status] REFUSING user " + userId +
-        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        ". bsky_leads has no owner column, so every lead a pipeline row could point at is theirs. Nothing was written.");
-      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
-    }
-
-    var leadPostUri = safeText(req.body.lead_post_uri, 500);
-    var status = String(req.body.status || "").toLowerCase().trim();
-
-    if (!leadPostUri) {
-      return res.status(400).json({ error: "lead_post_uri is required." });
-    }
-    if (SALES_LEAD_STATUSES.indexOf(status) === -1) {
-      return res.status(400).json({ error: "status must be one of: " + SALES_LEAD_STATUSES.join(", ") });
-    }
-
-    var timestamp = nowIso();
-    var upsertResult = await supabase
-      .from("sales_lead_pipeline")
-      .upsert({
-        user_id: userId,
-        lead_post_uri: leadPostUri,
-        status: status,
-        updated_at: timestamp
-      }, { onConflict: "user_id,lead_post_uri" })
-      .select("*")
-      .single();
-
-    if (upsertResult.error) {
-      throw upsertResult.error;
-    }
-
-    try {
-      var taskInsert = await supabase
-        .from("ai_tasks")
-        .insert({
-          user_id: userId,
-          agent_type: "sales",
-          prompt: "Lead status update: " + leadPostUri,
-          result: "Marked as " + status,
-          status: "completed"
-        });
-      if (taskInsert.error) {
-        console.error("[sales/lead-status] ai_tasks insert failed:", taskInsert.error.message);
-      }
-
-      var memTimestamp = nowIso();
-      var memInsert = await supabase
-        .from("agent_memory")
-        .insert({
-          user_id: userId,
-          agent: "sales",
-          agent_type: "sales",
-          memory_key: "sales_lead_status_" + leadPostUri + "_" + Date.now(),
-          memory_value: "Lead marked as " + status,
-          memory_type: "insight",
-          title: "Lead status: " + status,
-          content: "Lead " + leadPostUri + " marked as " + status,
-          metadata: normalizeMemoryMetadata({ source: "sales_lead_status", lead_post_uri: leadPostUri, status: status }),
-          created_at: memTimestamp,
-          updated_at: memTimestamp
-        });
-      if (memInsert.error) {
-        console.error("[sales/lead-status] agent_memory write failed:", memInsert.error.message);
-      }
-    } catch (logErr) {
-      console.error("[sales/lead-status] logging error:", logErr.message || logErr);
-    }
-
-    return res.json({ success: true, pipeline: upsertResult.data });
-  } catch (error) {
-    console.error("[sales/lead-status] Error:", error);
-    next(error);
-  }
-});
-
-// GET /api/agents/sales/pipeline — this user's tracked leads grouped by
-// sales_lead_pipeline status, joined back to bsky_leads for display data.
-// Strictly scoped to the authenticated user_id.
-app.get("/api/agents/sales/pipeline", requireAuth, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-
-    /* Same guard as the other lead routes, ahead of both reads. The pipeline
-       rows are the caller's own, but the join below is onto bsky_leads, and
-       every row there is the credential owner's. */
-    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
-      console.warn("[sales/pipeline] REFUSING user " + userId +
-        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        ". bsky_leads has no owner column, so every joined lead is theirs. No rows were read.");
-      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
-    }
-
-    var pipelineResult = await supabase
-      .from("sales_lead_pipeline")
-      .select("*")
-      .eq("user_id", userId)
-      .neq("status", "archived")   // NAMED (Nov 23 2026, LR-1): archived rows never appear as leads
-      .order("updated_at", { ascending: false });
-
-    if (pipelineResult.error) {
-      throw pipelineResult.error;
-    }
-
-    var pipelineRows = pipelineResult.data || [];
-    var postUris = pipelineRows.map(function (row) { return row.lead_post_uri; });
-
-    var leadsByUri = {};
-    if (postUris.length) {
-      var leadsResult = await supabase
-        .from("bsky_leads")
-        .select("*")
-        .in("post_uri", postUris);
-
-      if (!leadsResult.error) {
-        (leadsResult.data || []).forEach(function (lead) { leadsByUri[lead.post_uri] = lead; });
-      }
-    }
-
-    var grouped = {};
-    SALES_LEAD_STATUSES.forEach(function (status) { grouped[status] = []; });
-
-    pipelineRows.forEach(function (row) {
-      var bucket = grouped[row.status] || (grouped[row.status] = []);
-      bucket.push({
-        lead_post_uri: row.lead_post_uri,
-        status: row.status,
-        last_draft: row.last_draft,
-        updated_at: row.updated_at,
-        lead: leadScoreForDisplay(leadsByUri[row.lead_post_uri] || null)
-      });
-    });
-
-    return res.json({ pipeline: grouped });
-  } catch (error) {
-    console.error("[sales/pipeline] Error:", error);
-    next(error);
-  }
-});
 
 /* The ledger side of an inbound STOP or START.
 
@@ -61266,7 +59588,6 @@ async function emailSequenceTick() {
 
 shutdownControl.setServer(app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
-  console.log("[startup] OUTREACH_MIN_INTENT=" + OUTREACH_MIN_INTENT);
   console.log("[startup] SUBSCRIPTION_GRACE_DAYS=" + SUBSCRIPTION_GRACE_DAYS +
     " (days past current_period_end before a subscription stops entitling; " +
     "a null or unparseable period never revokes)");
@@ -61310,8 +59631,10 @@ shutdownControl.setServer(app.listen(PORT, function () {
      each, which is how a suite run hammered the login into 429s. Production
      runs `node server.js` (package.json "start"), where this holds. */
   if (require.main === module) {
-    // NAMED (Nov 23 2026, LR-1): the scorer's calls go on the model_calls ledger and through the caps
-    require("./leadRadar").setModelLedger({ record: recordModelCall, enforce: enforceDailyModelCallLimit });
+    /* NAMED (Nov 23 2026, LR-2): BEFORE the platform scorer was handed recordModelCall and enforceDailyModelCallLimit
+       (setModelLedger). AFTER the radar is every member's: it is handed leadRadarMemberDeps, whose callModel is
+       callAnthropicText (the member's limits enforced first, their own key first, the ledger row written). */
+    require("./leadRadar").setMemberRadarDeps(leadRadarMemberDeps);
     startLeadRadar(shutdownControl.trackInterval).catch(function (err) {
       console.error("[LeadRadar] startup error:", err.message || err);
     });
@@ -61585,7 +59908,8 @@ shutdownControl.setServer(app.listen(PORT, function () {
      NAMED (Nov 20 2026, P2-3, migrations 193 and 194): then the post
      retention (postRetentionTick, job_runs post_retention: removed post and
      comment bodies after 90 days unless held, a removed post's photos after
-     30 days, share-day rows after 30 days). */
+     30 days, share-day rows after 30 days). NAMED (Nov 23 2026, LR-2): then
+     Lead Radar's retention (memberLeadsPurgeTick, job_runs member_leads_purge). */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -61599,7 +59923,8 @@ shutdownControl.setServer(app.listen(PORT, function () {
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
       }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick).then(youtubeDataCheckTick).then(renewalEmailsTick)
-        .then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);
+        .then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick)
+        .then(memberLeadsPurgeTick);
     }, {
       timezone: "UTC"
     });

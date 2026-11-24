@@ -420,9 +420,14 @@ async function getNetwork(db, user, query) {
   check("A9. a link whose tool left the specs is dropped and named, never guessed", broken.edges.every(e => e.id !== "seo>content") && broken.problems.some(p => /seo>content/.test(p)), J(broken.problems));
   const moved = NET.buildGraph(SPEC_KEYS, ACTS.concat(["ads/copy", "ads/policy-check"]));
   check("A9. an agent whose tools all move onto the non-dispatchable list loses its dispatch link", moved.edges.every(e => e.id !== "executive>ads"));
-  check("A10. the existing chain limits are unchanged (chainLimit, the three limits, the rate, the list)",
-    ["chainLimit", "chainMaxDepth", "chainMaxFanout", "chainMaxCalls", "dispatchPerMinuteLimit", "CHAIN_NON_DISPATCHABLE_TOOLS", "chainFanoutNote", "dispatchToolCallSteps"]
-      .every(n => DEFS.old.get(n) && DEFS.old.get(n) === DEFS.new.get(n)));
+  /* NAMED (Nov 23 2026, LR-2): BEFORE the list was unchanged too. AFTER LR-2 removed the routes of sales/convert and sales/lead-status, so the
+     list is the old one less exactly those two lines, which a NAMED comment line takes the place of; everything else is unchanged. */
+  const LR2_LIST_CUT = ["  \"sales/convert\",\n  \"sales/lead-status\",\n", "  // NAMED (Nov 23 2026, LR-2): BEFORE + sales/convert and sales/lead-status, whose routes LR-2 removed.\n"];
+  const oldList = DEFS.old.get("CHAIN_NON_DISPATCHABLE_TOOLS");
+  check("A10. the existing chain limits are unchanged (chainLimit, the three limits, the rate), and the list less only the two removed sales tools",
+    ["chainLimit", "chainMaxDepth", "chainMaxFanout", "chainMaxCalls", "dispatchPerMinuteLimit", "chainFanoutNote", "dispatchToolCallSteps"]
+      .every(n => DEFS.old.get(n) && DEFS.old.get(n) === DEFS.new.get(n)) &&
+    !!oldList && oldList.split(LR2_LIST_CUT[0]).length === 2 && oldList.replace(LR2_LIST_CUT[0], LR2_LIST_CUT[1]) === DEFS.new.get("CHAIN_NON_DISPATCHABLE_TOOLS"));
 
   /* ═══ B. agent_collaborations ════════════════════════════════════════════ */
   console.log("\n== B. agent_collaborations is never drawn ==");
@@ -677,24 +682,30 @@ async function getNetwork(db, user, query) {
       J(gd[0].results) === J([{ gate: "G3", result: "pass" }, { gate: "G1", result: "pass", code: "approved" }, { gate: "G26", result: "fail", code: "link_disabled_by_member" }]), J(gd));
   }
   // demand signals
-  async function signalsRun(which, links) {
-    const db = makeDb({ gate_decisions: [], member_links: links || [], bsky_leads: [] });
+  function lessOnce(text, block) { if (text === null) return null; const i = text.indexOf(block); if (i < 0 || text.indexOf(block, i + 1) !== -1) return null; return text.slice(0, i) + text.slice(i + block.length); }
+  const DEMAND_LINK_BLOCK = "      /* B6/B7: these runs read the Sales agent's Lead Radar posts, the\n         sales>rd link. Switched off by the member, refused as G26. */\n      if (await memberLinkOff(userId, \"sales\", \"rd\")) {\n        recordGateDecision(userId, \"route_access\", \"link:sales/rd\", { G26: { result: \"fail\", code: \"link_disabled_by_member\" } },\n          { gates: [\"G26\"], facts: { agent: \"rd\" } });\n        return res.status(403).json({ error: memberLinkSentence(\"sales\", \"rd\"), reason: \"link_disabled_by_member\" });\n      }\n";
+  /* NAMED (Nov 23 2026, LR-2): BEFORE bsky_leads, and F15 compared the route with its ff7821e text. AFTER LR-2 rewrote the route over the
+     member's own member_leads and Fingerprint, so F15 compares it with itself less the one inserted G26 block (DEMAND_LINK_BLOCK). */
+  async function signalsRun(which, links, withoutBlock) {
+    const db = makeDb({ gate_decisions: [], member_links: links || [], member_leads: [], lead_fingerprints: [] });
     const app = appStub();
     const c = makeCtx(db, { app: app, startToolRun: async () => { throw new Error("reached the run"); } });
-    script(which, "signals", routeSource(which, 'app.post("/api/agents/rd/demand-signals", '), ["startToolRun"], "x: 1").runInContext(c.sandbox);
+    const src = routeSource(which, 'app.post("/api/agents/rd/demand-signals", ');
+    script(which, withoutBlock ? "signals-nolink" : "signals", withoutBlock ? lessOnce(src, DEMAND_LINK_BLOCK) : src, ["startToolRun"], "x: 1").runInContext(c.sandbox);
     const r = await runRoute(app.routes["post /api/agents/rd/demand-signals"], { user: { id: OWNER, role: "admin" }, body: { theme: "nothing-valid" } });
     return { r, db };
   }
   {
     const s = await signalsRun("new", [OFF(OWNER, "sales", "rd")]);
     check("F13. demand signals along the switched-off sales>rd link: 403 link_disabled_by_member, before anything is read",
-      s.r.status === 403 && s.r.body.reason === "link_disabled_by_member" && s.db.log.every(l => l.table !== "bsky_leads"), J(s.r));
+      s.r.status === 403 && s.r.body.reason === "link_disabled_by_member" && s.db.log.every(l => l.table !== "member_leads" && l.table !== "lead_fingerprints"), J(s.r));
     const gd = s.db.tables.gate_decisions;
     check("F14. ... recorded once: route_access, blocked, G26, target link:sales/rd", gd.length === 1 && gd[0].action === "route_access" && gd[0].target === "link:sales/rd" &&
       J(gd[0].results) === J([{ gate: "G26", result: "fail", code: "link_disabled_by_member" }]), J(gd));
     const on = await signalsRun("new", []);
-    const old = await signalsRun("old", []);
-    check("F15. with the link on, the route answers exactly as before (here: the theme refused)", on.r.status === 400 && J(on.r) === J(old.r), J(on.r) + " | " + J(old.r));
+    const old = await signalsRun("new", [], true);
+    check("F15. with the link on, the route answers exactly as it does without the link block (here: the theme refused), and nothing is recorded",
+      on.r.status === 400 && J(on.r) === J(old.r) && on.db.tables.gate_decisions.length === 0, J(on.r) + " | " + J(old.r));
   }
 
   /* ═══ G. every other path, old against new ═══════════════════════════════ */
@@ -765,26 +776,30 @@ async function getNetwork(db, user, query) {
     check("G6. POST /api/proposals/:id/approve, " + label + ": identical", J(shape(o)) === J(shape(nw)), J(o.r) + " | " + J(nw.r));
   }
   /* G7. Each carrier is its old text plus exactly one inserted block. */
-  function lr1Owner(text) {
-    const now = '      // NAMED (Nov 23 2026, LR-1): the owner by id (OWNER_ACCOUNT_ID), not any admin by role: these are the owner\'s leads\n      if (userId !== OWNER_ACCOUNT_ID) {';
-    const was = '      if (req.user.role !== "admin") {';
-    return text.split(now).length === 2 ? text.replace(now, was) : null;
-  }
-  function lessOnce(text, block) { const i = text.indexOf(block); if (i < 0 || text.indexOf(block, i + 1) !== -1) return null; return text.slice(0, i) + text.slice(i + block.length); }
+  // NAMED (Nov 23 2026, LR-2): lr1Owner (LR-1's owner test put back before the demand route's comparison) is gone with that comparison.
   const BLOCKS = [
     ["dispatchToolCall", DEFS.new.get("dispatchToolCall"), DEFS.old.get("dispatchToolCall"), [
       "  /* B6/B7: a dispatch that names the agent it comes from (fromAgent) travels a\n     link of the agent network, and a link the member switched off is refused\n     first, before anything is counted or spent, as G26. A dispatch without\n     fromAgent (a routine's steps) is exactly as before. */\n  if (dispatchOpts.fromAgent && await memberLinkOff(dispatchOpts.userId, dispatchOpts.fromAgent, dispatchOpts.agentType)) {\n    var linkTo = String(dispatchOpts.agentType || \"\").toLowerCase().trim();\n    recordGateDecision(dispatchOpts.userId, \"dispatch\", dispatchTarget, { G26: { result: \"fail\", code: \"link_disabled_by_member\" } },\n      { gates: [\"G26\", \"G19\", \"G12\"], facts: { agent: linkTo } });\n    return chainRefusal(\"link_disabled_by_member\", memberLinkSentence(String(dispatchOpts.fromAgent), linkTo));\n  }\n"]],
     ["the assignment route", routeSource("new", ASSIGN_SIG), routeSource("old", ASSIGN_SIG), ["          fromAgent: \"executive\",\n"]],
     ["orchestrateAgentWorkflow", DEFS.new.get("orchestrateAgentWorkflow"), DEFS.old.get("orchestrateAgentWorkflow"), [
       "  } else if (targetAgent === \"sales\" && await memberLinkOff(userId, agentType, \"sales\")) {\n    /* B6/B7: the member switched this link off on the Network map. No Sales\n       pass runs; the refusal is recorded as G26. */\n    recordGateDecision(userId, \"dispatch\", \"link:\" + agentType + \"/sales\", { G26: { result: \"fail\", code: \"link_disabled_by_member\" } },\n      { gates: [\"G26\"], facts: { agent: \"sales\" } });\n    console.log(\"AGENT ORCHESTRATOR HANDOFF REFUSED\", {\n      user_id: userId,\n      assignment_id: assignmentId,\n      source_agent: agentType,\n      reason: \"link_disabled_by_member\"\n    });\n"]],
-    // NAMED (Nov 23 2026, LR-1): LR-1 changed the route's owner test from role "admin" to the owner by id; that one change is put back before the
-    // comparison (exactly once, or the comparison fails), so the rest of the route is still proved byte for byte.
-    ["the demand-signals route", lr1Owner(routeSource("new", 'app.post("/api/agents/rd/demand-signals", ')), routeSource("old", 'app.post("/api/agents/rd/demand-signals", '), [
-      "      /* B6/B7: these runs read the Sales agent's Lead Radar posts, the\n         sales>rd link. Switched off by the member, refused as G26. */\n      if (await memberLinkOff(userId, \"sales\", \"rd\")) {\n        recordGateDecision(userId, \"route_access\", \"link:sales/rd\", { G26: { result: \"fail\", code: \"link_disabled_by_member\" } },\n          { gates: [\"G26\"], facts: { agent: \"rd\" } });\n        return res.status(403).json({ error: memberLinkSentence(\"sales\", \"rd\"), reason: \"link_disabled_by_member\" });\n      }\n"]]
   ];
+  // NAMED (Nov 24 2026, LR-2B): orchestrateAgentWorkflow's Sales memory read also skips the member's Lead Radar spare words
+  // (lib/leadFingerprint.js SPARE_KEY), one more inserted line; BEFORE its one block only.
+  BLOCKS.find(b => b[0] === "orchestrateAgentWorkflow")[3].push("        .neq(\"memory_key\", \"lead_radar_spare_words\")   // NAMED (Nov 24 2026, LR-2B): a member's spare words are not a memory for a prompt\n");
   for (const [label, now, was, blocks] of BLOCKS) {
     let t = now; blocks.forEach(b => { t = t === null ? null : lessOnce(t, b); });
-    check("G7. " + label + " is the " + PRE_NETWORK + " text plus exactly its one inserted block", t !== null && t === was, t === null ? "a block was not found once" : "differs");
+    check("G7. " + label + " is the " + PRE_NETWORK + " text plus exactly its inserted block" + (blocks.length > 1 ? "s" : ""), t !== null && t === was, t === null ? "a block was not found once" : "differs");
+  }
+  /* NAMED (Nov 23 2026, LR-2): BEFORE the demand-signals route was its ff7821e text plus the one block (with LR-1's owner test put back).
+     AFTER LR-2 rewrote the route (every member, their own leads), so no old text exists to compare; what stays true is that the
+     block is in it exactly once and stands before every read: the Fingerprint, the theme, the run and the leads. */
+  {
+    const now = routeSource("new", 'app.post("/api/agents/rd/demand-signals", ');
+    const at = now.indexOf(DEMAND_LINK_BLOCK);
+    const firstRead = Math.min.apply(null, ["leadFingerprint", "safeText(req.body.theme", "startToolRun(", "loadDemandRows("].map(x => { const i = now.indexOf(x); return i < 0 ? Infinity : i; }));
+    check("G7. the demand-signals route holds its one inserted block exactly once, before every read (LR-2 rewrote the rest)",
+      lessOnce(now, DEMAND_LINK_BLOCK) !== null && at > 0 && at < firstRead && firstRead !== Infinity, at + " " + firstRead);
   }
   {
     const now = routeSource("new", APPROVE_SIG), was = routeSource("old", APPROVE_SIG);
@@ -802,7 +817,10 @@ async function getNetwork(db, user, query) {
     const O = m.exports;
     check("G9. lib/gates.js: G1 to G25, ACTIONS, ACTION_GATES and every old reason are exactly as at " + PRE_NETWORK,
       J(O.GATES) === J(GATES.GATES.filter(g => g.id !== "G26")) && J(O.ACTIONS) === J(GATES.ACTIONS) && J(O.ACTION_GATES) === J(GATES.ACTION_GATES) &&
-      Object.keys(O.REASONS).every(k => O.REASONS[k] === GATES.REASONS[k]) && Object.keys(GATES.REASONS).length === Object.keys(O.REASONS).length + 1);
+      // NAMED (Nov 23 2026, LR-2): BEFORE one new reason (link_disabled_by_member). AFTER two: LR-2 adds post_full
+      // (three members already replied to the post; the member send's G22), and no other.
+      Object.keys(O.REASONS).every(k => O.REASONS[k] === GATES.REASONS[k]) && Object.keys(GATES.REASONS).length === Object.keys(O.REASONS).length + 2 &&
+      GATES.REASONS.post_full === "Three members already replied to this post.");
   }
 
   /* ═══ H. export, deletion, backup, migration ═════════════════════════════ */
@@ -877,7 +895,8 @@ async function getNetwork(db, user, query) {
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
     // NAMED (Nov 23 2026, P3-3, migration 202): 202_need_found_and_alerts.sql (posts.need_found_at, a Need marked Found, and user_preferences.need_alerts) is allowed too, by name.
     // NAMED (Nov 23 2026, LR-1, migration 203): 203_lr1_archived_and_sms_pending.sql (sales_lead_pipeline may be 'archived'; sms_subscribers.consent_status defaults to 'pending') is allowed too, by name.
-    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^(162_plan_cycles|163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store|182_amazon_store|183_weekly_goal_and_order_status|184_shopify_webhook_requests|185_shopify_uninstall_hook|186_member_videos_duration|187_member_video_parts|188_user_preferences_hq_view|189_handles_and_place|190_notifications_links|191_safety|192_buy_listing_digital|193_posts|194_social_graph|195_users_email_canonical|196_storage_account_tables|197_storage_account_functions|198_storage_account_backfill|199_verified_badge|200_categories_and_intent|201_member_welcome|202_need_found_and_alerts|203_lr1_archived_and_sms_pending)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
+    // NAMED (Nov 23 2026, LR-2, migration 204): 204_lr2_member_lead_radar.sql (lead_fingerprints, member_leads, member_lead_replies, lead_search_cache, threads_connections) is allowed too, by name.
+    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^(162_plan_cycles|163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store|182_amazon_store|183_weekly_goal_and_order_status|184_shopify_webhook_requests|185_shopify_uninstall_hook|186_member_videos_duration|187_member_video_parts|188_user_preferences_hq_view|189_handles_and_place|190_notifications_links|191_safety|192_buy_listing_digital|193_posts|194_social_graph|195_users_email_canonical|196_storage_account_tables|197_storage_account_functions|198_storage_account_backfill|199_verified_badge|200_categories_and_intent|201_member_welcome|202_need_found_and_alerts|203_lr1_archived_and_sms_pending|204_lr2_member_lead_radar)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
   check("H7. the table: user_id cascading, from_agent, to_agent, enabled, updated_at, one row per link, no self link",
     /user_id     uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE,/.test(mig) && /from_agent  text NOT NULL/.test(mig) && /to_agent    text NOT NULL/.test(mig) &&
     /enabled     boolean NOT NULL DEFAULT true,/.test(mig) && /updated_at  timestamptz NOT NULL DEFAULT now\(\),/.test(mig) &&

@@ -170,7 +170,7 @@ function world(o) {
   check("D4. a court filing recorded: never restored", r3.restored === 0 && k.st.qUpd.length === 0);
   const S = FILES[SERVER];
   // NAMED (Nov 20 2026, P2-3): BEFORE the restore was the chain's last step. AFTER the post retention (P2-3) follows it.
-  check("D5. a step of the 04:45 chain, after the safety retention and before the post retention, through the shared daily claim (job copyright_restore)", has(S, ".then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);") &&
+  check("D5. a step of the 04:45 chain, after the safety retention and before the post retention, through the shared daily claim (job copyright_restore)", has(S, ".then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick)\n        .then(memberLeadsPurgeTick);") /* NAMED (Nov 23 2026, LR-2): the chain now ends with memberLeadsPurgeTick (Lead Radar's retention) */ &&
     has(S, 'return await require("./lib/safety").restoreTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });') && SF.RESTORE_JOB_NAME === "copyright_restore" && SF.RESTORE_BUSINESS_DAYS === 10);
 
   /* ── E ── */

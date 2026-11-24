@@ -245,7 +245,8 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   check("V1c. ...directly above the platform cards: after the Mastodon card, and the YouTube card is the next section",
     !!card && !!card.previousElementSibling && card.previousElementSibling.id === "mastoConnect" && !!card.nextElementSibling && card.nextElementSibling.id === "ytConnect");
   const tabIds = (/specificTab: \{ name: "Accounts", sectionIds: (\[[^\]]*\]) \}/.exec(page) || ["", "[]"])[1];
-  check("V1d. the Accounts tab carries it, right before ytConnect", tabIds === "[\"bskyConnect\", \"bskyMentions\", \"mastoConnect\", \"videosCard\", \"ytConnect\", \"ttConnect\", \"igConnect\", \"fbConnect\"]", tabIds);
+  // NAMED (Nov 23 2026, LR-2): BEFORE the list ended at fbConnect. AFTER the Threads tile (thConnect) follows it; the videos card is where it was.
+  check("V1d. the Accounts tab carries it, right before ytConnect", tabIds === "[\"bskyConnect\", \"bskyMentions\", \"mastoConnect\", \"videosCard\", \"ytConnect\", \"ttConnect\", \"igConnect\", \"fbConnect\", \"thConnect\"]", tabIds);
 
   /* ── V2 ── */
   console.log("\n══ V2. the notes, word for word ══");

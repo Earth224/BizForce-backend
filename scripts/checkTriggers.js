@@ -102,7 +102,17 @@ const MUTATIONS = {
   "decision-id-dropped": ["runner",
     "outcome: outcome, action_ref: ref, gate_decision_id: gateDecisionId });", "outcome: outcome, action_ref: ref, gate_decision_id: null });"],
   "why-link-missing": ["ui",
-    "          (f.gate_decision_id\n            ?", "          (false\n            ?"]
+    "          (f.gate_decision_id\n            ?", "          (false\n            ?"],
+  // NAMED (Nov 23 2026, LR-2): the owner's lead count reads every member's leads
+  "lead-scores-unscoped": ["runner",
+    ".select(\"id, created_at\", { count: \"exact\" }).eq(\"user_id\", userId)\n", ".select(\"id, created_at\", { count: \"exact\" })\n"],
+  // NAMED (Nov 24 2026, LR-2B): lead scores for the owner only again (the run, the builder's list and the preview)
+  "lead-scores-owner-only-run": ["runner",
+    "      var l = await leadTimes(deps, userId, nowMs - 2 * w);", "      if (!deps.isOwner(userId)) return { value: null, previous: null, reason: \"owner_only\" };\n      var l = await leadTimes(deps, userId, nowMs - 2 * w);"],
+  "lead-scores-owner-only-metric": ["triggers",
+    "    label: \"High-intent leads\", kind: \"count\", windows: TIMED, replay: true, drop: true,", "    label: \"High-intent leads\", kind: \"count\", windows: TIMED, replay: true, drop: true, ownerOnly: true,"],
+  "lead-scores-owner-only-preview": ["runner",
+    "  else ev = await leadTimes(deps, userId, since, PREVIEW_MAX_ROWS);", "  else ev = deps.isOwner(userId) ? await leadTimes(deps, userId, since, PREVIEW_MAX_ROWS) : { times: [], capped: false };"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -306,6 +316,7 @@ function seedTables() {
     ai_tasks: [],
     agent_proposals: [],
     bsky_leads: [],
+    member_leads: [],   // NAMED (Nov 23 2026, LR-2): lead_scores reads the owner's own member_leads (BEFORE bsky_leads)
     user_wallets: [{ id: UUID(401), user_id: A, balance: 150 }, { id: UUID(402), user_id: B, balance: 9000 }],
     agent_schedules: [
       { id: UUID(501), user_id: A, agent_type: "seo", consecutive_failures: 2, paused: false, paused_reason: null },
@@ -333,7 +344,10 @@ function seedTables() {
   for (let i = 0; i < 4; i++) prop(A, "pending", ago(H));
   for (let i = 0; i < 3; i++) prop(A, "approved", ago(80 * H));
   for (let i = 0; i < 5; i++) prop(B, "pending", ago(100 * H));
-  const lead = (score, at) => t.bsky_leads.push({ id: UUID(++n), intent_score: score, created_at: at });
+  // NAMED (Nov 23 2026, LR-2): BEFORE bsky_leads rows with intent_score; AFTER the owner's member_leads rows with score, and one of another
+  // member's (scored 95, in the window) that the owner's count must never include.
+  const lead = (score, at, u) => t.member_leads.push({ id: UUID(++n), user_id: u || OWNER, score: score, status: "new", created_at: at });
+  lead(95, ago(H), A);
   [1, 2, 3].forEach(h => lead(80, ago(h * H)));
   [1, 2].forEach(h => lead(50, ago(h * H)));
   lead(90, ago(30 * H));
@@ -407,9 +421,13 @@ const MEMBER_TABLES = ["inventory_items", "content_library", "ai_tasks", "agent_
     check("A. helpful_share with 3 ratings: not judged (null), never a guess", seo.value === null, J(seo));
     const before = db.log.length;
     const leadA = await R.metricValue(deps(db), A, { metric: "lead_scores", window: "24h" }, NOW);
-    check("A. lead_scores for a member: null, and bsky_leads is never read", leadA.value === null && !db.log.slice(before).some(l => l.table === "bsky_leads"), J(leadA));
+    // NAMED (Nov 24 2026, LR-2B): BEFORE "lead_scores for a member: null, and no lead table is read" (owner only).
+    check("A. lead_scores for a member: only that member's own leads (A's one 95), never the owner's 3; only member_leads is read, never bsky_leads",
+      leadA.value === 1 && leadA.previous === 0 && db.log.slice(before).some(l => l.table === "member_leads") && !db.log.slice(before).some(l => l.table === "bsky_leads"), J(leadA));
+    const leadB = await R.metricValue(deps(db), B, { metric: "lead_scores", window: "24h" }, NOW);
+    check("A. one member's trigger never reads another's leads: B, with none of its own, counts 0 while A and the owner hold high-intent leads", leadB.value === 0 && leadB.previous === 0, J(leadB));
     const leadO = await R.metricValue(deps(db), OWNER, { metric: "lead_scores", window: "24h" }, NOW);
-    check("A. lead_scores for the owner: 3 scored 70 or more in 24 hours (and 1 in the 24 before)", leadO.value === 3 && leadO.previous === 1, J(leadO));
+    check("A. lead_scores for the owner: 3 of the owner's own leads scored 70 or more in 24 hours (and 1 in the 24 before); another member's 95 is not counted", leadO.value === 3 && leadO.previous === 1, J(leadO));
     const noWallet = await R.metricValue(deps(db), OWNER, { metric: "bfc_balance", window: "now" }, NOW);
     check("A. bfc_balance with no wallet: null, not zero", noWallet.value === null, J(noWallet));
     const noCap = await R.metricValue(deps(db, { spendLimit: () => null }), A, { metric: "spend_vs_cap", window: "now" }, NOW);
@@ -462,7 +480,6 @@ const MEMBER_TABLES = ["inventory_items", "content_library", "ai_tasks", "agent_
     ["a name with markup", Object.assign({}, good, { name: "<b>x</b>" }), "name"],
     ["a metric agent where none belongs", Object.assign({}, good, { metric_agent: "seo" }), "metric_agent"],
     ["helpful_share with no agent", Object.assign({}, good, { metric: "helpful_share", window: "30d", comparator: "lt", threshold: 50 }), "metric_agent"],
-    ["lead scores for a member", Object.assign({}, good, { metric: "lead_scores" }), "metric"],
     ["enabled as text", Object.assign({}, good, { enabled: "yes" }), "enabled"],
     ["an array body", [good], "body"]
   ];
@@ -471,7 +488,10 @@ const MEMBER_TABLES = ["inventory_items", "content_library", "ai_tasks", "agent_
     check("C. refused: " + what, r.ok === false && (field === null || r.field === field), J(r));
   });
   const ownerLead = T.validateTrigger(Object.assign({}, good, { metric: "lead_scores" }), null, { owner: true });
-  check("C. lead scores for the owner: accepted", ownerLead.ok === true, J(ownerLead));
+  const memberLead = T.validateTrigger(Object.assign({}, good, { metric: "lead_scores" }), null, { owner: false });
+  // NAMED (Nov 24 2026, LR-2B): BEFORE "refused: lead scores for a member" (owner only).
+  check("C. lead scores for the owner and for any member: accepted", ownerLead.ok === true && memberLead.ok === true, J([ownerLead, memberLead]));
+  check("C. no metric is owner-only now", T.METRIC_KEYS.every(k => !T.METRICS[k].ownerOnly) && T.METRICS.lead_scores.label === "High-intent leads", T.METRICS.lead_scores.label);
   const partial = T.validateTrigger({ enabled: false }, T.fromRow(Object.assign({ id: UUID(1) }, T.toRow(v0.value))), { owner: false });
   check("C. a partial edit (the switch) keeps the rest and validates the whole trigger", partial.ok && partial.value.enabled === false && partial.value.metric === "tasks_failed");
   check("C. TRIGGERS_DAILY_FIRINGS: unset 10, \"3\" 3, \"0\" 1, \"50\" 20, \"x\" 10",
@@ -668,6 +688,9 @@ const MEMBER_TABLES = ["inventory_items", "content_library", "ai_tasks", "agent_
     check("F. THE PREVIEW WRITES NOTHING: no insert, update, delete or upsert on any table", writes.length === 0, J(writes));
     const s = await R.preview(deps(db), A, T.validateTrigger({ name: "S", metric: "stock_at_reorder", comparator: "gt", threshold: 0, window: "now", cooldown_hours: 24, action: { kind: "raise_alert" } }, null, {}).value, NOW);
     check("F. a number with no history: the value now and \"Now only: there is no history of this number.\"", s.replay === false && s.value_now === 2 && s.count === null && s.note === "Now only: there is no history of this number.", J(s));
+    // NAMED (Nov 24 2026, LR-2B): a member's lead preview replays that member's own leads (A's one 95), not an empty list.
+    const lp = await R.preview(deps(db), A, T.validateTrigger({ name: "L", metric: "lead_scores", comparator: "gte", threshold: 1, window: "24h", cooldown_hours: 24, action: { kind: "raise_alert" } }, null, {}).value, NOW);
+    check("F. a member's lead preview: that member's own one lead, would fire now and once in 30 days", lp.value_now === 1 && lp.would_fire_now === true && lp.count === 1, J(lp));
     const dropT = { comparator: "drop_pct", threshold: 50, window: "24h", cooldown_hours: 24 };
     const evs = []; for (let i = 0; i < 10; i++) evs.push(NOW - 30 * H - i * 60000);
     const fired = T.replay(dropT, evs, NOW, 30);
@@ -754,11 +777,14 @@ const MEMBER_TABLES = ["inventory_items", "content_library", "ai_tasks", "agent_
     const before = db.tables.member_triggers.length;
     for (const [what, body] of [["an unknown field", Object.assign({}, T.TEMPLATES[1].body, { name: "X1", sql: "drop" })],
       ["an unknown metric", Object.assign({}, T.TEMPLATES[1].body, { name: "X2", metric: "page_views" })],
-      ["an unknown action", Object.assign({}, T.TEMPLATES[1].body, { name: "X3", action: { kind: "publish_post" } })],
-      ["lead scores for a member", Object.assign({}, T.TEMPLATES[1].body, { name: "X4", metric: "lead_scores" })]]) {
+      ["an unknown action", Object.assign({}, T.TEMPLATES[1].body, { name: "X3", action: { kind: "publish_post" } })]]) {   // NAMED (Nov 24 2026, LR-2B): BEFORE also "lead scores for a member"
       const r = await call("post /api/triggers", A, { body });
       check("G. refused (400), nothing saved: " + what, r.status === 400 && /Nothing was saved\.$/.test(r.body.error) && db.tables.member_triggers.length === before, J(r));
     }
+    const leadMade = await call("post /api/triggers", A, { body: Object.assign({}, T.TEMPLATES[1].body, { name: "My leads", metric: "lead_scores" }) });
+    check("G. a member saves a lead-scores trigger (201), under their own id", leadMade.status === 201 && leadMade.body.trigger.metric === "lead_scores" &&
+      db.tables.member_triggers.some(x => x.name === "My leads" && x.user_id === A), J(leadMade));
+    db.tables.member_triggers = db.tables.member_triggers.filter(x => x.name !== "My leads");
     const dup = await call("post /api/triggers", A, { body: T.TEMPLATES[1].body });
     check("G. the same name twice: 409", dup.status === 409, J(dup));
     for (let i = 0; i < 9; i++) await call("post /api/triggers", A, { body: Object.assign({}, T.TEMPLATES[1].body, { name: "More " + i }) });
@@ -790,7 +816,9 @@ const MEMBER_TABLES = ["inventory_items", "content_library", "ai_tasks", "agent_
     check("G. a firings page of 0 is refused (400)", badPage.status === 400);
     const lang = await call("get /api/triggers/language", A, {});
     const langO = await call("get /api/triggers/language", OWNER, {});
-    check("G. the language: lead scores listed for the owner only", lang.status === 200 && !lang.body.metrics.lead_scores && !!langO.body.metrics.lead_scores && lang.body.templates.length === 6);
+    // NAMED (Nov 24 2026, LR-2B): BEFORE "lead scores listed for the owner only".
+    check("G. the language: lead scores listed for every member, as \"High-intent leads\"", lang.status === 200 && !!lang.body.metrics.lead_scores && lang.body.metrics.lead_scores.label === "High-intent leads" &&
+      !!langO.body.metrics.lead_scores && lang.body.templates.length === 6);
     // F. the preview through the route
     const pdb = previewDb();
     const pcall = routes(pdb);

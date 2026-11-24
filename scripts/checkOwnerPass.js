@@ -333,7 +333,16 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       // account may only reply where a member wrote first; checkInbox), and postDeps().tierOf hands lib/posts.js the tier for
       // the photo, listing-link, comment and Show in Google rules (checkPosts, checkSocialGraph, checkPublicPostPage). Both read
       // .active through accessTier, so the owner's pass and an admin count as members, and neither grants anything on its own.
-      "getUserPlan in /api/messages", "getUserPlan in postDeps"];
+      "getUserPlan in /api/messages", "getUserPlan in postDeps",
+      // NAMED (Nov 23 2026, LR-2): BEFORE 23 readers; AFTER 24. leadRadarMemberDeps.tierOf (the scan names the function above it,
+      // leadRadarThreads) hands lib/memberRadar.js the tier that decides whose Fingerprint the 5-minute tick captures and scores for.
+      // It reads .active through accessTier, so the owner's pass and an admin count as members; a lookup that throws counts as not a
+      // member for that tick (activeMembers), so a free account is never captured or scored for on a guess (checkLeadRadarMember).
+      "getUserPlan in leadRadarThreads",
+      // NAMED (Nov 23 2026, LR-2): BEFORE 24; AFTER 25. leadRadarStatLine writes the leadRadar line of the agents' LIVE PLATFORM
+      // STATS (getLiveStats): "available" for a member through accessTier, so the owner's pass and an admin count as members; a
+      // lookup that throws gives null (rendered as unreadable), never "available". It gates nothing (checkAgentBriefTruth 13).
+      "getUserPlan in leadRadarStatLine"];
     const extra = callers.filter(c => KNOWN.indexOf(c) === -1), missing = KNOWN.filter(c => callers.indexOf(c) === -1);
     check("A. the entitlement readers are exactly the " + KNOWN.length + " listed (a new one must be added here and reviewed)",
       extra.length === 0 && missing.length === 0, "new: " + extra.join(", ") + "; gone: " + missing.join(", "));

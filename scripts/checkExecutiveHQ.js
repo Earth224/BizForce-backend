@@ -896,7 +896,8 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   check("H10. the tool picker's tools are each agent page's tools as the app map lists them", toolWrong.length === 0 && Object.keys(HQ_TOOLS).length === 16 && !HQ_TOOLS.executive,
     toolWrong.map(k => k + ": " + JSON.stringify(mapTools(AG[k].page))).join(" | "));
   check("H10. the acting tools are exactly the server's CHAIN_NON_DISPATCHABLE_TOOLS",
-    SERVER_ACTING.length >= 7 && JSON.stringify(Object.keys(HQ_ACTING).sort()) === JSON.stringify(SERVER_ACTING.slice().sort()), JSON.stringify([SERVER_ACTING, Object.keys(HQ_ACTING)]));
+    // NAMED (Nov 23 2026, LR-2): BEFORE at least 7; AFTER 5 (sales/convert and sales/lead-status went with their routes).
+    SERVER_ACTING.length === 5 && JSON.stringify(Object.keys(HQ_ACTING).sort()) === JSON.stringify(SERVER_ACTING.slice().sort()), JSON.stringify([SERVER_ACTING, Object.keys(HQ_ACTING)]));
   const pageReaches = (page, key) => {
     const html = fs.readFileSync(path.join(FRONTEND, page.slice(1)), "utf8");
     const srcs = [...html.matchAll(/<script src="\/(scripts\/[^"]+\.js)"/g)].map(m => m[1]).filter(f => fs.existsSync(path.join(FRONTEND, f)));

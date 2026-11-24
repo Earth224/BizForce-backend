@@ -1,6 +1,6 @@
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
-const { YOUTUBE_API_UNITS, youtubeCaps, youtubeUnitsToday, reserveYoutubeUnits } = require("./lib/youtubeQuota");
+const { YOUTUBE_API_UNITS, youtubeCaps, youtubeUnitsToday, youtubeUtcDay, reserveYoutubeUnits } = require("./lib/youtubeQuota");
 const { isUsefulYoutubeComment } = require("./lib/youtubeFilter");
 
 const SUPABASE_URL         = process.env.SUPABASE_URL;
@@ -9,60 +9,18 @@ const YOUTUBE_API_KEY      = process.env.YOUTUBE_API_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-// Every keyword is processed on every run. The rotating slice that used to
-// live here existed only to protect the daily quota when this ran on the
-// shared 5-minute radar tick; MIN_RUN_INTERVAL_MS now protects that quota
-// directly, and rotating on top of it would just delay coverage for no gain.
-/* Question-shaped, like the Bluesky list — but aimed one step further away,
-   and that difference matters when editing this.
+/* NAMED (Nov 23 2026, LR-2): YOUTUBE FOR EACH MEMBER. BEFORE this file ran ONE platform pass every 3 hours over a
+   fixed list of eight video searches (the owner's own products) and wrote bsky_leads rows with status "signal".
+   AFTER it is the YouTube half of lib/memberRadar.js: a member with YouTube switched on in their Fingerprint has
+   one of their own keywords searched at most every 3 hours, from an EQUAL SHARE of the radar's daily units
+   (lib/memberRadar.js youtubeShare), and the comments become that member's leads (member_leads, source youtube,
+   opened, never replied to; deleted after 30 days). The fixed list moves into the owner's Fingerprint
+   (scripts/oneoff/lr2SeedOwner.js).
 
-   These strings do not search comments. search.list searches VIDEOS, and the
-   comments harvested from the videos it returns are what become leads. So the
-   target is not "a comment phrased as a question", it is "a video whose
-   comment section fills up with people asking questions".
-
-   Question-titled videos are the ones that do that. A video called "Does
-   Tongkat Ali Actually Work?" collects comments like "tried it for 3 months,
-   nothing, what else is there" — someone who bought, was disappointed, and is
-   still looking. A video called "Tongkat Ali Reviews" collects the channel's
-   own affiliate audience, which is where the old topic-word list was fishing.
-   Same correction as the Bluesky list, one layer removed: the seeker is in the
-   comments under the question, not under the topic.
-
-   Still exactly 8. The quota arithmetic below is written against that number,
-   and adding a ninth silently changes the daily unit cost. */
-const KEYWORDS = [
-  // Supplements: libido, energy, fatigue.
-  "does tongkat ali actually work",
-  "how to increase libido naturally",
-  "why am i always tired",
-  "what supplements actually work",
-  "how to boost energy naturally",
-
-  // The book: manifestation, law of assumption, quantum jumping.
-  "why isn't my manifestation working",
-  "does manifestation actually work",
-  "does quantum jumping actually work"
-];
-
-// runYoutubeRadarOnce is called from leadRadar.js radarTick every 5 minutes,
-// a tick shared with Bluesky and Mastodon, neither of which has a quota
-// problem. YouTube therefore throttles itself rather than slowing the tick.
-//
-// Quota: every call reserves its units in youtube_api_calls before it is sent
-// (lib/youtubeQuota.js), and before each search.list the pass checks that the
-// search and every comment call it can lead to still fit both caps:
-// YOUTUBE_DAILY_UNIT_CAP (default 5000, the whole key, all callers, per UTC
-// day) and YOUTUBE_RADAR_DAILY_UNITS (default 2500, the radar's share). A full
-// pass is at most 8 × (100 + 4 × 1) = 832 units, so at the defaults the radar
-// runs about three full passes a day and then stops until the UTC day turns.
-// The 3-hour interval still spaces the passes; the caps are what bound spend.
-const MIN_RUN_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 hours
-
-// Deliberately in-process: it resets on redeploy, which costs at most one
-// extra pass. A persistent counter would mean a table and a migration for a
-// problem this size.
-let lastRunStartedAt = 0;
+   Quota, unchanged in kind: every call reserves its units in youtube_api_calls BEFORE it is sent
+   (lib/youtubeQuota.js), as caller "radar" and now with the member's user_id, and no call is made when the ledger
+   cannot be read or written. A search and its comment calls must fit the whole key's cap
+   (YOUTUBE_DAILY_UNIT_CAP), the radar's (YOUTUBE_RADAR_DAILY_UNITS) and the member's share. */
 
 // Videos per search, and so the most comment calls one search can lead to.
 var SEARCH_MAX_RESULTS = 4;
@@ -85,9 +43,7 @@ async function fetchSearchResults(keyword) {
 // Returns null (skip quietly) when comments are disabled for the video, throws
 // on any other error. A 403 is not on its own enough to conclude that comments
 // are disabled — YouTube also returns 403 for quotaExceeded and for a disabled
-// or invalid key — so the body has to be read to tell them apart. Treating
-// every 403 as benign meant a quota exhaustion during the comment phase
-// produced zero output and was indistinguishable from a video with no comments.
+// or invalid key — so the body has to be read to tell them apart.
 async function fetchCommentThreads(videoId) {
   var url = "https://www.googleapis.com/youtube/v3/commentThreads" +
     "?part=snippet&videoId=" + encodeURIComponent(videoId) +
@@ -107,185 +63,65 @@ async function fetchCommentThreads(videoId) {
   return response.json();
 }
 
-/* NAMED (Nov 23 2026, LR-1): returns what the pass did, for the radar_status row (source youtube) radarTick
-   writes: null when no pass ran (inside the 3-hour gap), else { outcome, searches,
-   matched, captured, capturedKnown, error }. outcome is one of the values migration 135
-   allows: captured, nothing_new, no_credentials or error. */
-async function runYoutubeRadarOnce() {
-  // Silent on the skip path: the caller ticks every 5 minutes, so a log line
-  // here would fire ~35 times per gap and drown everything else in the log.
-  if (Date.now() - lastRunStartedAt < MIN_RUN_INTERVAL_MS) return null;
-  var pass = { searches: 0, matched: 0, captured: 0, capturedKnown: true, errors: [] };
-
-  // Stamped at the start rather than at the end so an overlapping or slow run
-  // cannot open a second window while the first is still going.
-  lastRunStartedAt = Date.now();
-
-  // Without this the key is interpolated into every URL as the literal string
-  // "undefined" and every request fails. That is exactly what happened between
-  // 2026-07-08 and 2026-08-03: YOUTUBE_API_KEY was absent from Railway, every
-  // call sent undefined, and the only symptom was a repeating "API key not
-  // valid" in the logs.
-  if (!YOUTUBE_API_KEY) {
-    console.error("[YoutubeRadar] YOUTUBE_API_KEY is not set — every request would send the literal string 'undefined' and fail. Skipping run.");
-    return { outcome: "no_credentials", searches: 0, matched: 0, captured: 0, capturedKnown: true, error: "YOUTUBE_API_KEY is not set" };
-  }
-
-  /* FAIL CLOSED: an unusable cap means no YouTube call this pass. Logged once:
-     a pass happens at most once every MIN_RUN_INTERVAL_MS. */
-  var caps = youtubeCaps(process.env);
-  if (caps.error) {
-    console.error("[YoutubeRadar] No YouTube call this pass: " + caps.error + ".");
-    return { outcome: "error", searches: 0, matched: 0, captured: 0, capturedKnown: true, error: caps.error };
-  }
-
-  // Reserve a call's units BEFORE it is sent. false (logged once) ends the pass.
-  var stopPass = false;
-  async function reserve(method) {
-    try {
-      await reserveYoutubeUnits(supabase, { caller: "radar", method: method });
-      return true;
-    } catch (ledgerErr) {
-      console.error("[YoutubeRadar] No YouTube call this pass: " + (ledgerErr.message || ledgerErr) + ".");
-      stopPass = true;
-      return false;
-    }
-  }
-
-  try {
-    var keywords = KEYWORDS;
-
-    for (var i = 0; i < keywords.length; i++) {
-      if (stopPass) break;
-      var keyword = keywords[i];
-
-      /* Both caps, read fresh from the ledger before each search: the search
-         and every comment call it can lead to must fit. A ledger that cannot
-         be read means no call. */
-      var used;
-      try {
-        used = await youtubeUnitsToday(supabase);
-      } catch (readErr) {
-        console.error("[YoutubeRadar] No YouTube call this pass: " + (readErr.message || readErr) + ".");
-        break;
-      }
-      if (used.total + SEARCH_WORST_CASE_UNITS > caps.daily || used.radar + SEARCH_WORST_CASE_UNITS > caps.radar) {
-        console.log("[YoutubeRadar] Pass stopped before '" + keyword + "': " + used.total + " of " + caps.daily +
-          " units used today (radar " + used.radar + " of " + caps.radar + "), and the next search can cost " + SEARCH_WORST_CASE_UNITS + ".");
-        break;
-      }
-      if (!(await reserve("search.list"))) break;
-      pass.searches++;   // NAMED (Nov 23 2026, LR-1)
-
-      try {
-        var searchData = await fetchSearchResults(keyword);
-        var videoItems = (searchData && searchData.items) || [];
-        var videoIds = videoItems
-          .map(function (item) { return item.id && item.id.videoId; })
-          .filter(Boolean);
-
-        var rows = [];
-        // Every comment fetched, and why each one not stored was dropped (lib/youtubeFilter.js).
-        var fetched = 0;
-        var dropped = { link: 0, too_short: 0, off_topic: 0 };
-
-        for (var v = 0; v < videoIds.length && v < SEARCH_MAX_RESULTS; v++) {
-          var videoId = videoIds[v];
-          if (!(await reserve("commentThreads.list"))) break;
-          try {
-            var commentsData = await fetchCommentThreads(videoId);
-            if (!commentsData) continue; // comments disabled — skip quietly
-
-            var commentItems = commentsData.items || [];
-
-            commentItems.forEach(function (item) {
-              var thread = item.snippet && item.snippet.topLevelComment;
-              var commentSnippet = thread && thread.snippet;
-              if (!thread || !commentSnippet) return;
-
-              /* Only comments worth reading are stored: no link, at least 6
-                 words, and a topic term of the keyword. The first failing
-                 test is the reason it is counted under. */
-              fetched++;
-              var commentText = commentSnippet.textOriginal || commentSnippet.textDisplay || null;
-              var verdict = isUsefulYoutubeComment(commentText, keyword);
-              if (!verdict.keep) { dropped[verdict.reason]++; return; }
-
-              rows.push({
-                post_uri:        "https://www.youtube.com/watch?v=" + videoId + "&lc=" + thread.id,
-                post_cid:        null,
-                author_did:      null,
-                author_handle:   commentSnippet.authorDisplayName || null,
-                post_text:       commentText,
-                matched_keyword: keyword,
-                lang:            null,
-                source:          "youtube",
-
-                /* youtube is not in SCORABLE_SOURCES in leadRadar.js, so these
-                   rows are captured as signal and never enter the scorer queue,
-                   which selects status = new. Left at the column default of new
-                   they would sit in that queue forever without ever being drained. */
-                status:          "signal",
-
-                /* The COMMENT's publish time, which is the post being captured
-                   here — not the video's. An old comment on a new video and a
-                   new comment on an old video are opposite cases, and only the
-                   comment's own timestamp separates them. updatedAt is the
-                   fallback for an edited comment whose publishedAt is somehow
-                   absent; both are RFC 3339 strings.
-
-                   commentThreads.list has no date parameter to narrow the fetch
-                   with — its optional params are maxResults, moderationStatus,
-                   order, pageToken, searchTerms and textFormat. search.list
-                   does take publishedAfter, but that bounds which VIDEOS are
-                   discovered, not which comments come back, so it would drop
-                   fresh comments on older videos while still admitting
-                   years-old comments on new ones. Left alone deliberately. */
-                post_created_at: commentSnippet.publishedAt || commentSnippet.updatedAt || null
-              });
-            });
-          } catch (videoErr) {
-            console.error("[YoutubeRadar] Error fetching comments for video '" + videoId + "':", videoErr.message || videoErr);
-          }
-        }
-
-        // fetched = kept + link + too_short + off_topic, every keyword, every pass.
-        console.log("[YoutubeRadar] " + keyword + ": fetched " + fetched + ", kept " + rows.length +
-          ", dropped " + (fetched - rows.length) + " (link " + dropped.link + ", too_short " + dropped.too_short + ", off_topic " + dropped.off_topic + ")");
-
-        if (!rows.length) continue;
-
-        /* NAMED (Nov 23 2026, LR-1): the select returns only the rows really inserted (ignoreDuplicates is
-           ON CONFLICT DO NOTHING), so the log says matched and new apart, as
-           leadRadar.js does. It used to print rows.length as "new leads". */
-        var { data: insertedRows, error } = await supabase
-          .from("bsky_leads")
-          .upsert(rows, { onConflict: "post_uri", ignoreDuplicates: true })
-          .select("post_uri");
-
-        if (error) {
-          console.error("[YoutubeRadar] Supabase upsert error for keyword '" + keyword + "':", error.message);
-          pass.errors.push("upsert for '" + keyword + "': " + error.message);
-          pass.capturedKnown = false;
-          continue;
-        }
-
-        var newCount = (insertedRows || []).length;
-        pass.matched += rows.length;
-        pass.captured += newCount;
-        console.log("[YoutubeRadar] " + keyword + ": " + rows.length + " matched, " + newCount + " new");
-
-      } catch (kwErr) {
-        console.error("[YoutubeRadar] Error processing keyword '" + keyword + "':", kwErr.message || kwErr);
-      }
-    }
-  } catch (err) {
-    console.error("[YoutubeRadar] runYoutubeRadarOnce error:", err.message || err);
-    pass.errors.push(String(err.message || err));
-  }
-  pass.outcome = pass.errors.length && !pass.captured ? "error" : (pass.captured ? "captured" : "nothing_new");
-  pass.error = pass.errors.length ? pass.errors.join("; ").slice(0, 500) : null;
-  return pass;
+/* The radar units this member has used today (caller radar, their user_id). null when the ledger cannot be read. */
+async function unitsUsedBy(userId, nowMs) {
+  var r = await supabase.from("youtube_api_calls").select("units").eq("created_on", youtubeUtcDay(nowMs)).eq("caller", "radar").eq("user_id", userId).limit(5000);
+  if (r.error) return null;
+  return (r.data || []).reduce(function (sum, row) { return sum + (Number(row.units) || 0); }, 0);
 }
 
-module.exports = { runYoutubeRadarOnce, KEYWORDS };
+async function unitsToday(nowMs) {
+  try { return await youtubeUnitsToday(supabase, nowMs); } catch (e) { console.error("[YoutubeRadar] " + (e.message || e)); return null; }
+}
+
+/* One member's search: the videos for `keyword` and their comments, every call's units reserved first under the
+   member's id. Returns [{ id, text, author, published_at, url }]; [] when no call could be made. */
+async function searchComments(userId, keyword) {
+  if (!YOUTUBE_API_KEY) {
+    console.error("[YoutubeRadar] YOUTUBE_API_KEY is not set; no YouTube call made.");
+    return [];
+  }
+  async function reserve(method) {
+    try { await reserveYoutubeUnits(supabase, { caller: "radar", method: method, user_id: userId }); return true; }
+    catch (ledgerErr) { console.error("[YoutubeRadar] No YouTube call: " + (ledgerErr.message || ledgerErr) + "."); return false; }
+  }
+  var out = [];
+  if (!(await reserve("search.list"))) return out;
+  var searchData;
+  try { searchData = await fetchSearchResults(keyword); } catch (e) { console.error("[YoutubeRadar] search failed: " + (e.message || e)); return out; }
+  var videoIds = ((searchData && searchData.items) || []).map(function (item) { return item.id && item.id.videoId; }).filter(Boolean);
+  for (var v = 0; v < videoIds.length && v < SEARCH_MAX_RESULTS; v++) {
+    if (!(await reserve("commentThreads.list"))) break;
+    var data;
+    try { data = await fetchCommentThreads(videoIds[v]); } catch (e) { console.error("[YoutubeRadar] comments failed: " + (e.message || e)); continue; }
+    if (!data) continue;
+    (data.items || []).forEach(function (item) {
+      var thread = item.snippet && item.snippet.topLevelComment;
+      var sn = thread && thread.snippet;
+      if (!thread || !sn) return;
+      out.push({
+        id: thread.id,
+        text: sn.textOriginal || sn.textDisplay || "",
+        author: sn.authorDisplayName || null,
+        // The COMMENT's own time, not the video's (updatedAt for an edited comment with no publishedAt).
+        published_at: sn.publishedAt || sn.updatedAt || null,
+        url: "https://www.youtube.com/watch?v=" + videoIds[v] + "&lc=" + thread.id
+      });
+    });
+  }
+  return out;
+}
+
+/* What lib/memberRadar.js captureYoutube needs (deps.youtube). */
+function memberYoutubeDeps() {
+  return {
+    caps: function () { return youtubeCaps(process.env); },
+    worstCase: SEARCH_WORST_CASE_UNITS,
+    unitsUsedBy: unitsUsedBy,
+    unitsToday: unitsToday,
+    searchComments: searchComments,
+    useful: isUsefulYoutubeComment
+  };
+}
+
+module.exports = { SEARCH_MAX_RESULTS, SEARCH_WORST_CASE_UNITS, fetchSearchResults, fetchCommentThreads, unitsUsedBy, unitsToday, searchComments, memberYoutubeDeps };

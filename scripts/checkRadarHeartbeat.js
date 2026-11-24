@@ -1,37 +1,42 @@
 "use strict";
-/* ══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════
    checkRadarHeartbeat — the lead radar says it is alive, in the database.
 
-   leadRadar.js writes public.radar_status (migration 135) for 'bluesky': when
-   the radar starts, and at the end of every Bluesky capture tick with what
-   that tick did. This loads leadRadar.js in a vm with a stubbed BskyAgent, a
-   fake clock and a fake Supabase that records every write — no network, no
-   database, no Bluesky call of any kind.
+   leadRadar.js writes public.radar_status (migration 135), source 'bluesky':
+   when the radar starts, and at the end of every tick with what the tick's
+   Bluesky part did. This loads leadRadar.js in a vm with a stubbed BskyAgent,
+   a stub member radar that returns a scripted tick, a fake clock and a fake
+   Supabase that records every write: no network, no database, no Bluesky.
+
+   NAMED (Nov 23 2026, LR-2): BEFORE the tick was leadRadar.js's own capture
+   (runLeadRadarOnce), its row carried resumes_at from the gate, a skipped
+   back-off tick wrote null counts, and YouTube wrote a second row (source
+   'youtube', F). AFTER radarTick runs lib/memberRadar.js runTick for every
+   member and writes ONE row, the tick's, built by tickHeartbeat from the
+   tick's Bluesky result (searched, captured, stopped, or an error). YouTube
+   writes no row of its own any more, and resumes_at is null (the member
+   radar does not report it). The original is in git (65c0825).
 
    WHAT THIS PROVES
-     A. Starting the radar writes process_started_at, once, at the start.
-     B. Every outcome writes the right row: captured (a count of NEW rows, not
-        duplicates), nothing_new, backoff with resumes_at (both a 429 met in
-        the tick and a tick skipped for a back-off), no_credentials,
-        login_failed with last_error, and error with last_error.
-     C. Uncounted values stay null, never 0: a tick skipped for a back-off has
-        null searches and captured, and a tick whose insert count did not come
-        back has null captured.
-     D. A heartbeat write that fails — an error answer or a throw — never stops
-        or fails the tick: the capture still happens, it is logged once per
-        tick, and runLeadRadarOnce does not throw.
-     E. A radar that was loaded but not started writes no heartbeat, and
-        server.js starts it only when server.js is the program — so loading
-        server.js, as about twenty checks do, writes none.
-     F. NAMED (Nov 23 2026, LR-1): YouTube writes its own radar_status row (source 'youtube') after a
-        pass that ran: its outcome, searches and captured count; an error pass
-        and a thrown pass write outcome 'error'; a pass that did not run (inside
-        the 3-hour gap) writes nothing; with ENABLE_YOUTUBE_RADAR off, nothing.
+     A. Starting the radar writes process_started_at, once, at the start, then
+        the first tick's row.
+     B. tickHeartbeat maps every outcome: captured (a count), nothing_new,
+        backoff (a 429), no_credentials, login_failed (stopped with nothing
+        searched), and error with last_error; a tick with no Bluesky part
+        (no member searching Bluesky) is nothing_new with 0 and 0.
+     C. Uncounted values stay null, never 0: an error tick has null searches
+        and captured.
+     D. A heartbeat write that fails (an error answer or a throw) never stops
+        or fails the tick; it is logged.
+     E. A radar loaded but not started writes no heartbeat; one with no member
+        radar handed in (setMemberRadarDeps) writes no tick row; and server.js
+        starts it only when it is the program.
+     F. Only the 'bluesky' row is written: no source 'youtube', whatever the
+        YouTube switch says.
 
-   MUTATE=<name> edits leadRadar.js IN MEMORY (nothing on disk is touched).
-   MUTATE=all runs each in its own process; an unmatched search text is an
-   ERROR, never a catch (scripts/_shared.js).
-   ══════════════════════════════════════════════════════════════════════════ */
+   MUTATE=<name> edits leadRadar.js IN MEMORY; MUTATE=all runs each in its own
+   process; an unmatched search text is an ERROR, never a catch.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs"), path = require("path"), vm = require("vm");
 const REPO = path.join(__dirname, "..");
@@ -42,17 +47,15 @@ const RADAR = "leadRadar.js", GATE = "lib/bskyGate.js", SERVER = "server.js";
 const MUTATIONS = {
   // a failed heartbeat write throws into the tick
   "heartbeat-throws": [[RADAR, "  } catch (heartbeatErr) {\n    console.error(\"[LeadRadar] heartbeat (\"", "  } catch (heartbeatErr) {\n    throw heartbeatErr;\n    console.error(\"[LeadRadar] heartbeat (\""]],
-  // searches is written as 0 even when the tick searched nothing (a back-off skip)
-  "zero-for-uncounted": [[RADAR, "    searches: skipped ? null : tick.searches,", "    searches: tick.searches,"]],
   // a radar that was never started writes the heartbeat anyway
-  // NAMED (Nov 23 2026, LR-1): BEFORE (fields, when); the function takes a source now
   "heartbeat-without-start": [[RADAR, "async function writeRadarHeartbeat(fields, when, source) {\n  if (!radarStarted) return;\n", "async function writeRadarHeartbeat(fields, when, source) {\n"]],
-  // a tick skipped for a back-off is recorded as nothing_new
-  // NAMED (Nov 23 2026, LR-1): the YouTube pass writes no heartbeat
-  "youtube-heartbeat-skipped": [[RADAR, "        if (yt) {\n          await writeRadarHeartbeat({", "        if (false) {\n          await writeRadarHeartbeat({"]],
-  // NAMED (Nov 23 2026, LR-1): the YouTube row is written under the Bluesky source
-  "youtube-heartbeat-as-bluesky": [[RADAR, "          }, \"youtube pass\", \"youtube\");\n        }", "          }, \"youtube pass\");\n        }"]],
-  "nothing-new-in-backoff": [[RADAR, "  if (tick.stop) {\n    row.last_outcome = tick.stop.outcome;", "  if (tick.stop && !tick.stop.skipped) {\n    row.last_outcome = tick.stop.outcome;"]]
+  // NAMED (Nov 23 2026, LR-2): an error tick writes 0 and 0 (uncounted written as counted)
+  "zero-for-uncounted": [[RADAR, "  if (b.error) { row.last_outcome = \"error\"; row.last_error = String(b.error).slice(0, 1000); return row; }",
+    "  if (b.error) { row.last_outcome = \"error\"; row.last_error = String(b.error).slice(0, 1000); row.searches = 0; row.captured = 0; return row; }"]],
+  // NAMED (Nov 23 2026, LR-2): a 429 tick is recorded as nothing_new
+  "nothing-new-in-backoff": [[RADAR, "  if (b.stopped === \"rate_limited\") row.last_outcome = \"backoff\";\n  else ", "  "]],
+  // NAMED (Nov 23 2026, LR-2): a tick that throws writes no row
+  "error-tick-silent": [[RADAR, "    if (memberDeps) await writeRadarHeartbeat(tickHeartbeat(startedAt, result), \"tick\");", "    if (memberDeps && result && !(result.bluesky && result.bluesky.error)) await writeRadarHeartbeat(tickHeartbeat(startedAt, result), \"tick\");"]]
 };
 if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
@@ -70,269 +73,108 @@ function check(label, ok, detail) {
   if (ok) { passes++; console.log("    pass  " + label); }
   else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + String(detail).slice(0, 300) + "]" : "")); }
 }
-
-/* ── fake clock ────────────────────────────────────────────────────────────── */
-let CLOCK = Date.parse("2026-10-11T05:00:00.000Z");
-class FakeDate extends Date {
-  constructor(...a) { if (a.length === 0) super(CLOCK); else super(...a); }
-  static now() { return CLOCK; }
-}
-const iso = (ms) => new Date(ms).toISOString();
-
-/* ── the stubbed agent ─────────────────────────────────────────────────────── */
-const BSKY = { logins: 0, searches: 0, loginPlan: [], searchPlan: [] };
-function bskyError(status, error, headers) { const e = new Error("XRPC " + status + " " + error); e.status = status; e.error = error; if (headers) e.headers = headers; return e; }
-let POSTS_PER_SEARCH = 2;
-class FakeBskyAgent {
-  constructor() {
-    this.app = { bsky: { feed: { searchPosts: async (params) => {
-      BSKY.searches++;
-      const step = BSKY.searchPlan.length ? BSKY.searchPlan.shift() : "ok";
-      if (step instanceof Error) throw step;
-      const posts = Array.from({ length: POSTS_PER_SEARCH }, (_, i) => ({ uri: "at://did:plc:a/app.bsky.feed.post/" + params.q.replace(/\W/g, "") + i, cid: "c",
-        author: { did: "did:plc:a", handle: "a.bsky.social" }, record: { text: "post " + params.q, createdAt: iso(CLOCK) }, indexedAt: iso(CLOCK) }));
-      return { data: { posts } };
-    } } } };
-    this.login = async () => {
-      BSKY.logins++;
-      const step = BSKY.loginPlan.length ? BSKY.loginPlan.shift() : "ok";
-      if (step instanceof Error) throw step;
-      return { success: true };
-    };
-    this.post = async () => { throw new Error("no posting in this check"); };
-  }
-}
-
-/* ── the fake Supabase ─────────────────────────────────────────────────────── */
-// insertMode: "new" (every row new), "dupes" (none new), "uncounted" (data null), "error"
-function fakeSupabase(state) {
-  return {
-    from(table) {
-      const q = { table, op: null, payload: null, opts: null, cols: null };
-      const b = {
-        upsert(p, o) { q.op = "upsert"; q.payload = p; q.opts = o; return b; },
-        insert(p) { q.op = "insert"; q.payload = p; return b; },
-        select(c) { q.cols = c; return b; },
-        eq() { return b; }, in() { return b; }, order() { return b; }, limit() { return b; },
-        then(res, rej) {
-          state.log.push(q);
-          if (q.table === "radar_status") {
-            state.heartbeats.push(JSON.parse(JSON.stringify(q.payload)));
-            if (state.heartbeatFail === "throw") return Promise.reject(new Error("heartbeat connection dropped")).then(res, rej);
-            if (state.heartbeatFail === "error") return Promise.resolve({ data: null, error: { message: "permission denied for table radar_status" } }).then(res, rej);
-            return Promise.resolve({ data: null, error: null }).then(res, rej);
-          }
-          if (q.table === "bsky_leads" && q.op === "upsert") {
-            const rows = q.payload;
-            if (state.insertMode === "error") return Promise.resolve({ data: null, error: { message: "insert failed" } }).then(res, rej);
-            if (state.insertMode === "uncounted") return Promise.resolve({ data: null, error: null }).then(res, rej);
-            const fresh = state.insertMode === "dupes" ? [] : rows.filter(r => !state.leads.has(r.post_uri));
-            fresh.forEach(r => state.leads.add(r.post_uri));
-            return Promise.resolve({ data: fresh.map(r => ({ post_uri: r.post_uri })), error: null }).then(res, rej);
-          }
-          return Promise.resolve({ data: [], error: null }).then(res, rej);
-        }
-      };
-      return b;
-    }
-  };
-}
+const J = JSON.stringify;
+let CLOCK = Date.parse("2026-11-23T12:00:00.000Z");
+class FakeDate extends Date { constructor(...a) { if (a.length === 0) super(CLOCK); else super(...a); } static now() { return CLOCK; } }
+class FakeBskyAgent { constructor() { this.app = { bsky: { feed: { searchPosts: async () => ({ data: { posts: [] } }) } } }; this.login = async () => ({}); } }
+const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
 
 function loadModule(source, filename, requireFn, ctxExtra) {
   const m = { exports: {} };
   const ctx = Object.assign({ module: m, exports: m.exports, require: requireFn, __filename: filename, __dirname: path.dirname(filename),
-    Date: FakeDate, setTimeout: () => 0, setInterval: () => 0, clearInterval() {}, Promise, JSON, Math, Buffer, URL }, ctxExtra);
+    Date: FakeDate, setTimeout: () => 0, setInterval: () => 0, clearInterval() {}, Promise, JSON, Math, Buffer, URL, String, Object, Array, Number, Error }, ctxExtra);
   vm.createContext(ctx);
   vm.runInContext(source, ctx, { filename });
   return m.exports;
 }
 
-function radar(opts) {
-  const o = opts || {};
-  Object.assign(BSKY, { logins: 0, searches: 0, loginPlan: [], searchPlan: [] });
-  POSTS_PER_SEARCH = 2;
-  const state = { log: [], heartbeats: [], leads: new Set(), insertMode: "new", heartbeatFail: null };
-  const logs = [];
-  const logger = { log: (...a) => logs.push(a.join(" ")), error: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")) };
-  const proc = { env: Object.assign({ BLUESKY_IDENTIFIER: "us.bsky.social", BLUESKY_APP_PASSWORD: "pw", SUPABASE_URL: "http://fake", SUPABASE_SERVICE_KEY: "x" }, o.env || {}) };
-  const supabase = fakeSupabase(state);
+/* The radar, with a stub member radar whose runTick returns o.tick (or throws it), and a Supabase that records upserts. */
+function radar(o) {
+  o = o || {};
+  const state = { heartbeats: [], logs: [], ticks: 0 };
+  const logger = { log: (...a) => state.logs.push(a.join(" ")), error: (...a) => state.logs.push(a.join(" ")), warn: (...a) => state.logs.push(a.join(" ")) };
+  const proc = { env: Object.assign({ BLUESKY_IDENTIFIER: "us.bsky.social", BLUESKY_APP_PASSWORD: "x", SUPABASE_URL: "http://fake", SUPABASE_SERVICE_KEY: "x" }, o.env || {}) };
+  const sb = { from(t) { const b = { upsert(row) { if (t === "radar_status") state.heartbeats.push(row); return b; },
+    then(res, rej) { if (o.writeThrows) return Promise.reject(new Error("socket closed")).then(res, rej); return Promise.resolve(o.writeError ? { error: { message: "permission denied" } } : { error: null }).then(res, rej); } }; return b; } };
   const gateModule = loadModule(FILES[GATE], path.join(REPO, GATE), require, { console: logger, process: proc });
+  const memberStub = { AGENT_TYPE: "lead_radar", SCORE_ROUTE: "memberRadarScore",
+    runTick: async () => { state.ticks++; if (o.tick instanceof Error) throw o.tick; return o.tick === undefined ? { bluesky: { searched: 4, captured: 2, carried: 0, stopped: null } } : o.tick; } };
   const requireFn = (name) => {
     if (name === "dotenv") return { config() {} };
-    if (name === "@supabase/supabase-js") return { createClient: () => supabase };
+    if (name === "@supabase/supabase-js") return { createClient: () => sb };
     if (name === "@atproto/api") return { BskyAgent: FakeBskyAgent };
-    if (name === "@anthropic-ai/sdk") return function Anthropic() { throw new Error("no model in this check"); };
-    // NAMED (Nov 23 2026, LR-1): BEFORE a "./mastodonRadar" stub too; leadRadar.js no longer requires it (the file is deleted)
-    if (name === "./youtubeRadar") return { runYoutubeRadarOnce: async () => { if (o.youtube instanceof Error) throw o.youtube; return o.youtube === undefined ? null : o.youtube; } };
-    if (name === "./lib/resolveAnthropicKey") return () => async () => null;
     if (name === "./lib/bskyGate") return gateModule;
-    if (name === "./lib/ownerAccount") return require(path.join(REPO, "lib/ownerAccount"));
+    if (name === "./lib/memberRadar") return memberStub;   // NAMED (Nov 23 2026, LR-2)
+    if (name === "./youtubeRadar") return { memberYoutubeDeps: () => ({ youtube: true }) };
     throw new Error("unexpected require in leadRadar.js: " + name);
   };
   const mod = loadModule(FILES[RADAR], path.join(REPO, RADAR), requireFn, { console: logger, process: proc });
-  return { mod, state, logs, gate: mod.bskyGate };
+  if (o.deps !== false) mod.setMemberRadarDeps({ tierOf: async () => "member", callModel: async () => ({ text: "" }) });
+  return { mod, state };
 }
-const flush = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
-const tickRows = (st) => st.heartbeats.filter(h => "last_outcome" in h);
-const last = (st) => tickRows(st)[tickRows(st).length - 1] || {};
-const KEYWORDS = 32;
 
 (async function main() {
-  /* ── A. start ──────────────────────────────────────────────────────────── */
-  console.log("\n══ A. starting the radar writes process_started_at ══");
+  /* ── A ── */
+  console.log("\n══ A. starting the radar ══");
   let R = radar();
-  const startAt = iso(CLOCK);
-  await R.mod.startLeadRadar();
-  await flush();
-  const first = R.state.heartbeats[0] || {};
-  check("the first heartbeat is { source: bluesky, process_started_at: now }", JSON.stringify(first) === JSON.stringify({ source: "bluesky", process_started_at: startAt }), JSON.stringify(first));
-  check("it is an upsert on source", R.state.log.find(q => q.table === "radar_status").opts && R.state.log.find(q => q.table === "radar_status").opts.onConflict === "source");
-  check("process_started_at is written once", R.state.heartbeats.filter(h => h.process_started_at).length === 1);
-  check("the startup tick then writes its own heartbeat", tickRows(R.state).length === 1 && last(R.state).last_outcome === "captured", JSON.stringify(last(R.state)));
-
-  /* ── B. each outcome ───────────────────────────────────────────────────── */
-  console.log("\n══ B. each outcome writes the right row ══");
-  R = radar(); await R.mod.startLeadRadar(); await flush();
-  CLOCK += 300000;
-  const t0 = iso(CLOCK);
-  await R.mod.runLeadRadarOnce();
-  let h = last(R.state);
-  check("the same posts again: outcome nothing_new, " + KEYWORDS + " searches, captured 0 (the startup tick captured them all)",
-    h.last_outcome === "nothing_new" && h.searches === KEYWORDS && h.captured === 0, JSON.stringify(h));
-  POSTS_PER_SEARCH = 3;
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("captured counts only NEW rows: one new post per search → captured " + KEYWORDS, h.last_outcome === "captured" && h.searches === KEYWORDS && h.captured === KEYWORDS, JSON.stringify(h));
-  check("…with its start and finish times, no error and no resumes_at", h.last_tick_started_at === iso(CLOCK) && h.last_tick_finished_at === iso(CLOCK) && h.last_error === null && h.resumes_at === null, JSON.stringify(h));
-  check("nothing_new: searched and nothing new (the tick at " + t0 + ")", tickRows(R.state)[1].last_outcome === "nothing_new" && tickRows(R.state)[1].last_tick_started_at === t0);
-  R.state.insertMode = "dupes";
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("nothing_new when every match was a duplicate: captured 0, searches " + KEYWORDS, h.last_outcome === "nothing_new" && h.captured === 0 && h.searches === KEYWORDS, JSON.stringify(h));
-
-  R = radar(); await R.mod.startLeadRadar(); await flush();
-  BSKY.searchPlan = ["ok", bskyError(429, "RateLimitExceeded", { "retry-after": "900" })];
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("a 429 met in the tick: outcome backoff with resumes_at, the searches it made counted", h.last_outcome === "backoff" && h.resumes_at === iso(CLOCK + 900000) && h.searches === 1, JSON.stringify(h));
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("a tick skipped for the back-off: outcome backoff, resumes_at, no search made", h.last_outcome === "backoff" && h.resumes_at === iso(R.gate.backoffUntil()) && BSKY.searches === KEYWORDS + 2, JSON.stringify(h));
-
-  R = radar({ env: { BLUESKY_IDENTIFIER: "" } }); await R.mod.startLeadRadar(); await flush();
-  h = last(R.state);
-  check("no credentials: outcome no_credentials, 0 searches made", h.last_outcome === "no_credentials" && h.searches === 0 && BSKY.logins === 0, JSON.stringify(h));
-
-  R = radar();
-  BSKY.loginPlan = [bskyError(500, "InternalServerError")];
   await R.mod.startLeadRadar(); await flush();
-  h = last(R.state);
-  check("a failed login: outcome login_failed with last_error", h.last_outcome === "login_failed" && /500 InternalServerError/.test(h.last_error || "") && h.searches === 0, JSON.stringify(h));
+  check("A. the first write is process_started_at alone, once", R.state.heartbeats.length === 2 && !!R.state.heartbeats[0].process_started_at && Object.keys(R.state.heartbeats[0]).sort().join() === "process_started_at,source" &&
+    R.state.heartbeats.filter(h => h.process_started_at).length === 1, J(R.state.heartbeats));
+  const first = R.state.heartbeats[1] || {};
+  check("A. then the first tick's row: captured, 4 searches, 2 captured, started and finished", first.last_outcome === "captured" && first.searches === 4 && first.captured === 2 &&
+    !!first.last_tick_started_at && !!first.last_tick_finished_at && first.last_error === null && first.resumes_at === null && first.source === "bluesky", J(first));
 
-  R = radar(); await R.mod.startLeadRadar(); await flush();
-  BSKY.searchPlan = Array.from({ length: KEYWORDS }, () => bskyError(500, "UpstreamFailure"));
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("every search failing: outcome error with last_error", h.last_outcome === "error" && /UpstreamFailure/.test(h.last_error || ""), JSON.stringify(h));
-  R.state.insertMode = "error";
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("the insert failing: outcome error, last_error names it, captured null (not counted)", h.last_outcome === "error" && /insert failed/.test(h.last_error || "") && h.captured === null, JSON.stringify(h));
+  /* ── B, C ── */
+  console.log("\n══ B. every outcome, and C. nothing uncounted is a 0 ══");
+  const T = (b) => R.mod.tickHeartbeat("2026-11-23T12:00:00.000Z", b === undefined ? null : { bluesky: b });
+  const cases = [
+    ["captured", T({ searched: 3, captured: 5, stopped: null }), r => r.last_outcome === "captured" && r.searches === 3 && r.captured === 5],
+    ["nothing_new", T({ searched: 3, captured: 0, stopped: null }), r => r.last_outcome === "nothing_new" && r.searches === 3 && r.captured === 0],
+    ["backoff (a 429 met)", T({ searched: 1, captured: 0, stopped: "rate_limited" }), r => r.last_outcome === "backoff" && r.searches === 1],
+    ["no_credentials", T({ searched: 0, captured: 0, stopped: "no_credentials" }), r => r.last_outcome === "no_credentials"],
+    ["login_failed (stopped, nothing searched)", T({ searched: 0, captured: 0, stopped: "login_failed" }), r => r.last_outcome === "login_failed"],
+    ["error, with its message, and null counts (C)", T({ error: "member_leads upsert failed" }), r => r.last_outcome === "error" && r.last_error === "member_leads upsert failed" && r.searches === null && r.captured === null],
+    ["no Bluesky part (no member searches Bluesky): nothing_new, 0 and 0", T(undefined), r => r.last_outcome === "nothing_new" && r.searches === 0 && r.captured === 0]
+  ];
+  cases.forEach(([n, row, f]) => check("B. " + n, f(row), J(row)));
+  R = radar({ tick: new Error("member_leads read failed") });
+  await R.mod.startLeadRadar(); await flush();
+  const thrown = R.state.heartbeats.slice(-1)[0] || {};
+  check("B. a tick that throws: still a row, outcome error, its message, null counts", thrown.last_outcome === "error" && /member_leads read failed/.test(thrown.last_error || "") && thrown.searches === null && thrown.captured === null, J(R.state.heartbeats));
 
-  /* ── C. uncounted stays null ───────────────────────────────────────────── */
-  console.log("\n══ C. what was not counted is null, never 0 ══");
-  R = radar(); await R.mod.startLeadRadar(); await flush();
-  BSKY.loginPlan = [];
-  BSKY.searchPlan = [bskyError(429, "RateLimitExceeded")];
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("a tick skipped for a back-off: searches null and captured null", h.last_outcome === "backoff" && h.searches === null && h.captured === null, JSON.stringify(h));
-  R = radar(); await R.mod.startLeadRadar(); await flush();
-  R.state.insertMode = "uncounted";
-  POSTS_PER_SEARCH = 4;
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  h = last(R.state);
-  check("the insert count did not come back: captured null, searches counted, outcome error saying why",
-    h.captured === null && h.searches === KEYWORDS && h.last_outcome === "error" && /insert count did not come back/.test(h.last_error || ""), JSON.stringify(h));
-
-  /* ── D. a failed heartbeat never stops the tick ────────────────────────── */
+  /* ── D ── */
   console.log("\n══ D. a failed heartbeat write never stops the tick ══");
-  for (const mode of ["error", "throw"]) {
-    R = radar(); await R.mod.startLeadRadar(); await flush();
-    R.state.heartbeatFail = mode;
-    POSTS_PER_SEARCH = 3;
-    const leadsBefore = R.state.leads.size, logsBefore = R.logs.length;
-    CLOCK += 300000;
+  for (const how of ["writeError", "writeThrows"]) {
+    R = radar({ [how]: true });
     let threw = null;
-    try { await R.mod.runLeadRadarOnce(); } catch (e) { threw = e; }
-    const hbLogs = R.logs.slice(logsBefore).filter(l => /heartbeat \(tick\) not written/.test(l));
-    check("heartbeat " + mode + ": the tick does not throw", threw === null, threw && threw.message);
-    check("heartbeat " + mode + ": the capture still happened (" + KEYWORDS + " new leads written)", R.state.leads.size === leadsBefore + KEYWORDS, R.state.leads.size - leadsBefore);
-    check("heartbeat " + mode + ": logged once for the tick", hbLogs.length === 1, hbLogs.length);
-    CLOCK += 300000;
-    threw = null;
-    try { await R.mod.runLeadRadarOnce(); } catch (e) { threw = e; }
-    check("heartbeat " + mode + ": the next tick still runs", threw === null && BSKY.searches >= 3 * KEYWORDS, BSKY.searches);
+    try { await R.mod.startLeadRadar(); await flush(); await R.mod.radarTick(); } catch (e) { threw = e; }
+    check("D. " + (how === "writeError" ? "an error answer" : "a throw") + ": the ticks still ran and nothing threw, and it is logged",
+      threw === null && R.state.ticks === 2 && R.state.logs.some(l => /heartbeat \(tick\) not written/.test(l)), J({ threw: threw && threw.message, ticks: R.state.ticks, logs: R.state.logs.slice(-3) }));
   }
-  R = radar(); R.state.heartbeatFail = "throw";
-  let startThrew = null;
-  try { await R.mod.startLeadRadar(); await flush(); } catch (e) { startThrew = e; }
-  check("a failed start heartbeat does not stop the radar starting", startThrew === null && BSKY.searches === KEYWORDS, startThrew ? startThrew.message : BSKY.searches);
 
-  /* ── E. not started, no heartbeat ──────────────────────────────────────── */
-  console.log("\n══ E. a radar that was not started writes no heartbeat ══");
+  /* ── E ── */
+  console.log("\n══ E. no heartbeat from a radar that was not started ══");
   R = radar();
-  await R.mod.runLeadRadarOnce();
-  BSKY.searchPlan = [bskyError(429, "RateLimitExceeded")];
-  CLOCK += 300000;
-  await R.mod.runLeadRadarOnce();
-  check("loaded, ticked, never started: not one radar_status write", R.state.heartbeats.length === 0, JSON.stringify(R.state.heartbeats));
-  // NAMED (Oct 27 2026, launch item #7): BEFORE startLeadRadar() took nothing; AFTER it takes
-  // shutdownControl.trackInterval (a SIGTERM stops its interval). Still exactly one call, still guarded.
+  await R.mod.radarTick();
+  check("E. loaded, ticked, never started: not one radar_status write", R.state.ticks === 1 && R.state.heartbeats.length === 0, J(R.state.heartbeats));
+  R = radar({ deps: false });
+  await R.mod.startLeadRadar(); await flush();
+  check("E. started with no member radar handed in: process_started_at only, no tick row, no tick", R.state.heartbeats.length === 1 && !!R.state.heartbeats[0].process_started_at && R.state.ticks === 0, J(R.state.heartbeats));
   const startSite = FILES[SERVER].indexOf("    startLeadRadar(shutdownControl.trackInterval).catch(function (err) {");
   const guard = FILES[SERVER].lastIndexOf("  if (require.main === module) {\n", startSite);
-  // NAMED (Nov 23 2026, LR-1): BEFORE the start sat under 60 characters after the guard; AFTER the ledger hand-in (setModelLedger) sits
-  // between them, inside the same guard, so the distance is under 300 and the hand-in must be there too.
-  const handIn = FILES[SERVER].indexOf("    require(\"./leadRadar\").setModelLedger({ record: recordModelCall, enforce: enforceDailyModelCallLimit });\n", guard);
-  check("server.js starts the radar only when it is the program, so loading it (as the checks do) writes no heartbeat",
-    startSite > 0 && guard > 0 && startSite - guard < 300 && handIn > guard && handIn < startSite && (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1);
+  // NAMED (Nov 23 2026, LR-2): BEFORE the setModelLedger hand-in sat between guard and start (under 300). AFTER setMemberRadarDeps does, under 600.
+  const handIn = FILES[SERVER].indexOf("    require(\"./leadRadar\").setMemberRadarDeps(leadRadarMemberDeps);\n", guard);
+  check("E. server.js starts the radar only when it is the program, handing in the member radar first",
+    startSite > 0 && guard > 0 && startSite - guard < 600 && handIn > guard && handIn < startSite && FILES[SERVER].slice(guard, startSite).indexOf("\n  }") === -1 &&
+    (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1, startSite + " / " + guard + " / " + handIn);
 
-  /* ── F. YouTube's own heartbeat ───────────────────────────────────────── */
-  // NAMED (Nov 23 2026, LR-1): radar_status written for youtube too
-  console.log("\n══ F. YouTube writes its own radar_status row ══");
-  const ytRows = (st) => st.heartbeats.filter(h => h.source === "youtube");
-  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" }, youtube: { outcome: "captured", searches: 3, matched: 5, captured: 2, capturedKnown: true, error: null } });
+  /* ── F ── */
+  console.log("\n══ F. one row, the tick's ══");
+  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" }, tick: { bluesky: { searched: 2, captured: 0, stopped: null }, youtube: { searched: 3, captured: 1 } } });
   await R.mod.startLeadRadar(); await flush();
-  let yr = ytRows(R.state)[0] || {};
-  check("F1. a pass that ran: one youtube row, outcome captured, searches 3, captured 2, no error",
-    ytRows(R.state).length === 1 && yr.last_outcome === "captured" && yr.searches === 3 && yr.captured === 2 && yr.last_error === null && !!yr.last_tick_started_at && !!yr.last_tick_finished_at, JSON.stringify(ytRows(R.state)));
-  check("F1. ... and the Bluesky rows stay source bluesky", R.state.heartbeats.filter(h => h.source !== "youtube").every(h => h.source === "bluesky"), JSON.stringify(R.state.heartbeats.map(h => h.source)));
-  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" }, youtube: { outcome: "error", searches: 1, matched: 0, captured: 0, capturedKnown: false, error: "upsert for 'x': boom" } });
-  await R.mod.startLeadRadar(); await flush();
-  yr = ytRows(R.state)[0] || {};
-  check("F2. an uncounted capture is null, never 0, and the error is kept", yr.last_outcome === "error" && yr.captured === null && /boom/.test(yr.last_error || ""), JSON.stringify(yr));
-  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" }, youtube: new Error("quota ledger down") });
-  await R.mod.startLeadRadar(); await flush();
-  yr = ytRows(R.state)[0] || {};
-  check("F3. a pass that throws: outcome error, nulls, the message", yr.last_outcome === "error" && yr.searches === null && yr.captured === null && /quota ledger down/.test(yr.last_error || ""), JSON.stringify(yr));
-  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" } });
-  await R.mod.startLeadRadar(); await flush();
-  check("F4. a pass that did not run (null, inside the 3-hour gap): no youtube row", ytRows(R.state).length === 0, JSON.stringify(ytRows(R.state)));
-  R = radar({ youtube: { outcome: "captured", searches: 1, matched: 1, captured: 1, capturedKnown: true, error: null } });
-  await R.mod.startLeadRadar(); await flush();
-  check("F5. YouTube switched off: no youtube row", ytRows(R.state).length === 0, JSON.stringify(ytRows(R.state)));
+  check("F. YouTube switched on: every row is source bluesky, none youtube (BEFORE LR-2 a youtube row was written)", R.state.heartbeats.length === 2 && R.state.heartbeats.every(h => h.source === "bluesky"), J(R.state.heartbeats.map(h => h.source)));
+  check("F. leadRadar.js passes no source but the default to writeRadarHeartbeat", !/writeRadarHeartbeat\([^)]*,\s*"[^"]*",\s*"/.test(FILES[RADAR]));
 
-  check("zero Bluesky calls left this process (the agent is a stub)", true);
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");

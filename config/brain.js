@@ -11,7 +11,7 @@ const PLATFORM_KNOWLEDGE = {
   platform: {
     name: "BizForce AI",
     description:
-      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, content generation, an SMS subscriber and campaign workspace, and a digital card builder, unified under one account and one shared business profile. Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only; see Other systems.",
+      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, content generation, an SMS subscriber and campaign workspace, and a digital card builder, unified under one account and one shared business profile. Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar is a members' feature; see Other systems.",   // NAMED (Nov 23 2026, LR-2): BEFORE "Lead Radar works on one account only"
     /* NO PRICE AND NO TIER NAME HERE. This said $29.99 while the plan charged
        $199, and every agent repeated it. Both now come from server.js's
        PLAN_CONFIG at render time (useBillingPlans, below), so the figure the
@@ -19,7 +19,7 @@ const PLATFORM_KNOWLEDGE = {
     pricing: {
       model: "single_tier",
       description:
-        "One subscription unlocks every agent, the Oracle, content tools, the SMS workspace and the digital card builder — there are no feature-gated pricing tiers. SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on the one account that holds the platform's connected social credentials."
+        "One subscription unlocks every agent, the Oracle, content tools, the SMS workspace and the digital card builder — there are no feature-gated pricing tiers. SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar is for members only, so a free account does not have it."   // NAMED (Nov 23 2026, LR-2): BEFORE "works only on the one account that holds the platform's connected social credentials"
     }
   },
 
@@ -68,7 +68,21 @@ const PLATFORM_KNOWLEDGE = {
     lead_radar: {
       name: "Lead Radar",
       description:
-        "A background job that every 5 minutes collects public Bluesky posts matching buying-intent phrases (stored in bsky_leads). YouTube collection exists behind a switch that is off by default. There is no Mastodon or Reddit lead search, and nothing is ever replied to without a person approving the exact text first. When scoring is switched on, each collected post is rated 0-100 for buyer intent by a classifier that separates people asking for help from teachers, coaches and sellers, tagged with one product from a fixed list, and screened for whether a public reply would be safe and invited. It does not read the user's business profile. IT WORKS ON ONE ACCOUNT ONLY: the platform holds one connected social account, and Lead Radar's leads, scores and replies belong to the account that holds those credentials and are refused to every other. The leadRadar line in LIVE PLATFORM STATS says which this user is. If it says available, this user holds the credentials and Lead Radar is theirs to use. If it says not available, it is unavailable to them. If there is no leadRadar line, you do not know which account this is: do not tell the user either way."
+        // NAMED (Nov 23 2026, LR-2): BEFORE one account only (the platform's Bluesky credentials), posts stored in bsky_leads, tagged with one
+        // product from a fixed list. AFTER every member's own Lead Radar (lib/memberRadar.js, lib/leadRoutes.js, member_leads).
+        "A background job that every 5 minutes looks for people asking for what a member offers, searching the member's own Fingerprint words. " +
+        "It is a members' feature (the owner counts as a member); free accounts do not have it. " +
+        "Its sources are BizForce Needs (matched by category and place, never scored by AI), Bluesky, Threads (connected with the member's own Threads account; keyword search runs only after Meta approves it) " +
+        "and YouTube (behind a switch that is off by default; its comments are never scored and cannot be replied to). " +
+        "Each member's leads are kept in member_leads, and only that member sees them. " +
+        "When scoring is switched on, Bluesky and Threads leads are rated 0-100 against the member's own Fingerprint by one AI call each, on the member's own AI allowance and ledger, at most 40 a day, " +
+        "scored low when the author is selling the same thing, commenting, joking or not asking, and screened for whether a public reply would be safe and invited. " +
+        "It does not read the user's business profile. " +
+        "A reply posts only the exact text the member approved, from their own connected account; nothing is ever posted or sent on its own. " +
+        "Leads the member did not save, reply to or win are deleted after 30 days. The owner's old leads (bsky_leads) are a read-only archive for the owner. " +
+        "There is no Mastodon or Reddit lead search. " +
+        "The leadRadar line in LIVE PLATFORM STATS says whether this user has it. If it says available, Lead Radar is theirs to use. " +
+        "If it says not available, it is a members' feature they do not have. If there is no leadRadar line, you do not know which: do not tell the user either way."
     },
     social_publishing: {
       name: "Social Publishing",
@@ -87,8 +101,10 @@ const PLATFORM_KNOWLEDGE = {
       "One row per user — the shared grounding context (industry, goals, brand voice, competitors, products/services, etc.) every agent and the Oracle read before answering.",
     ai_tasks:
       "Every agent task run: agent_type, prompt, result, status. Doubles as the platform's activity log and each agent's own short-term memory (last few runs by agent_type).",
+    // NAMED (Nov 23 2026, LR-2): BEFORE "by the SEO and sales tools"; AFTER the sales tools that wrote memory (convertSingleLead,
+    // POST /api/agents/sales/lead-status) are removed, so only the SEO tool remains.
     agent_memory:
-      "Longer-lived per-agent insight memory (goal / task / campaign / insight / metric / conversation / report), written when a task completes for an agent that keeps memory, when an assignment starts, on each Oracle exchange, by the SEO and sales tools, and by the user from the memory page. The five newest per agent are read into that agent's next typed task.",
+      "Longer-lived per-agent insight memory (goal / task / campaign / insight / metric / conversation / report), written when a task completes for an agent that keeps memory, when an assignment starts, on each Oracle exchange, by the SEO tool, and by the user from the memory page. The five newest per agent are read into that agent's next typed task.",
     live_stats:
       "Aggregate usage counts — tasks run/completed, content items, SMS subscribers/opt-ins, campaigns — currently surfaced via GET /api/analytics/summary."
   }

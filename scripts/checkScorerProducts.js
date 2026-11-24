@@ -1,198 +1,113 @@
-/* ══════════════════════════════════════════════════════════════════════════
-   checkScorerProducts.js — the lead scorer and the drafter know every product
-   MrEarthRose.com sells, and are told which are topicals.
+/* ═════════════════════════════════════════════════════════════════════════
+   checkScorerProducts.js — Lead Radar's scorer and drafter name no product
+   but the member's own.
 
-   THE DEFECT. SCORER_ALLOWED_PRODUCTS (leadRadar.js) and
-   OUTREACH_SUPPLEMENT_PRODUCTS (server.js) both held two of the six Mr. Earth
-   Rose products, War Horse and Tongkat Ali. The scorer's prompt listed the same
-   two. War Horse Black, Sword Vitality XXL Xtreme, War Horse Xtreme and War
-   Horse Midnight could never be suggested, and a lead about one of them could
-   never be drafted.
+   NAMED (Nov 23 2026, LR-2): BEFORE this proved that SCORER_ALLOWED_PRODUCTS
+   (leadRadar.js) and OUTREACH_SUPPLEMENT_PRODUCTS (server.js) held all six
+   Mr. Earth Rose products, that scoreNewLeads' prompt listed each with its
+   topical or shot line, and that convertSingleLead's drafter was told what
+   each product is. AFTER LR-2 removed the owner's radar, its product lists,
+   its scorer and its drafter: Lead Radar is every member's, and it scores and
+   drafts against that member's own Fingerprint (what they offer, who they
+   serve, their place). The original is preserved in git (65c0825). What it
+   guarded, a model told the wrong offer, is still guarded, the other way: no
+   fixed product list can reach a member's lead.
 
-   WHAT THIS PROVES, from the working copy, with no model call and no database
-   write:
-     1. SCORER_ALLOWED_PRODUCTS holds all six, plus the book and "none".
-     2. OUTREACH_SUPPLEMENT_PRODUCTS holds all six, and the drafter classifies
-        a lead for each of them as a supplement-instruction offer.
-     3. The scorer prompt, built exactly as scoreNewLeads builds it, lists each
-        product on its own line and in the closing JSON contract.
-     4. The prompt states the distinction between topicals and things taken by
-        mouth: each topical's line says topical and for external use only,
-        each shot's line says shot, and the selection rule forbids a topical
-        for a post about something taken by mouth and the reverse.
-     5. The drafter is told what each product is: the lead context it builds
-        carries a facts line, and every topical's says For External Use Only.
+   WHAT THIS PROVES, from the working copy, with no model call, no database
+   and no network:
+     1. Removed: SCORER_ALLOWED_PRODUCTS, OUTREACH_SUPPLEMENT_PRODUCTS,
+        scoreNewLeads, convertSingleLead and the six product names appear
+        nowhere in leadRadar.js, server.js, lib/memberRadar.js or
+        lib/leadReplies.js code (comments aside).
+     2. The scoring prompt (lib/memberRadar.js scoringPrompt), built for a
+        member, carries that member's offer, categories, place and audience,
+        and names no product of anyone else; the score it parses has no
+        product field (score, reason, safety, invitation only).
+     3. The drafting prompt (lib/leadReplies.js draftPrompt) carries the
+        member's own offer, and its only link is the member's own listing,
+        or none.
 
-   WHAT THIS DOES NOT PROVE. Whether the model, given a post, then chooses the
-   right product. That needs a live model call, which no check here makes;
-   4 proves the prompt gives it what it needs to choose, not that it chooses.
-
-   MUTATE=drop:<product>  removes that product from both lists and from the
-                          scorer prompt before anything is evaluated (default
-                          "War Horse Midnight"). Its assertions in 1, 2 and 3
-                          must go red.
-   ══════════════════════════════════════════════════════════════════════════ */
-
-require("dotenv").config();
-
-const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
-const SUBJECT_USER_ID = resolveSubjectAccount();
-
-const fs = require("fs");
-const vm = require("vm");
-const path = require("path");
+   MUTATIONS (MUTATE=<name> edits a source IN MEMORY; MUTATE=all runs each):
+     product-in-scorer   the scoring prompt names "War Horse" again      → 2
+     product-field       the parsed score carries a suggested_product    → 2
+     product-in-drafter  the drafting prompt names "Tongkat Ali" again    → 3
+   ═════════════════════════════════════════════════════════════════════════ */
+"use strict";
+const fs = require("fs"), path = require("path"), Module = require("module");
 const REPO = path.join(__dirname, "..");
-
-const { createClient } = require("@supabase/supabase-js");
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-/* Nothing here writes; the guard is built so a future edit that adds a write
-   has somewhere to record it, and its read-back runs regardless. */
-const residue = createResidueGuard({ supabase: supabase, name: "scorerProducts", subject: SUBJECT_USER_ID, tables: [] });
-residue.install();
-
-const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
-// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
-if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["drop"]);
-if (MUTATE && !/^drop(:.+)?$/.test(MUTATE)) {
-  console.error("Unknown MUTATE=" + MUTATE + ". Known: drop, drop:<product name>");
-  process.exit(2);
-}
-const DROPPED = MUTATE ? (MUTATE.split(":")[1] || "War Horse Midnight") : null;
+const MUTATE = process.env.MUTATE || "";
 
-let failures = 0;
+const MR = "lib/memberRadar.js", LRP = "lib/leadReplies.js";
+const MUTATIONS = {
+  "product-in-scorer": [[MR, '    "What it offers: " + JSON.stringify(fp.offer_summary || "") + "\\n" +\n    "Categories: "',
+    '    "What it offers: " + JSON.stringify(fp.offer_summary || "") + " (suggest War Horse where it fits)\\n" +\n    "Categories: "']],
+  "product-field": [[MR, "  return { score: score, reason: reason, outreach_safe: obj.safety === \"SAFE\", reply_invited: obj.invitation === \"INVITED\" };",
+    "  return { score: score, reason: reason, outreach_safe: obj.safety === \"SAFE\", reply_invited: obj.invitation === \"INVITED\", suggested_product: obj.product || \"none\" };"]],
+  "product-in-drafter": [[LRP, '    "Who it serves: " + JSON.stringify(fp.who_you_serve || "") + "\\n" +\n    "Place: "',
+    '    "Who it serves: " + JSON.stringify(fp.who_you_serve || "") + "\\nMention Tongkat Ali.\\n" +\n    "Place: "']]
+};
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
+
+const FILES = {};
+["leadRadar.js", "server.js", MR, LRP].forEach(f => { FILES[f] = fs.readFileSync(path.join(REPO, f), "utf8").replace(/\r\n/g, "\n"); });
+if (MUTATE) {
+  const edits = MUTATIONS[MUTATE];
+  if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
+  for (const [file, from, to] of edits) FILES[file] = MUT.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
+  console.log("\n!! MUTATION: " + MUTATE);
+}
+function load(rel) {
+  const m = new Module(path.join(REPO, rel), module);
+  m.filename = path.join(REPO, rel);
+  m.paths = Module._nodeModulePaths(path.dirname(m.filename));
+  m._compile(FILES[rel], m.filename);
+  return m.exports;
+}
+
+let failures = 0, passes = 0;
 function check(label, ok, detail) {
-  if (ok) console.log("    pass  " + label);
-  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
+  if (ok) { passes++; console.log("    pass  " + label); }
+  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + String(detail).slice(0, 300) + "]" : "")); }
 }
-
+const code = src => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 const PRODUCTS = ["War Horse", "War Horse Black", "Tongkat Ali", "Sword Vitality XXL Xtreme", "War Horse Xtreme", "War Horse Midnight"];
-const TOPICALS = ["Sword Vitality XXL Xtreme", "War Horse Xtreme", "War Horse Midnight"];
-const SHOTS = ["War Horse", "War Horse Black"];
 
-let RADAR = fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8").replace(/\r\n/g, "\n");
-let SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
-
-/* The mutation removes the product from the two list literals and its line
-   from the prompt — the edit someone forgetting one product would leave. */
-if (DROPPED) {
-  const q = '"' + DROPPED + '"';
-  const dropFromList = (src, name) => src.replace(new RegExp("(const " + name + " = \\[[^\\]]*\\])"), function (lit) {
-    return lit.split(q + ", ").join("").split(", " + q).join("").split(q).join("");
-  });
-  const radarBefore = RADAR, serverBefore = SERVER;
-  RADAR = dropFromList(RADAR, "SCORER_ALLOWED_PRODUCTS");
-  SERVER = dropFromList(SERVER, "OUTREACH_SUPPLEMENT_PRODUCTS");
-  RADAR = RADAR.split("\n").filter(function (l) { return l.indexOf('"- ' + DROPPED + ":") === -1; }).join("\n");
-  RADAR = RADAR.split(" | " + DROPPED + " |").join(" |");
-  MUT.requireChanged(serverBefore, SERVER, "drop " + DROPPED + " from OUTREACH_SUPPLEMENT_PRODUCTS");
-  MUT.requireChanged(radarBefore, RADAR, "drop " + DROPPED + " from the scorer");
-  console.log("\n!! MUTATION: " + JSON.stringify(DROPPED) + " removed from both lists and the scorer prompt — its assertions must fail.");
+console.log("\n══ 1. the owner's product lists, scorer and drafter are removed ══");
+{
+  const all = Object.keys(FILES).map(f => code(FILES[f])).join("\n");
+  const gone = ["SCORER_ALLOWED_PRODUCTS", "OUTREACH_SUPPLEMENT_PRODUCTS", "scoreNewLeads", "convertSingleLead"].filter(n => all.indexOf(n) !== -1);
+  check("SCORER_ALLOWED_PRODUCTS, OUTREACH_SUPPLEMENT_PRODUCTS, scoreNewLeads and convertSingleLead appear in no code", gone.length === 0, gone.join(", "));
+  const named = PRODUCTS.filter(p => [MR, LRP, "leadRadar.js"].some(f => code(FILES[f]).indexOf(p) !== -1));
+  check("no product name is in the radar, its scorer or its drafter", named.length === 0, named.join(", "));
 }
 
-function constLiteral(src, name) {
-  const m = new RegExp("const " + name + " = (\\[[^\\]]*\\]);").exec(src);
-  if (!m) throw new Error(name + " not found");
-  return vm.runInNewContext(m[1]);
+console.log("\n══ 2. the scorer scores against the member's own Fingerprint ══");
+const M = load(MR);
+const FP = { offer_summary: "Emergency plumbing and drain repair", who_you_serve: "Homeowners in Leeds", place_city: "Leeds", place_region: "West Yorkshire", reach: "local",
+  keywords: ["blocked drain"], sources: { bluesky: true } };
+{
+  const p = M.scoringPrompt(FP, ["Plumbing"], { source: "bluesky", text: "Who can fix a blocked drain today?", lang: "en" });
+  check("the prompt carries the member's offer, category, place and audience",
+    p.indexOf(JSON.stringify(FP.offer_summary)) !== -1 && p.indexOf(JSON.stringify(["Plumbing"])) !== -1 && p.indexOf("Leeds, West Yorkshire") !== -1 && p.indexOf(JSON.stringify(FP.who_you_serve)) !== -1);
+  const named = PRODUCTS.concat(["MrEarthRose", "mrearthrose", "BlackSunCircle", "BizForceAI"]).filter(x => p.indexOf(x) !== -1);
+  check("and names no product of anyone else", named.length === 0, named.join(", "));
+  const parsed = M.parseScore('{"score": 82, "reason": "asks for a plumber today", "safety": "SAFE", "invitation": "INVITED", "product": "War Horse"}');
+  check("the parsed score is score, reason, safety and invitation only: a product the model names is never stored",
+    JSON.stringify(Object.keys(parsed || {}).sort()) === JSON.stringify(["outreach_safe", "reason", "reply_invited", "score"]), JSON.stringify(parsed));
 }
-function objectLiteral(src, name) {
-  const m = new RegExp("const " + name + " = (\\{[\\s\\S]*?\\n\\});").exec(src);
-  if (!m) throw new Error(name + " not found");
-  return vm.runInNewContext("(" + m[1] + ")");
+
+console.log("\n══ 3. the drafter writes for the member's own offer ══");
+{
+  const L = load(LRP);
+  const lead = { source: "bluesky", text: "Who can fix a blocked drain today?" };
+  const noLink = L.draftPrompt(FP, lead, null), withLink = L.draftPrompt(FP, lead, "https://bizforceai.net/listing.html?id=abc");
+  check("the prompt carries the member's offer and audience", noLink.indexOf(JSON.stringify(FP.offer_summary)) !== -1 && noLink.indexOf(JSON.stringify(FP.who_you_serve)) !== -1);
+  const named = PRODUCTS.concat(["MrEarthRose", "mrearthrose", "BlackSunCircle"]).filter(x => noLink.indexOf(x) !== -1 || withLink.indexOf(x) !== -1);
+  check("and names no product of anyone else", named.length === 0, named.join(", "));
+  check("its only link is the member's own listing, or none", /No links of any kind/.test(noLink) && /End with this link, exactly as written, and no other link: https:\/\/bizforceai\.net\/listing\.html\?id=abc/.test(withLink));
 }
 
-(async function main() {
-  await residue.sweepPrevious(SUBJECT_USER_ID);
-
-  console.log("\n══ 1. SCORER_ALLOWED_PRODUCTS (leadRadar.js) ══");
-  const allowed = constLiteral(RADAR, "SCORER_ALLOWED_PRODUCTS");
-  console.log("    " + JSON.stringify(allowed));
-  PRODUCTS.forEach(function (p) { check("1. holds " + JSON.stringify(p), allowed.indexOf(p) !== -1); });
-  check("1. still holds the book and \"none\"", allowed.indexOf("Quantum Jumping book") !== -1 && allowed.indexOf("none") !== -1);
-
-  console.log("\n══ 2. OUTREACH_SUPPLEMENT_PRODUCTS (server.js), and the offer it selects ══");
-  const supplement = constLiteral(SERVER, "OUTREACH_SUPPLEMENT_PRODUCTS");
-  const book = /const OUTREACH_BOOK_PRODUCT = ("[^"]*");/.exec(SERVER)[1];
-  console.log("    " + JSON.stringify(supplement));
-  const offerExpr = /var offerKind =\n([\s\S]*?);\n/.exec(SERVER);
-  if (!offerExpr) throw new Error("the offerKind expression was not found in convertSingleLead");
-  PRODUCTS.forEach(function (p) {
-    const kind = vm.runInNewContext(offerExpr[1], { OUTREACH_BOOK_PRODUCT: JSON.parse(book), OUTREACH_SUPPLEMENT_PRODUCTS: supplement, suggestedProduct: p });
-    check("2. holds " + JSON.stringify(p) + " and a lead for it is drafted (offer: " + kind + ")", supplement.indexOf(p) !== -1 && kind === "supplement", kind);
-  });
-
-  console.log("\n══ 3. the scorer prompt, as scoreNewLeads builds it ══");
-  const promptStart = RADAR.indexOf("var prompt =\n");
-  const promptEnd = RADAR.indexOf("}\";", promptStart);
-  if (promptStart < 0 || promptEnd < 0) throw new Error("the scorer prompt was not found in leadRadar.js");
-  const prompt = vm.runInNewContext(RADAR.slice(promptStart + "var prompt =".length, promptEnd + 2), {
-    lang: "en", source: "bluesky", discovery: "keyword search", lead: { post_text: "fixture post" }
-  });
-  const lines = prompt.split("\n");
-  const closing = lines.filter(function (l) { return l.indexOf("\"product\":") !== -1; })[0] || "";
-  const contract = /"product": "<([^>]*)>"/.exec(closing);
-  const contractValues = contract ? contract[1].split(" | ") : [];
-  console.log("    closing contract values: " + JSON.stringify(contractValues));
-  PRODUCTS.forEach(function (p) {
-    check("3. " + JSON.stringify(p) + " has its own line in the product list", lines.some(function (l) { return l.indexOf("- " + p + ":") === 0; }));
-    check("3. " + JSON.stringify(p) + " is in the closing JSON contract", contractValues.indexOf(p) !== -1, JSON.stringify(contractValues));
-  });
-  check("3. the contract's values are exactly SCORER_ALLOWED_PRODUCTS, in order",
-    JSON.stringify(contractValues) === JSON.stringify(allowed), JSON.stringify(contractValues) + " vs " + JSON.stringify(allowed));
-  check("3. the prompt says seven products", /classifier for seven products/.test(prompt));
-
-  console.log("\n══ 4. the prompt states topical versus taken by mouth ══");
-  function lineFor(p) { return lines.filter(function (l) { return l.indexOf("- " + p + ":") === 0; })[0] || ""; }
-  TOPICALS.forEach(function (p) {
-    const l = lineFor(p);
-    console.log("    " + l);
-    check("4. " + p + ": topical, for external use only", /topical|oil/i.test(l) && /for external use only/i.test(l), l);
-  });
-  SHOTS.forEach(function (p) {
-    const l = lineFor(p);
-    console.log("    " + l);
-    check("4. " + p + ": a liquid shot", /liquid herbal shot/.test(l), l);
-  });
-  check("4. the selection rule forbids a topical for something taken, and a shot for something applied",
-    /Never suggest a topical for a post about something to drink, swallow or take/.test(prompt) &&
-    /never suggest a shot or Tongkat Ali for a post about something to apply/.test(prompt));
-  check("4. Midnight is matched only on control or pacing, and no condition is named",
-    /Suggest War Horse Midnight only for a post about control or pacing/.test(prompt) &&
-    !/premature|ejaculat|erectile|\bED\b/i.test(lineFor("War Horse Midnight")));
-
-  console.log("\n══ 5. what the drafter is told about each product ══");
-  const facts = objectLiteral(SERVER, "OUTREACH_PRODUCT_FACTS");
-  /* The lead block also gives each product's destination (checkOutreachDestination.js
-     asserts what it says); it has to resolve for the block to build at all. */
-  const destinations = vm.runInNewContext(
-    /const OUTREACH_HOME_URL = [^\n]*/.exec(SERVER)[0] + "\n" +
-    /const OUTREACH_PRODUCT_DESTINATIONS = \{[\s\S]*?\n\};/.exec(SERVER)[0] + "\nOUTREACH_PRODUCT_DESTINATIONS");
-  const ctxMatch = /var leadBlock =\n([\s\S]*?: ""\);)/.exec(SERVER);
-  if (!ctxMatch) throw new Error("the drafter's lead context was not found in convertSingleLead");
-  const ctxExpr = ctxMatch[1].replace(/;\s*$/, "");
-  PRODUCTS.forEach(function (p) {
-    const text = vm.runInNewContext(ctxExpr, {
-      OUTREACH_PRODUCT_FACTS: facts, OUTREACH_PRODUCT_DESTINATIONS: destinations, handle: "@fixture",
-      lead: { post_text: "fixture", matched_keyword: "k", intent_score: 70, intent_reason: "r", suggested_product: p }
-    });
-    const line = text.split("\n").filter(function (l) { return l.indexOf("What the product is") === 0; })[0] || "";
-    const topical = TOPICALS.indexOf(p) !== -1;
-    check("5. " + p + ": the drafter gets a facts line" + (topical ? " saying For External Use Only" : " saying taken by mouth"),
-      !!line && (topical ? /For External Use Only/.test(line) && /never describe it as taken/.test(line) : /taken by mouth/.test(line)), line || "(no facts line)");
-  });
-
-  console.log("\n══ cleanup ══");
-  const done = await residue.cleanup("end of run");
-  if (done.leftovers.length) failures++;
-
-  console.log("");
-  if (failures) { console.log("CHECKS FAILED: " + failures); process.exit(1); }
-  console.log("ALL CHECKS PASSED");
-  process.exit(0);
-})().catch(function (err) {
-  console.error("\nThe check threw: " + ((err && err.stack) || err));
-  process.exit(1);
-});
+console.log("");
+if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
+console.log("ALL " + passes + " CHECKS PASSED");

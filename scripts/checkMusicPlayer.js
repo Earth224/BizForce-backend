@@ -89,6 +89,8 @@ const DASH = "F:dashboard.html", POPOUT = "F:music-popout.html", SETTINGS = "F:s
 const GUIDE = "F:scripts/termaximus-guide.js", BOOMBOX = "F:scripts/bf-boombox.js", PRESENCE = "F:scripts/termaximus-presence.js";
 /* A signed-in page whose mist tag a mutation can take away (G1 reads the pages through FILES). */
 const CRM = "F:crm.html";
+// NAMED (Nov 23 2026, LR-2): Lead Radar's rebuilt page, whose header I1 holds to its music anchor
+const LRP = "F:agents/lead-radar.html";
 const MIGRATION_157 = "supabase/migrations/157_user_preferences_music_player.sql", PROFILE = "F:profile.html";
 const UID = "aaaaaaaa-0000-4000-8000-000000000001";
 const OTHER = "bbbbbbbb-0000-4000-8000-000000000002";
@@ -204,6 +206,8 @@ const MUTATIONS = {
   // I: an unvalidated position value accepted by the server
   "position-unvalidated": [[LIBM, "    if (POSITIONS.indexOf(input.position) === -1) return { error: \"The position is follow or pinned.\", field: \"position\" };\n", ""]],
   // I: a page header changed (the dashboard's logo block)
+  // NAMED (Nov 23 2026, LR-2): the rebuilt Lead Radar header loses the music player's anchor
+  "lr2-anchor-lost": [[LRP, "<span class=\"brand-badge\" data-bf-boombox-anchor>BizForce AI</span>", "<span class=\"brand-badge\">BizForce AI</span>"]],
   "header-changed": [[DASH, "  <div class=\"topbar-brand\" data-bf-boombox-anchor>", "  <div class=\"topbar-brand topbar-brand-moved\" data-bf-boombox-anchor>"]],
   // H: the default without a logo moved back to the bottom left
   "default-bottom-left": [[BOOMBOX, "      return { left: EDGE, top: EDGE };", "      return { left: EDGE, top: window.innerHeight - EDGE - BAR_H };"]],
@@ -236,7 +240,7 @@ function readInto(key) {
   FILES[key] = fs.existsSync(p) ? lf(fs.readFileSync(p, "utf8")) : null;
 }
 [SERVER, LIBM, YOURDATA, MIGRATION, "lib/accountFiles.js", "lib/legal.js", "lib/legalPages.js", "lib/themes.js",
-  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE, BOOMBOX, PRESENCE, CRM, MIGRATION_157, PROFILE].forEach(readInto);
+  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE, BOOMBOX, PRESENCE, CRM, MIGRATION_157, PROFILE, LRP].forEach(readInto);
 if (FILES[MUSIC] === null) { console.log("    FAIL  frontend not found at " + FRONTEND + " (set BIZFORCE_FRONTEND_DIR)"); process.exit(1); }
 
 if (MUTATE) {
@@ -2054,6 +2058,15 @@ async function stageChecks(c) {
     const LR1_FROM = "; intent scoring runs only when switched on.", LR1_TO = "; Mastodon capture and intent scoring run only when switched on.";
     let now = fs.existsSync(path.join(FRONTEND, f)) ? unLogo1(headerOf(frontText(f))) : "";
     if (f === "agents/lead-radar.html" && now.split(LR1_FROM).length === 2) now = now.replace(LR1_FROM, LR1_TO);
+    /* NAMED (Nov 23 2026, LR-2): BEFORE agents/lead-radar.html's header was held to HEADER_BASE's, byte for byte. AFTER the
+       page was rebuilt to the owner's boards (back, the Lead Radar mark, settings), so its header is new on purpose; what
+       is held is the music player's anchor, the same element, exactly once (the music icon is kept). Every other page is
+       still compared byte for byte. */
+    if (f === "agents/lead-radar.html") {
+      const ANCHOR = '<span class="brand-badge" data-bf-boombox-anchor>BizForce AI</span>';
+      if (was.split(ANCHOR).length !== 2 || now.split(ANCHOR).length !== 2 || (now.match(/data-bf-boombox-anchor/g) || []).length !== 1) changedHeaders.push(f + " (its music anchor)");
+      continue;
+    }
     if (now !== was) changedHeaders.push(f);
   }
   check("I1. no header or logo order changed on any page: the header markup of every page (" + withHeader.length + " with one) is identical to " + HEADER_BASE + "'s",

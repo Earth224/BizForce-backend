@@ -47,7 +47,7 @@ const MUTATIONS = {
   "retention-open-too": [[SAFETY, '.delete().neq("status", "open").lt("resolved_at", yearAgo)', '.delete().lt("created_at", yearAgo)']],
   "report-unlimited": [[SERVER, 'app.post("/api/reports", requireAuth, reportLimiter, async function', 'app.post("/api/reports", requireAuth, async function']],
   // NAMED (Nov 20 2026, P2-3): the chain now ends with the post retention
-  "chain-dropped": [[SERVER, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);", ".then(shopifyDataRequestReminderTick).then(copyrightRestoreTick).then(postRetentionTick);"]]
+  "chain-dropped": [[SERVER, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick)\n", ".then(shopifyDataRequestReminderTick).then(copyrightRestoreTick).then(postRetentionTick)\n"]]
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, SAFETY, "scripts/bf-safety.js", "campaigns.html", "seller.html", "listing.html", "profile.html", "inbox.html", "messages.html"]);
 const { FILES, check, J, has } = T;
@@ -173,7 +173,7 @@ const report = (w, who, body) => SF.fileReport(w.db.client, who, Object.assign({
   const none = await SF.retentionTick({ supabase: idle.client, claimDailyJob: async () => false, now: () => new Date(NOW) });
   check("D5. a day already claimed: nothing deleted", J(none) === J({ claimed: false }) && idle.log.length === 0);
   check("D6. a step of the 04:45 chain, after the Shopify reminder, through the shared daily claim (job safety_retention)",
-    has(S, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);") &&   // NAMED (Nov 20 2026, P2-3): BEFORE the line ended at copyrightRestoreTick
+    has(S, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick)\n        .then(memberLeadsPurgeTick);") /* NAMED (Nov 23 2026, LR-2): the chain now ends with memberLeadsPurgeTick (Lead Radar's retention) */ &&   // NAMED (Nov 20 2026, P2-3): BEFORE the line ended at copyrightRestoreTick
     has(S, 'return await require("./lib/safety").retentionTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });') && SF.RETENTION_JOB_NAME === "safety_retention");
 
   /* ── E ── */

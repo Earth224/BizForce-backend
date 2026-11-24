@@ -17,7 +17,7 @@ The server reads `.env` (dotenv) in a local run. On Railway, every variable is s
 
 ## Environment variables
 
-These are all 91 variables the running server reads: `server.js` and every local module it requires (`lib/`, `config/`, `leadRadar.js`, `youtubeRadar.js`). The list is generated from those reads (`node scripts/_envReads.js` prints it), and `scripts/checkLaunchBlockB.js` fails when this table leaves one out. Only names are listed here, never values.
+These are all 92 variables the running server reads: `server.js` and every local module it requires (`lib/`, `config/`, `leadRadar.js`, `youtubeRadar.js`). The list is generated from those reads (`node scripts/_envReads.js` prints it), and `scripts/checkLaunchBlockB.js` fails when this table leaves one out. Only names are listed here, never values.
 
 A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything else, and the startup log names the variable when it is off. "On unless exactly `false`" is the reverse.
 
@@ -138,18 +138,20 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BLUESKY_IDENTIFIER` | none | The one Bluesky account the radar searches and replies from. |
+| `BLUESKY_IDENTIFIER` | none | The platform's Bluesky account. Lead Radar searches public posts with it for every member's Fingerprint words, and it replies only for the owner (whose own account it is); every other member replies from their own connected account. |
 | `BLUESKY_APP_PASSWORD` | none | Its app password. The check suite blanks both in every check. |
-| `ENABLE_YOUTUBE_RADAR` | off | Exactly `true` adds YouTube comments to the radar. |
+| `ENABLE_YOUTUBE_RADAR` | off | Exactly `true` searches YouTube comments for the members who turned YouTube on in their Fingerprint. |
 | `YOUTUBE_API_KEY` | none | The YouTube Data API key. |
 | `YOUTUBE_DAILY_UNIT_CAP` | `5000` | YouTube API units the whole server may spend per day. |
-| `YOUTUBE_RADAR_DAILY_UNITS` | `2500` | The radar's share of those units. |
+| `YOUTUBE_RADAR_DAILY_UNITS` | `2500` | The radar's share of those units, divided equally among the members with YouTube on (never over the cap). |
 | `ENABLE_YOUTUBE_RETENTION` | on | On unless exactly `false`: the daily deletion of YouTube data older than 30 days (YouTube's policy). |
-| `ENABLE_LEAD_SCORING` | off | Exactly `true` scores captured leads with a model call. |
-| `OUTREACH_MIN_INTENT` | `60` | The intent score (0 to 100) a lead needs before outreach considers it. |
-| `OUTREACH_DAILY_CAP` | `5` | Outreach replies per day, checked at the send. A blank, unparseable or below-1 value means 5. |
-| `OUTREACH_ACCOUNT_DAILY_CEILING` | `25` | Outreach sends per account per UTC day. A negative value stops outreach. |
-| `SALES_SEND_LIVE` | off | Exactly `true` lets the owner post a reply they approved (POST /api/agents/sales/send-approved, one lead, the exact text shown). Nothing posts without that approval. |
+| `ENABLE_LEAD_SCORING` | off | Exactly `true` scores each member's new Bluesky and Threads leads, one Haiku call per lead, on that member's own key first and their daily call and monthly spend limits (the model_calls ledger). Inside BizForce and YouTube leads are never scored. |
+| `LEAD_RADAR_DAILY_SCORE_CAP` | `40` | Leads scored per member per UTC day. A blank, unparseable or below-1 value means 40; leads over it wait for the next day. |
+| `OUTREACH_DAILY_CAP` | `5` | Lead Radar replies per member per day, checked at the send. A blank, unparseable or below-1 value means 5. |
+| `OUTREACH_ACCOUNT_DAILY_CEILING` | `25` | Lead Radar replies across all members per UTC day, checked at the send in the same guarded step. A negative value stops replies. |
+| `SALES_SEND_LIVE` | off | Exactly `true` lets a member post a reply they approved (POST /api/leads/:id/send, one lead, exactly the text they approved, from their own account). Nothing posts without that approval. |
+| `THREADS_APP_ID` | none | The app id of BizForce's Threads app (see "Threads app setup" below). Needed only for Threads; without it (or `THREADS_APP_SECRET`) Connect Threads answers 503 "Threads is not set up yet". |
+| `THREADS_APP_SECRET` | none | That app's secret, sent in the code exchange and the long-lived token exchange. Needed only for Threads, with `THREADS_APP_ID`. A secret; set it only on Railway and never commit it. |
 
 ### Background jobs and the BizCash wallet
 
@@ -182,6 +184,7 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `agentScheduleTick`: members' scheduled agent runs | cron `0 * * * *`, UTC | `ENABLE_AGENT_SCHEDULES` exactly `true` |
 | `emailSequenceTick`: one due step per enrollment | cron `0 * * * *`, UTC | `ENABLE_EMAIL_SEQUENCES` exactly `true` |
 | `youtubeRetentionTick`: delete YouTube data older than 30 days | cron `0 9 * * *`, UTC | on unless `ENABLE_YOUTUBE_RETENTION` is exactly `false` |
+| `memberLeadsPurgeTick` (`lib/memberRadar.js` purgeTick): delete each member's Lead Radar leads not saved, replied or won after 30 days | cron `15 9 * * *`, UTC | always (job_runs `member_leads_purge`) |
 | ops alert scan (`lib/opsAlert.js` scanTick) | cron `*/30 * * * *`, UTC | on unless `ENABLE_OPS_ALERTS` is exactly `false` |
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
@@ -200,7 +203,7 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `runNightlyBackup` | cron `BACKUP_CRON` (`0 8 * * *`), `BACKUP_TIMEZONE` (America/Los_Angeles) | `ENABLE_NIGHTLY_BACKUP` exactly `true` |
 | `dripTick`: SMS drip engine | every 5 minutes, and once at boot | `ENABLE_DRIP_SCHEDULER` exactly `true` |
 | `reminderTick`: calendar push reminders | every 60 seconds | always, when `server.js` is the program |
-| Lead Radar (`leadRadarTick`): Bluesky search | every 5 minutes | always, when `server.js` is the program (YouTube and scoring have their own gates above) |
+| Lead Radar (`leadRadarTick`, `lib/memberRadar.js`): each member's capture (Inside BizForce Needs, Bluesky through a shared 30-minute search cache, Threads with the member's own token), then scoring | every 5 minutes | always, when `server.js` is the program (YouTube and scoring have their own gates above) |
 
 Retired (Nov 23 2026, LR-1): `salesAutoConvertTick`, the Sales Agent auto-loop, and Mastodon lead search. Nothing is posted, replied or sent to anyone outside BizForce unless a person approved that exact text first.
 
@@ -371,6 +374,18 @@ Facebook on the Social Agent page (`lib/facebookAuth.js`, `lib/facebookApi.js`, 
 - **Pages:** a member connects one Page they can create content on (its tasks include CREATE_CONTENT). With several, they choose one; an unfinished choice is deleted after an hour.
 
 Until both variables are set, the Facebook routes but status and disconnect answer 503 and the page shows "Facebook connection isn't set up yet." Photos must be JPEG, PNG or GIF (from the Media Library) and videos MP4 or MOV (from Your videos); each file's fingerprint is checked right before Facebook is given its address, and a video's address is a signed link that stops working after 2 hours. Every post and every removal waits for the member's approval and runs once. Disconnecting deletes BizForce's copy; the member removes BizForce in Facebook's settings, under Business integrations.
+
+## Threads app setup
+
+Threads in Lead Radar (`lib/threadsAuth.js`, `lib/threadsApi.js`, `lib/threadsRoutes.js`, migration 204e) lets a member connect their own Threads account, search with its own query budget and post the replies they approve from it:
+
+- **Product:** a Meta app with the Threads API use case.
+- **Permissions:** `threads_basic`, `threads_keyword_search`, `threads_content_publish` and `threads_manage_replies`.
+- **Redirect URI:** exactly `https://dynamic-prosperity-production-5382.up.railway.app/api/social/threads/callback`.
+- **Credentials:** the Threads app id in `THREADS_APP_ID` and its secret in `THREADS_APP_SECRET`. The secret is kept only on Railway.
+- **Before the public can connect:** until the app is live only Threads Testers added to it can connect. `threads_keyword_search` needs Meta App Review; until it is approved a search sees only the member's own posts, and Lead Radar shows "Waiting for Meta's approval" on the Threads chip and in the Fingerprint instead of empty results.
+
+Until both variables are set, Connect Threads answers 503 "Threads is not set up yet".
 
 ## Google Wallet setup
 

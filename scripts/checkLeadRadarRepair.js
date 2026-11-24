@@ -1,34 +1,39 @@
 "use strict";
 /* ═════════════════════════════════════════════════════════════════════════════
    checkLeadRadarRepair.js — LR-1 (Nov 23 2026): Lead Radar repaired.
+   NAMED (Nov 23 2026, LR-2): BEFORE the outbound proof was the owner's
+   POST /api/agents/sales/send-approved and the platform scorer (scoreNewLeads).
+   AFTER LR-2 removed both: the only Lead Radar post is the member's own approved
+   reply, POST /api/leads/:id/send (lib/leadRoutes.js, lib/leadReplies.js), and
+   scoring runs on each member's own ledger (lib/memberRadar.js through server.js
+   leadRadarModelCall). Sections A, B, D, E and G are re-pointed to them;
+   scripts/checkLeadRadarMember.js proves the member rules in full.
 
    THE OWNER'S RULE. Nothing is posted, replied or sent to anyone outside BizForce
    unless a person approved that exact text first. Everyone, the owner included.
 
    WHAT IT PROVES (never the real database, never the network, no model call):
      A. Every outbound post or send in server.js, lib/, leadRadar.js and
-        youtubeRadar.js is accounted for: sendBlueskyReply is called from one
-        place, POST /api/agents/sales/send-approved, with the text in the request;
-        the platform's Bluesky login posts only there and in the proposal
-        executors a member approves; nothing creates a Twilio client or reads a
-        platform Mastodon token.
-     B. The automatic sales loop is gone: no runSalesAutoConvert, no
-        salesAutoConvertTick, no ENABLE_SALES_AUTOLOOP / SALES_AUTOLOOP_* read,
-        no schedule entry, no export. POST /api/agents/sales/convert drafts one
-        lead and never posts; segment mode answers 400.
+        youtubeRadar.js is accounted for: Lead Radar posts in one place, the
+        member's POST /api/leads/:id/send, with the text in the request, from the
+        member's own account (the platform's Bluesky login only for the owner);
+        the platform's login posts otherwise only in the proposal executor a
+        member approves and blueskyActAs; the radar only searches; nothing creates
+        a Twilio client or reads a platform Mastodon token.
+     B. The automatic sales loop and the old owner-only lead routes are gone.
      C. Mastodon lead search and replies are gone (files, imports, sources,
         sender, token reads), while members' own Mastodon posting stays
         (lib/memberMastodon.js byte for byte as committed, its routes present).
-     D. send-approved: owner only, SALES_SEND_LIVE is the master switch, the text
-        is required (300 at most, emoji stripped, links checked), the lead must be
-        Bluesky, scored, recent, outreach_safe and reply_invited, one reply per
-        post, and BOTH caps are checked at the send with the send reserved first,
-        so two racing requests never overshoot.
-     E. The scorer is on the ledger: every Anthropic call in leadRadar.js is
-        capped first and recorded after; youtubeRadar.js makes none; with no
-        ledger nothing is scored.
-     F. Every PART D fix, the SMS rules (no sending, consent recorded or the
+     D. POST /api/leads/:id/send: members only, SALES_SEND_LIVE is the master
+        switch, the text is the request's, the member's own account, and the caps
+        (OUTREACH_DAILY_CAP, OUTREACH_ACCOUNT_DAILY_CEILING) are checked at the
+        send with the reply reserved first, inside one serial step.
+     E. Scoring is on the member's ledger: no Lead Radar file calls a model of
+        its own; server.js hands callAnthropicText (limits, the member's key, the
+        ledger row) to the radar before it starts.
+     F. The PART D fixes, the SMS rules (no sending, consent recorded or the
         number is pending), and archived rows never shown as leads.
+     G. The pages.
 
    MUTATE=all runs every mutation in its own process; each must turn this red.
    ═════════════════════════════════════════════════════════════════════════════ */
@@ -41,64 +46,58 @@ const H = require("./_p21Harness");
 const S = require("./_shared");
 
 const SERVER = "@server.js", LR = "@leadRadar.js", YR = "@youtubeRadar.js", JOBS = "@lib/jobSchedules.js", ACCESS = "@lib/routeAccess.js";
+const RT = "@lib/leadRoutes.js", LRP = "@lib/leadReplies.js", MR = "@lib/memberRadar.js";
 const SALES = "agents/sales.html", RADAR = "agents/lead-radar.html", BFA = "scripts/bf-access.js", SITEMAP = "sitemap-pages.xml", SMS = "agents/sms.html";
 
 const MUTATIONS = {
   // A / D: the send route
-  "send-without-live-switch": [[SERVER, `    if (process.env.SALES_SEND_LIVE !== "true") {\n      return res.status(409).json({ error: "Posting replies is switched off (SALES_SEND_LIVE). Nothing was posted.", code: "send_off" });`, `    if (false) {\n      return res.status(409).json({ error: "Posting replies is switched off (SALES_SEND_LIVE). Nothing was posted.", code: "send_off" });`]],
-  "send-not-owner-only": [[SERVER, `    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) return res.status(403).json(OUTREACH_UNAVAILABLE);\n\n    if (process.env.SALES_SEND_LIVE`, `    if (false) return res.status(403).json(OUTREACH_UNAVAILABLE);\n\n    if (process.env.SALES_SEND_LIVE`]],
-  "send-no-length-limit": [[SERVER, `    if (Array.from(text).length > SEND_APPROVED_MAX_CHARS) {`, `    if (false) {`]],
-  "send-no-emoji-strip": [[SERVER, `    var text = stripOutreachEmoji(rawText);`, `    var text = rawText.trim() || null;`]],
-  "send-no-link-check": [[SERVER, `    if (linkRejection) return res.status(400)`, `    if (false) return res.status(400)`]],
-  "send-any-ref-token": [[SERVER, `        checkText = text.split(destUrl.origin + destUrl.pathname + "?ref=" + outreachRefToken(lead)).join(offerDestination);`, `        checkText = text.split("?ref=").map(function (part, i) { return i ? part.replace(/^[A-Za-z0-9_-]+/, "") : part; }).join("");`]],
-  "send-unsafe-allowed": [[SERVER, `    if (lead.outreach_safe !== true) refusals.push("not_outreach_safe");`, `    if (lead.outreach_safe === false) refusals.push("not_outreach_safe");`]],
-  "send-uninvited-allowed": [[SERVER, `    if (lead.reply_invited !== true) refusals.push("reply_not_invited");`, ``]],
-  "send-any-source": [[SERVER, `    if (OUTREACH_SENDABLE_SOURCES.indexOf(lead.source) === -1) refusals.push("unsupported_source");`, ``]],
-  "send-old-posts": [[SERVER, `    if (!Number.isFinite(postMs) || postMs < Date.now() - OUTREACH_MAX_POST_AGE_DAYS * 24 * 60 * 60 * 1000) refusals.push("post_too_old");`, ``]],
-  "send-archived": [[SERVER, `    if (lead.status !== "scored" || !leadHasRealScore(lead)) refusals.push("not_scored");`, ``]],
-  "cap-excludes-reservation": [[SERVER, `    if (mine > OUTREACH_DAILY_CAP) { await release();`, `    if (mine - 1 > OUTREACH_DAILY_CAP) { await release();`]],
-  "no-account-ceiling": [[SERVER, `    if (all > OUTREACH_ACCOUNT_DAILY_CEILING) { await release();`, `    if (false) { await release();`]],
-  "no-one-reply-per-post": [[SERVER, `  if ((anyReply.data || []).length) return { ok: false, reason: "already_contacted" };`, ``]],
-  "no-release-on-failure": [[SERVER, `      if (!result || !result.sent) { await slot.release();`, `      if (!result || !result.sent) {`]],
-  "count-error-sends": [[SERVER, `    await release();\n    console.error("[outreach] Cap check failed at the send — refusing:", (countErr && countErr.message) || countErr);\n    return { ok: false, reason: "check_failed" };`, `    console.error("[outreach] Cap check failed at the send — refusing:", (countErr && countErr.message) || countErr);`]],
+  "send-without-live-switch": [[SERVER, `sendLive: function () { return process.env.SALES_SEND_LIVE === "true"; },`, `sendLive: function () { return true; },`]],
+  "send-platform-for-members": [[RT, `    if (a.kind === "platform" && userId !== deps.ownerId) return { kind: "none", platform: "bluesky" };`, ``]],
+  "send-not-members-only": [[RT, `  app.post("/api/leads/:id/send", M, async`, `  app.post("/api/leads/:id/send", deps.requireAuth, async`]],
+  "send-text-not-request": [[RT, `      var raw = req.body && typeof req.body.text === "string" ? req.body.text : "";`, `      var raw = (req.body && req.body.draft) || "";`]],
+  "send-unreserved": [[RT, `        var slot = await LR.reserveReply(deps.sb, {`, `        var slot = { ok: true, id: "x", release: async function () {} }; void (LR.reserveReply, deps.sb, {`]],
+  "send-unsafe-allowed": [[LRP, `  if (lead.outreach_safe !== true) return`, `  if (lead.outreach_safe === false) return`]],
+  "caps-unwired": [[SERVER, `caps: { get perMember() { return OUTREACH_DAILY_CAP; }, get ceiling() { return OUTREACH_ACCOUNT_DAILY_CEILING; } },`, `caps: { perMember: 1000, ceiling: 100000 },`]],
+  "cap-excludes-reservation": [[LRP, `    if (mine.count > caps.perMember) { await release();`, `    if (mine.count - 1 > caps.perMember) { await release();`]],
+  "count-error-sends": [[LRP, `  } catch (err) {\n    await release();\n    return { ok: false, code: "check_failed", status: 503 };\n  }`, `  } catch (err) {\n    return { ok: true, id: id, release: release };\n  }`]],
   "cap-parse-nan": [[SERVER, `  var parsed = Math.floor(Number(raw));\n  if (!Number.isFinite(parsed) || parsed < 1) return 5;\n  return parsed;\n})();`, `  return Number(raw);\n})();`]],
-  // B: the loop and the convert route
-  "convert-sends": [[SERVER, `  // \${N}: the send block that stood here is gone; nothing in this function posts.`.replace("${N}", "NAMED (Nov 23 2026, LR-1)"), `  if (cleanMessage) await sendBlueskyReply(lead, cleanMessage);`]],
-  "segment-back": [[SERVER, `      return res.status(400).json({ error: "Provide lead_post_uri: one lead is drafted at a time." });`, `      targetLeads = [];`]],
+  // NAMED (Nov 23 2026, LR-2): BEFORE the anchor read cleanDraft(out && out.text, link); the drafter now splits the verdict first.
+  "draft-posts": [[RT, `      var draft = LR.cleanDraft(verdict.text, link);`, `      var draft = LR.cleanDraft(verdict.text, link);\n      await deps.actAs(userId, acct, function (agent) { return agent.post({ text: draft }); });`]],
+  "radar-posts": [[LR, `      return a.app.bsky.feed.searchPosts({ q: keyword, limit: 25, sort: "latest", since: sinceIso });`, `      a.post({ text: keyword });\n      return a.app.bsky.feed.searchPosts({ q: keyword, limit: 25, sort: "latest", since: sinceIso });`]],
+  // B: the loop and the old routes
   "autoloop-back": [[JOBS, `  { tick: "leadRadarTick", every_ms: 300000, jobs: [] },`, `  { tick: "salesAutoConvertTick", every_ms: 300000, jobs: [] },\n  { tick: "leadRadarTick", every_ms: 300000, jobs: [] },`]],
-  "convert-any-source": [[SERVER, `      if (OUTREACH_SENDABLE_SOURCES.indexOf(requestedLead.source) === -1) {`, `      if (false) {`]],
+  "old-send-route-back": [[SERVER, `function leadRadarModelCall(userId, prompt, maxTokens, route) {`, `app.post("/api/agents/sales/send-approved", requireAuth, function (req, res) { res.json({}); });\nfunction leadRadarModelCall(userId, prompt, maxTokens, route) {`]],
   // C: Mastodon
-  "mastodon-scorable": [[LR, `const SCORABLE_SOURCES = ["bluesky"];`, `const SCORABLE_SOURCES = ["bluesky", "mastodon"];`]],
-  "mastodon-sendable": [[SERVER, `const OUTREACH_SENDABLE_SOURCES = ["bluesky"];`, `const OUTREACH_SENDABLE_SOURCES = ["bluesky", "mastodon"];`]],
-  "mastodon-token-read": [[SERVER, `const SEND_APPROVED_MAX_CHARS = 300;`, `const SEND_APPROVED_MAX_CHARS = 300;\nvar platformMastodonToken = process.env.MASTODON_ACCESS_TOKEN;`]],
-  // E: the scorer
-  "scorer-unrecorded": [[LR, `        await modelLedger.record({\n          userId:    SCORING_ACCOUNT_ID,`, `        if (false) await modelLedger.record({\n          userId:    SCORING_ACCOUNT_ID,`]],
-  "scorer-uncapped": [[LR, `          await modelLedger.enforce(SCORING_ACCOUNT_ID, SCORER_LEDGER_ROUTE);`, `          void 0;`]],
-  "scorer-no-ledger-scores": [[LR, `var modelLedger = null;`, `var modelLedger = { record: async function () {}, enforce: async function () { return true; } };`]],
-  "scorer-wrong-agent": [[LR, `const SCORER_AGENT_TYPE = "lead_radar";`, `const SCORER_AGENT_TYPE = "sales";`]],
-  "youtube-unrecorded-call": [[YR, `module.exports = { runYoutubeRadarOnce, KEYWORDS };`, `async function summarise(t) { return new (require("@anthropic-ai/sdk"))().messages.create({ model: "m", max_tokens: 5, messages: [] }); }\nmodule.exports = { runYoutubeRadarOnce, KEYWORDS };`]],
+  "mastodon-scored": [[MR, `const SCORED_SOURCES = ["bluesky", "threads"];`, `const SCORED_SOURCES = ["bluesky", "threads", "mastodon"];`]],
+  "mastodon-sendable": [[LRP, `const REPLY_PLATFORMS = ["bluesky", "threads"];`, `const REPLY_PLATFORMS = ["bluesky", "threads", "mastodon"];`]],
+  "mastodon-token-read": [[SERVER, `function leadRadarModelCall(userId, prompt, maxTokens, route) {`, `var platformMastodonToken = process.env.MASTODON_ACCESS_TOKEN;\nfunction leadRadarModelCall(userId, prompt, maxTokens, route) {`]],
+  // E: scoring on the ledger
+  "scorer-platform-pays": [[SERVER, `  return callAnthropicText(prompt, maxTokens, userId, "claude-haiku-4-5-20251001", { user_id: userId, agent_type: "lead_radar", route: route });`, `  return callAnthropicText(prompt, maxTokens, null, "claude-haiku-4-5-20251001", { agent_type: "lead_radar", route: route });`]],
+  "scorer-deps-unset": [[SERVER, `    require("./leadRadar").setMemberRadarDeps(leadRadarMemberDeps);`, `    void leadRadarMemberDeps;`]],
+  "scorer-own-client": [[MR, `const FP = require("./leadFingerprint");`, `const FP = require("./leadFingerprint");\nconst Anthropic = require("@anthropic-ai/sdk");`]],
+  "youtube-unrecorded-call": [[YR, `module.exports = { SEARCH_MAX_RESULTS,`, `async function summarise(t) { return new (require("@anthropic-ai/sdk"))().messages.create({ model: "m", max_tokens: 5, messages: [] }); }\nmodule.exports = { SEARCH_MAX_RESULTS,`]],
+  "youtube-count-rows": [[MR, `  if (r.error) throw r.error;\n  return (r.data || []).length;\n}`, `  if (r.error) throw r.error;\n  return rows.length;\n}`]],
   // F: PART D
-  "demand-by-role": [[SERVER, `      if (userId !== OWNER_ACCOUNT_ID) {\n        return res.status(403).json({ error: DEMAND_OWNER_ONLY });`, `      if (req.user.role !== "admin") {\n        return res.status(403).json({ error: DEMAND_OWNER_ONLY });`]],
-  "draft-reply-open": [[SERVER, `    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) return res.status(403).json(LEAD_RADAR_UNAVAILABLE);\n`, ``]],
-  "card-leads-members": [[ACCESS, `  "get /api/digital-cards/:id/leads"   // NAMED`, `  "get /api/digital-cards/:id/leads-x"   // NAMED`]],
-  "youtube-count-rows": [[YR, `        var newCount = (insertedRows || []).length;`, `        var newCount = rows.length;`]],
-  "youtube-no-heartbeat": [[LR, `          }, "youtube pass", "youtube");`, `          }, "youtube pass");`]],
+  "demand-any-member": [[SERVER, `    q = q.eq("user_id", userId).neq("source", DEMAND_EXCLUDED_SOURCE).neq("status", "archived");`, `    q = q.neq("source", DEMAND_EXCLUDED_SOURCE).neq("status", "archived");`]],
+  "demand-owner-only": [[ACCESS, `"post /api/agents/rd/demand-signals"`, `"post /api/agents/rd/demand-signals-x"`]],
+  "card-leads-members": [[ACCESS, `  "get /api/digital-cards/:id/leads",   // NAMED`, `  "get /api/digital-cards/:id/leads-x",   // NAMED`]],
   "sms-sends": [[SERVER, `app.post("/api/sms/send", requireAuth, function (req, res) {\n  return res.status(503)`, `app.post("/api/sms/send", requireAuth, function (req, res) {\n  require("twilio")(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);\n  return res.status(503)`]],
   "sms-consent-optional": [[SERVER, `  if (!source || !Number.isFinite(atMs) || atMs > Date.now() + 5 * 60 * 1000) return { state: "none" };`, `  if (false) return { state: "none" };`]],
   "sms-consent-unrecorded": [[SERVER, `    if (ev.error) { console.error("[sms/consent] consent not recorded, number stored as pending:", ev.error.message); return "pending"; }`, ``]],
   "sms-none-opted-in": [[SERVER, `  if (proof.state !== "given") return "pending";`, `  if (proof.state !== "given") return "opted_in";`]],
   "drip-unguarded": [[SERVER, `if (require.main === module && process.env.ENABLE_DRIP_SCHEDULER === "true") {`, `if (process.env.ENABLE_DRIP_SCHEDULER === "true") {`]],
-  "archived-in-pipeline": [[SERVER, `      .neq("status", "archived")   // NAMED (Nov 23 2026, LR-1): archived rows never appear as leads`, ``]],
+  "archived-in-pipeline": [[SERVER, `          .neq("status", "archived")   // NAMED (Nov 23 2026, LR-1): archived rows are not leads`, ``]],
+  "archived-in-leads": [[RT, `.not("status", "in", "(dismissed,archived)")`, `.not("status", "in", "(dismissed)")`]],
   // frontend
-  "sales-confirm-back": [[SALES, `      function convertLead(idx, btn) {\n        var lead = currentLeads[idx];\n        if (!lead) return;`, `      function convertLead(idx, btn) {\n        var lead = currentLeads[idx];\n        if (!lead) return;\n        if (!window.confirm("Post?")) return;`]],
-  "sales-draft-posts": [[SALES, `          if (result) renderConversion(idx, result.conversion || "", result.draft || "", result.draft_rejection || "");`, `          if (result) { renderConversion(idx, result.conversion || "", result.draft || "", result.draft_rejection || ""); postApprovedReply(idx, btn); }`]],
-  "radar-console": [[RADAR, `The leads could not be loaded. Try Refresh in a moment.`, `Failed to load leads. Check console.`]],
-  "radar-no-signin": [[RADAR, `      if (!tok()) { showSignIn(countEl, list); return; }\n`, ``]],
+  "radar-posts-draft": [[RADAR, `      call("POST", "/api/leads/" + encodeURIComponent(l.id) + "/send", { text: text, add_link: S.sheetLink })`, `      call("POST", "/api/leads/" + encodeURIComponent(l.id) + "/send", { text: (S.lastDraft || text), add_link: S.sheetLink })`]],
+  "radar-draft-sends": [[RADAR, `        $("lrSheetBody").innerHTML = draftHtml(l, res.data);\n`, `        $("lrSheetBody").innerHTML = draftHtml(l, res.data); send();\n`]],
+  "radar-console": [[RADAR, `Sign in to see Lead Radar.`, `Failed to load leads. Check console.`]],
+  "sales-sends": [[SALES, `archiveRead = fetch(API_URL + "/api/leads/archive", { headers: { "Authorization": "Bearer " + token } })`, `archiveRead = fetch(API_URL + "/api/agents/sales/send-approved", { method: "POST", headers: { "Authorization": "Bearer " + token } })`]],
   "sfmessage-back": [[BFA, `"#pfsMessage", ".btn-message", "[data-members-only]"]`, `"#pfsMessage", ".btn-message", "#sfMessage", "[data-members-only]"]`]],
   "suppressed-back": [[SITEMAP, `</urlset>`, `  <url><loc>https://bizforceai.net/suppressed.html</loc></url>\n</urlset>`]]
 };
 
-const T = H.setup(__filename, MUTATIONS, [SERVER, LR, YR, JOBS, ACCESS, "@lib/memberMastodon.js", "@lib/yourData.js", "@README.md",
+const T = H.setup(__filename, MUTATIONS, [SERVER, LR, YR, JOBS, ACCESS, RT, LRP, MR, "@lib/leadFingerprint.js", "@lib/memberMastodon.js", "@lib/yourData.js", "@README.md",
   "@supabase/migrations/203_lr1_archived_and_sms_pending.sql", "@scripts/oneoff/lr1Archive.js", "@lib/triggerRunner.js", "@lib/agentSignatures.js",
   SALES, RADAR, BFA, SITEMAP, SMS, "sw.js", "privacy.html"]);
 const { FILES, check, finish, J, has, count } = T;
@@ -109,8 +108,7 @@ const OTHER = "22222222-2222-4222-8222-222222222222";
 function section(t) { console.log("\n== " + t); }
 function fnBody(src, sig) { const at = src.indexOf(sig); if (at < 0) return null; const open = src.indexOf("{", at + sig.length - 1); const end = S.braceMatch(src, open); return end > open ? src.slice(at, end + 1) : null; }
 function routeBody(method, p) { return H.routeStatement(SRC, method, p) || (function () { const at = SRC.indexOf("app." + method + "(\"" + p + "\","); if (at < 0) return null; const open = SRC.indexOf("{", at); const end = S.braceMatch(SRC, open); return SRC.slice(at, end + 1); })(); }
-/* A route run with only the small server definitions it is given (H.route builds the whole closure, which for the
-   convert and draft-reply routes is most of server.js and takes minutes). */
+/* A route run with only the small server definitions it is given. */
 function bareCtx(roots, stubs) {
   const ctx = Object.assign({ console: { log() {}, warn() {}, error() {} }, process: { env: {} }, Promise, Date, Math, JSON, Number, String, Object, Array, Set, Map, RegExp, Error,
     requireAuth: 0, requireActiveSubscription: 0, aiLimiter: 0, nowIso: () => new Date().toISOString(), setImmediate, setTimeout,
@@ -146,34 +144,85 @@ function bareRoute(method, p, roots, stubs) {
     return { status: res.statusCode, body: res.body, err: err && String(err.message || err) };
   };
 }
-const SEND_ROOTS = ["safeText", "stripOutreachEmoji", "leadHasRealScore", "OUTREACH_SENDABLE_SOURCES", "OUTREACH_MAX_POST_AGE_DAYS", "OUTREACH_BOOK_PRODUCT", "OUTREACH_BOOK_DESTINATION",
-  "OUTREACH_PRODUCT_DESTINATIONS", "outreachDraftRejection", "outreachSerial", "reserveOutreachSend", "OUTREACH_UNAVAILABLE", "formatLeadHandle", "SEND_APPROVED_MAX_CHARS", "outreachRefToken"];
 const SMS_ROOTS = ["safeText", "canonicalPhone", "smsConsentProof", "smsConsentStatusFor"];
-const CONVERT_NAMES = ["safeText", "leadHasRealScore", "LEAD_SCORE_FAILED_REASON", "OUTREACH_SENDABLE_SOURCES", "OUTREACH_MAX_POST_AGE_DAYS", "OUTREACH_UNAVAILABLE"];
 const libFiles = fs.readdirSync(path.join(H.REPO, "lib")).filter(f => /\.js$/.test(f));
 const LIB = {}; libFiles.forEach(f => { LIB[f] = FILES["@lib/" + f] || fs.readFileSync(path.join(H.REPO, "lib", f), "utf8").replace(/\r\n/g, "\n"); });
 const ALL = Object.assign({ "server.js": SRC, "leadRadar.js": FILES[LR], "youtubeRadar.js": FILES[YR] }, Object.fromEntries(Object.keys(LIB).map(k => ["lib/" + k, LIB[k]])));
+const OLD_ROUTES = ["app.get(\"/api/leads\",", "app.get(\"/api/leads/youtube-signals\"", "app.post(\"/api/leads/draft-reply\"", "app.get(\"/api/agents/sales/leads\"", "app.post(\"/api/agents/sales/convert\"",
+  "app.post(\"/api/agents/sales/send-approved\"", "app.post(\"/api/agents/sales/lead-status\"", "app.get(\"/api/agents/sales/pipeline\""];
+
+/* The send route, mounted from lib/leadRoutes.js against fakes. */
+const NOW = Date.now();
+function mkLead(o) { return Object.assign({ id: "aaaaaaaa-0000-4000-8000-0000000000aa", user_id: OTHER, source: "bluesky", external_id: "at://did:plc:a/app.bsky.feed.post/1", text: "Anyone know a plumber?",
+  posted_at: new Date(NOW - 86400000).toISOString(), score: 82, outreach_safe: true, reply_invited: true, status: "new" }, o || {}); }
+function sendWorld(lead, opts) {
+  opts = opts || {};
+  const st = { posted: [], acts: [], replies: [], released: 0, failCount: !!opts.failCount, count: opts.count || 0, live: opts.live !== false };
+  const db = H.fakeDb(function (t, q) {
+    if (t === "member_leads" && q.op === "select") return { data: lead && H.filterVal(q, "eq", "user_id") === lead.user_id ? lead : null, error: null };
+    if (t === "member_lead_replies") {
+      if (q.op === "insert") { st.replies.push(q.payload); return { data: { id: "r" + st.replies.length }, error: null }; }
+      if (q.op === "delete") { st.released++; st.replies.pop(); return { data: null, error: null }; }
+      if (q.op === "update") return { data: null, error: null };
+      if (q.head) return st.failCount ? { count: null, error: { message: "read failed" } } : { count: st.count + st.replies.length, error: null };
+      const uid = H.filterVal(q, "eq", "user_id");
+      return { data: uid ? [] : st.replies.map(r => ({ user_id: r.user_id })), error: null };
+    }
+    return { data: [], error: null };
+  });
+  const routes = [];
+  const reg = m => function (p) { routes.push({ m, p, hs: [].concat.apply([], [].slice.call(arguments, 1)) }); };
+  T.libRequire("./leadRoutes").mountLeadRoutes({ get: reg("GET"), post: reg("POST"), put: reg("PUT") }, {
+    sb: db.client, ownerId: OWNER, siteOrigin: "https://bizforceai.net",
+    requireAuth: function (req, res, next) { if (!req.user) return res.status(401).json({}); next(); },
+    requireActiveSubscription: function (req, res, next) { if (req.member !== true) return res.status(402).json({ code: "members_only" }); next(); },
+    callModel: async function () { throw new Error("no model in this check"); },
+    postingAccount: async function (userId, role) { return opts.account || (role === "admin" ? { kind: "platform" } : { kind: "member", handle: "m.bsky.social", row: {} }); },
+    actAs: async function (userId, acct, fn) { st.acts.push({ userId, kind: acct.kind }); return { ok: true, value: await fn({ getPosts: async a => ({ data: { posts: a.uris.map(u => ({ uri: u, cid: "c" })) } }), post: async r => { st.posted.push({ kind: acct.kind, text: r.text }); return { uri: "at://posted/1" }; } }) }; },
+    actFailure: function (res) { return res.status(502).json({}); }, linkFacets: function () { return []; },
+    replyRefsFor: function (p) { return { root: { uri: p.uri, cid: p.cid }, parent: { uri: p.uri, cid: p.cid } }; },
+    caps: { get perMember() { return opts.perMember || 5; }, get ceiling() { return 25; } }, sendLive: function () { return st.live; },
+    threads: { state: async function () { return { state: "not_connected" }; }, reply: async function () { throw new Error("no threads here"); } },
+    now: function () { return NOW; }
+  });
+  const r = routes.find(x => x.m === "POST" && x.p === "/api/leads/:id/send");
+  async function run(req) {
+    const res = { statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
+    req = Object.assign({ params: { id: mkLead().id }, body: {} }, req);
+    for (const h of r ? r.hs : []) { let go = false; await h(req, res, function () { go = true; }); if (!go) break; }
+    return { status: res.statusCode, body: res.body };
+  }
+  return { st, run: r ? run : null };
+}
 
 (async function main() {
   /* ── A ───────────────────────────────────────────────────────────────── */
   section("A. every outbound post or send is accounted for");
   {
-    const sbr = Object.keys(ALL).map(f => [f, (code(ALL[f]).match(/sendBlueskyReply\(/g) || []).length]).filter(x => x[1]);
-    check("A1. sendBlueskyReply is defined once and called once, both in server.js (" + J(sbr) + ")", J(sbr) === J([["server.js", 2]]));
-    const sendRoute = routeBody("post", "/api/agents/sales/send-approved") || "";
-    check("A2. ... and that one call is inside POST /api/agents/sales/send-approved, with the text from the request",
-      /result = await sendBlueskyReply\(lead, text\);/.test(sendRoute) && /var rawText = typeof \(req\.body && req\.body\.text\) === "string" \? req\.body\.text : "";/.test(sendRoute));
+    const sbr = Object.keys(ALL).filter(f => /sendBlueskyReply\(|sendMastodonReply\(/.test(code(ALL[f])));
+    check("A1. the platform's old reply sender is gone from every file (no sendBlueskyReply)", sbr.length === 0, J(sbr));
+    const rt = code(FILES[RT]);
+    const sendAt = rt.indexOf("app.post(\"/api/leads/:id/send\"");
+    const pbAt = rt.indexOf("async function postBluesky(");
+    check("A2. Lead Radar posts in one route only, POST /api/leads/:id/send, with the text from the request: one agent.post (in postBluesky, called once from the send) and one Threads reply",
+      (rt.match(/agent\.post\(/g) || []).length === 1 && rt.indexOf("agent.post(") > pbAt && (rt.match(/postBluesky\(/g) || []).length === 2 && rt.indexOf("postBluesky(", sendAt) < pbAt &&
+      (rt.match(/deps\.threads\.reply\(/g) || []).length === 1 && rt.indexOf("deps.threads.reply(") > sendAt && rt.indexOf("deps.threads.reply(") < pbAt &&
+      /var raw = req\.body && typeof req\.body\.text === "string" \? req\.body\.text : "";/.test(rt));
     const gateSites = (code(SRC).match(/bskyGate\.call\(/g) || []).length;
     const gateFns = [];
     { const re = /bskyGate\.call\(/g; let m; const c = code(SRC); while ((m = re.exec(c)) !== null) { const before = c.slice(0, m.index); const f = /(?:^|\n)(?:async )?function ([A-Za-z0-9_]+)\([^)]*\) \{(?![\s\S]*\n(?:async )?function [A-Za-z0-9_]+\()/.exec(before); gateFns.push(f ? f[1] : "?"); } }
-    check("A3. the platform's Bluesky login posts in three functions only: sendBlueskyReply, executePublishSocialPost and blueskyActAs (" + J(gateFns) + ")",
-      gateSites === 3 && J(gateFns.slice().sort()) === J(["blueskyActAs", "executePublishSocialPost", "sendBlueskyReply"]));
+    check("A3. the platform's Bluesky login posts in two functions only: executePublishSocialPost and blueskyActAs (" + J(gateFns) + ")",
+      gateSites === 2 && J(gateFns.slice().sort()) === J(["blueskyActAs", "executePublishSocialPost"]));
+    const lrc = code(FILES[LR]);
+    check("A3b. the radar's own gate calls only search (searchPosts), never post", (lrc.match(/bskyGate\.call\(/g) || []).length === 1 && /bskyGate\.call\(function \(a\) \{\n\s*return a\.app\.bsky\.feed\.searchPosts\(/.test(lrc) && !/\.post\(/.test(lrc));
     const execUsers = (code(SRC).match(/executePublishSocialPost/g) || []).length;
     check("A4. executePublishSocialPost runs only as the approved-proposal executor or the member's own filing (3 mentions: definition, executor map, the filing route)",
       execUsers === 3 && /publish_social_post: executePublishSocialPost,/.test(SRC) && /autoExecuteFiledProposal\(proposal, executePublishSocialPost\)/.test(SRC));
     const actAs = (code(SRC).match(/blueskyActAs\(/g) || []).length;
-    check("A5. blueskyActAs is used by the member's mention replies and profile edits (definition plus 3 calls), never by Lead Radar", actAs === 4 &&
-      !/blueskyActAs/.test(fnBody(SRC, "async function convertSingleLead(") || "x"));
+    check("A5. blueskyActAs: the member's mention replies and profile edits (definition plus 3 calls), and handed to Lead Radar's send as its account step",
+      actAs === 4 && /actAs: blueskyActAs, actFailure: blueskyActFailure,/.test(SRC));
+    check("A5b. ... where the platform account is the owner's alone (OWNER_ACCOUNT_ID, not the admin role)",
+      /if \(a\.kind === "platform" && userId !== deps\.ownerId\) return \{ kind: "none", platform: "bluesky" \};/.test(FILES[RT]) && /ownerId: OWNER_ACCOUNT_ID, siteOrigin: FRONTEND_URL,/.test(SRC));
     const twilioMade = Object.keys(ALL).filter(f => /twilio\s*\(\s*(process|accountSid|sid)|\.messages\.create\(\s*\{\s*(to|from|body)\s*:/.test(code(ALL[f])));
     check("A6. nothing creates a Twilio client or sends an SMS (twilio is used only to verify inbound webhooks)", twilioMade.length === 0 &&
       (code(SRC).match(/twilio\./g) || []).every(x => x === "twilio.") && /twilio\.validateRequest\(/.test(SRC) && (code(SRC).match(/twilio\.[a-zA-Z]+/g) || []).every(x => x === "twilio.validateRequest"), J(twilioMade));
@@ -181,12 +230,12 @@ const ALL = Object.assign({ "server.js": SRC, "leadRadar.js": FILES[LR], "youtub
     check("A7. no file reads a platform Mastodon token or instance", mastoReads.length === 0, J(mastoReads));
     const mm = LIB["memberMastodon.js"] || "";
     check("A8. the one Mastodon post (lib/memberMastodon.js /api/v1/statuses) runs on the member's own connection", (code(mm).match(/\/api\/v1\/statuses"/g) || []).length === 1 && !/process\.env\.MASTODON_ACCESS_TOKEN/.test(mm));
-    check("A9. convertSingleLead posts nothing: no sender, no Bluesky login, no outreach_sends write, no 'contacted'",
-      (function () { const b = code(fnBody(SRC, "async function convertSingleLead(") || ""); return b.length > 1000 && !/sendBlueskyReply|bskyGate|blueskyActAs|from\("outreach_sends"\)|status:\s*"contacted"/.test(b); })());
+    const radarFiles = ["lib/memberRadar.js", "lib/leadFingerprint.js", "lib/leadReplies.js", "leadRadar.js", "youtubeRadar.js"];
+    check("A9. the radar, the Fingerprint and the reply rules post nothing", radarFiles.every(f => !/\.post\(|actAs|replyTo\(|\.reply\(/.test(code(ALL[f]))));
   }
 
   /* ── B ───────────────────────────────────────────────────────────────── */
-  section("B. the automatic sales loop is gone");
+  section("B. the automatic sales loop and the old owner-only lead routes are gone");
   {
     const names = ["runSalesAutoConvert", "salesAutoConvertTick", "ENABLE_SALES_AUTOLOOP", "SALES_AUTOLOOP_DRY_RUN", "SALES_AUTOLOOP_DAILY_DRAFT_CAP", "salesAutoConvertRunning"];
     const left = names.filter(n => Object.keys(ALL).some(f => new RegExp("\\b" + n + "\\b").test(code(ALL[f]))));
@@ -194,15 +243,10 @@ const ALL = Object.assign({ "server.js": SRC, "leadRadar.js": FILES[LR], "youtub
     check("B2. lib/jobSchedules.js lists no salesAutoConvertTick and does list leadRadarTick", !/salesAutoConvertTick/.test(code(FILES[JOBS])) && /tick: "leadRadarTick", every_ms: 300000/.test(FILES[JOBS]));
     check("B3. a NAMED note says it is retired by the owner's rule", /runSalesAutoConvert \(the automatic sales loop\) is RETIRED by the owner's rule/.test(SRC));
     check("B4. module.exports carries no loop", !/runSalesAutoConvert/.test(code(SRC.slice(SRC.lastIndexOf("module.exports")))));
-    const convert = bareRoute("post", "/api/agents/sales/convert", CONVERT_NAMES, { supabase: H.fakeDb(() => ({ data: null, error: null })).client, OUTREACH_CREDENTIAL_OWNER_ID: OWNER });
-    const seg = await convert({ user: { id: OWNER }, body: { segment: { high_intent: true } } });
-    check("B5. convert with a segment and no lead answers 400 (segment mode is removed)", seg.status === 400 && /one lead is drafted at a time/.test((seg.body || {}).error || ""), J(seg));
-    const fake = H.fakeDb((t, q) => t === "bsky_leads" ? { data: { post_uri: "at://x", source: "mastodon", status: "scored", intent_score: 80, outreach_safe: true, reply_invited: true, post_created_at: new Date().toISOString() }, error: null } : { data: null, error: null });
-    const c2 = bareRoute("post", "/api/agents/sales/convert", CONVERT_NAMES, { supabase: fake.client, OUTREACH_CREDENTIAL_OWNER_ID: OWNER });
-    const mast = await c2({ user: { id: OWNER }, body: { lead_post_uri: "at://x" } });
-    check("B6. convert refuses a lead from a source no reply can go to (mastodon), before drafting", mast.status !== 200 && J(mast.body).indexOf("unsupported_source") !== -1, J(mast));
-    const other = await c2({ user: { id: OTHER }, body: { lead_post_uri: "at://x" } });
-    check("B7. convert is owner only", other.status === 403);
+    const back = OLD_ROUTES.filter(r => code(SRC).indexOf(r) !== -1);
+    check("B5. the eight old owner-only lead routes (convert, send-approved, draft-reply, sales leads, pipeline, lead-status, youtube-signals, the old GET /api/leads) are gone", back.length === 0, J(back));
+    const gone = ["convertSingleLead", "reserveOutreachSend", "canSendOutreach", "outreachDraftRejection", "OUTREACH_SENDABLE_SOURCES"].filter(n => new RegExp("\\b" + n + "\\b").test(code(SRC)));
+    check("B6. ... and their helpers (convertSingleLead, reserveOutreachSend, canSendOutreach, outreachDraftRejection, OUTREACH_SENDABLE_SOURCES)", gone.length === 0, J(gone));
   }
 
   /* ── C ───────────────────────────────────────────────────────────────── */
@@ -212,9 +256,11 @@ const ALL = Object.assign({ "server.js": SRC, "leadRadar.js": FILES[LR], "youtub
     const gone = ["runMastodonRadarOnce", "ENABLE_MASTODON_RADAR", "sendMastodonReply", "truncateToMastodonLimit", "mastodonRetryAfterSeconds", "startRedditRadar", "mastodonDisabledLogged"];
     const left = gone.filter(n => Object.keys(ALL).some(f => new RegExp("\\b" + n + "\\b").test(code(ALL[f]))));
     check("C2. no code names the radar, its gate, the platform sender or Reddit's start", left.length === 0, J(left));
-    check("C3. SCORABLE_SOURCES and OUTREACH_SENDABLE_SOURCES are Bluesky only", /const SCORABLE_SOURCES = \["bluesky"\];/.test(FILES[LR]) && /const OUTREACH_SENDABLE_SOURCES = \["bluesky"\];/.test(SRC));
-    check("C4. the scorer's prompt has no Mastodon branch, and the command centre counts no Mastodon finds",
-      !/source === "mastodon"/.test(code(FILES[LR])) && /var sources = \["bluesky", "youtube"\];/.test(SRC) && !/mastodon/.test(code(FILES["@lib/agentSignatures.js"]).slice(code(FILES["@lib/agentSignatures.js"]).indexOf("function sales("), code(FILES["@lib/agentSignatures.js"]).indexOf("function sales(") + 1500)));
+    check("C3. the scored sources and the reply platforms are Bluesky and Threads only (no Mastodon, no Reddit)",
+      /const SCORED_SOURCES = \["bluesky", "threads"\];/.test(FILES[MR]) && /const REPLY_PLATFORMS = \["bluesky", "threads"\];/.test(FILES[LRP]) && !/mastodon|reddit/i.test(code(FILES[MR]) + code(FILES[LRP]) + code(FILES[RT])));
+    // NAMED (Nov 23 2026, LR-2): BEFORE the list was ["bluesky", "youtube"] (the owner's bsky_leads); AFTER the member's own
+    // member_leads by source, BizForce Needs and Threads added. Still no Mastodon.
+    check("C4. the command centre counts no Mastodon finds", /var sources = \["bizforce", "bluesky", "youtube", "threads"\];/.test(SRC) && !/mastodon/.test(code(FILES["@lib/agentSignatures.js"]).slice(code(FILES["@lib/agentSignatures.js"]).indexOf("function sales("), code(FILES["@lib/agentSignatures.js"]).indexOf("function sales(") + 1500)));
     let committed = null;
     try { committed = cp.execFileSync("git", ["show", "HEAD:lib/memberMastodon.js"], { cwd: H.REPO, encoding: "utf8" }).replace(/\r\n/g, "\n"); } catch (e) { committed = null; }
     check("C5. lib/memberMastodon.js is byte for byte as committed", committed !== null && committed === FILES["@lib/memberMastodon.js"]);
@@ -224,227 +270,88 @@ const ALL = Object.assign({ "server.js": SRC, "leadRadar.js": FILES[LR], "youtub
   }
 
   /* ── D ───────────────────────────────────────────────────────────────── */
-  section("D. POST /api/agents/sales/send-approved");
-  const NOW = Date.now();
-  function mkLead(o) { return Object.assign({ post_uri: "at://did:plc:a/app.bsky.feed.post/1", source: "bluesky", status: "scored", intent_score: 82, intent_reason: "asks for help", outreach_safe: true, reply_invited: true,
-    suggested_product: "Quantum Jumping book", author_handle: "asker.bsky.social", post_created_at: new Date(NOW - 86400000).toISOString() }, o || {}); }
-  function world(leads, sends, opts) {
-    const st = { leads: leads, sends: sends || [], pipeline: [], tasks: [], posted: [], nextId: 1, failCount: false };
-    const db = H.fakeDb(function (t, q) {
-      if (t === "bsky_leads") return { data: st.leads.find(l => l.post_uri === H.filterVal(q, "eq", "post_uri")) || null, error: null };
-      if (t === "outreach_sends") {
-        if (q.op === "insert") {
-          const p = q.payload; if (st.sends.some(r => r.user_id === p.user_id && r.lead_post_uri === p.lead_post_uri)) return { data: null, error: { code: "23505", message: "duplicate" } };
-          const row = Object.assign({ id: "s" + (st.nextId++), sent_at: new Date().toISOString() }, p); st.sends.push(row); return { data: { id: row.id }, error: null };
-        }
-        if (q.op === "delete") { const id = H.filterVal(q, "eq", "id"); st.sends = st.sends.filter(r => r.id !== id); return { data: null, error: null }; }
-        if (q.op === "update") { const id = H.filterVal(q, "eq", "id"); st.sends.filter(r => r.id === id).forEach(r => Object.assign(r, q.payload)); return { data: null, error: null }; }
-        if (q.head) { if (st.failCount) return { count: null, error: { message: "read failed" } }; const u = H.filterVal(q, "eq", "user_id"); return { count: st.sends.filter(r => !u || r.user_id === u).length, error: null }; }
-        const uri = H.filterVal(q, "eq", "lead_post_uri"); return { data: st.sends.filter(r => r.lead_post_uri === uri).slice(0, 1), error: null };
-      }
-      if (t === "sales_lead_pipeline") { st.pipeline.push(q.payload); return { data: null, error: null }; }
-      if (t === "ai_tasks") { st.tasks.push(q.payload); return { data: null, error: null }; }
-      return { data: null, error: null };
-    });
-    const env = { SALES_SEND_LIVE: "true" };
-    const stubs = Object.assign({ supabase: db.client, OUTREACH_CREDENTIAL_OWNER_ID: OWNER, process: { env: env }, recordGateDecision: function () {},
-      RichText: require(require.resolve("@atproto/api", { paths: [H.REPO] })).RichText, URL: URL,
-      sendBlueskyReply: async function (lead, text) { st.posted.push({ uri: lead.post_uri, text: text }); await new Promise(r => setImmediate(r)); return (opts && opts.fail) ? { sent: false, reason: "post_error" } : { sent: true, uri: "at://posted/" + st.posted.length }; } },
-      (opts && opts.stubs) || {});
-    if (!("OUTREACH_DAILY_CAP" in stubs)) stubs.OUTREACH_DAILY_CAP = 5;
-    if (!("OUTREACH_ACCOUNT_DAILY_CEILING" in stubs)) stubs.OUTREACH_ACCOUNT_DAILY_CEILING = 25;
-    const run = bareRoute("post", "/api/agents/sales/send-approved", SEND_ROOTS, stubs);
-    return { st, env, run };
-  }
-  const GOOD = "That sounds hard. The book I wrote covers this, and the first chapter is free: https://blacksuncircle.com/";
+  section("D. POST /api/leads/:id/send");
+  const GOOD = "Try closing the valve under the sink first; a licensed plumber can usually fix a leaking trap the same day.";
   {
-    const w = world([mkLead()]);
+    const w = sendWorld(mkLead());
     check("D0. the route exists", typeof w.run === "function");
-    const r = await w.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D1. the owner's approved text is posted exactly as written, once", r.status === 200 && r.body && r.body.sent === true && J(w.st.posted) === J([{ uri: mkLead().post_uri, text: GOOD }]), J(r) + J(w.st.posted));
-    check("D2. ... the send is on the ledger with its uri, and the pipeline says contacted", w.st.sends.length === 1 && w.st.sends[0].platform_uri === "at://posted/1" && w.st.pipeline.some(p => p.status === "contacted" && p.last_draft === GOOD), J(w.st.sends));
-    const again = await w.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D3. a second reply to the same post is refused (already contacted) and nothing posts", again.status === 409 && again.body.reason === "already_contacted" && w.st.posted.length === 1, J(again));
-    const wo = world([mkLead()], [{ id: "x1", user_id: OTHER, lead_post_uri: mkLead().post_uri, sent_at: new Date(NOW - 5 * 86400000).toISOString() }]);
-    const byOther = await wo.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D3b. a post already replied to from any account (another day, another user) is refused: one reply per post", byOther.status === 409 && byOther.body.reason === "already_contacted" && wo.st.posted.length === 0, J(byOther));
-  }
-  {
-    const w = world([mkLead()]);
-    const r = await w.run({ user: { id: OTHER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D4. any other account is refused 403 and nothing posts", r.status === 403 && w.st.posted.length === 0, J(r));
-    w.env.SALES_SEND_LIVE = "false";
-    const off = await w.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D5. SALES_SEND_LIVE not exactly \"true\": refused, nothing reserved or posted", off.status === 409 && off.body.code === "send_off" && w.st.posted.length === 0 && w.st.sends.length === 0, J(off));
-  }
-  {
-    const cases = [
-      ["no text", { text: "" }, 400], ["301 characters", { text: "a".repeat(301) }, 400], ["a link to one of our own pages that is not the lead's destination", { text: "See https://mrearthrose.com/shop" }, 400],
-      ["a Stripe link", { text: "Buy here https://buy.stripe.com/abc" }, 400]
-    ];
-    for (const [name, body, want] of cases) {
-      const w = world([mkLead()]);
-      const r = await w.run({ user: { id: OWNER }, body: Object.assign({ lead_post_uri: mkLead().post_uri }, body) });
-      check("D6. refused: " + name + " (" + want + "), nothing posted", r.status === want && w.st.posted.length === 0 && w.st.sends.length === 0, J(r));
-    }
-    const w = world([mkLead()]);
-    const e = await w.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: "Glad to help " + String.fromCodePoint(0x1F600) + " with this" } });
-    check("D7. emoji are stripped from the approved text before it posts", e.status === 200 && w.st.posted.length === 1 && w.st.posted[0].text === "Glad to help with this", J(w.st.posted));
-    const w3 = world([mkLead()]);
-    const exact = await w3.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: "b".repeat(300) } });
-    check("D8. exactly 300 characters is allowed", exact.status === 200 && w3.st.posted.length === 1);
-    // the BizForce draft carries this lead's own arrival link (?ref=<token>); approved unchanged it posts, another token does not
-    const bizLead = mkLead({ suggested_product: "BizForceAI" });
-    const tokCtx = bareCtx(["outreachRefToken", "OUTREACH_PRODUCT_DESTINATIONS"], {});
-    const bizDest = new URL(tokCtx.OUTREACH_PRODUCT_DESTINATIONS.BizForceAI);
-    const tracked = "Happy to help: " + bizDest.origin + bizDest.pathname + "?ref=" + tokCtx.outreachRefToken(bizLead);
-    const w5 = world([bizLead]);
-    const t1 = await w5.run({ user: { id: OWNER }, body: { lead_post_uri: bizLead.post_uri, text: tracked } });
-    check("D8b. a BizForce draft approved unchanged, with this lead's own arrival link, posts exactly as written", t1.status === 200 && w5.st.posted.length === 1 && w5.st.posted[0].text === tracked, J(t1));
-    const w6 = world([bizLead]);
-    const t2 = await w6.run({ user: { id: OWNER }, body: { lead_post_uri: bizLead.post_uri, text: "Happy to help: " + bizDest.origin + bizDest.pathname + "?ref=lr-someoneelse" } });
-    check("D8c. ... with any other ref token it is refused, nothing posted", t2.status === 400 && w6.st.posted.length === 0, J(t2));
-  }
-  {
-    const bad = [["outreach_safe null", { outreach_safe: null }, "not_outreach_safe"], ["outreach_safe false", { outreach_safe: false }, "not_outreach_safe"],
-      ["reply_invited false", { reply_invited: false }, "reply_not_invited"], ["reply_invited null", { reply_invited: null }, "reply_not_invited"],
-      ["a Mastodon lead", { source: "mastodon" }, "unsupported_source"], ["an archived lead", { status: "archived" }, "not_scored"],
-      ["a post older than the window", { post_created_at: new Date(NOW - 30 * 86400000).toISOString() }, "post_too_old"]];
-    for (const [name, o, reason] of bad) {
-      const w = world([mkLead(o)]);
-      const r = await w.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-      check("D9. refused: " + name + " (" + reason + "), nothing posted or reserved", r.status === 422 && (r.body.reasons || []).indexOf(reason) !== -1 && w.st.posted.length === 0 && w.st.sends.length === 0, J(r));
-    }
-  }
-  {
-    const today = new Date().toISOString();
-    const w = world([mkLead()], [{ id: "old1", user_id: OWNER, lead_post_uri: "at://other/1", sent_at: today }], { stubs: { OUTREACH_DAILY_CAP: 1, OUTREACH_ACCOUNT_DAILY_CEILING: 25 } });
-    const r = await w.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D10. the owner's daily cap reached: refused at the send, the reservation removed, nothing posted", r.status === 409 && r.body.reason === "daily_cap_reached" && w.st.posted.length === 0 && w.st.sends.length === 1, J(r));
-    const w2 = world([mkLead()], [{ id: "o2", user_id: OTHER, lead_post_uri: "at://other/2", sent_at: today }], { stubs: { OUTREACH_DAILY_CAP: 5, OUTREACH_ACCOUNT_DAILY_CEILING: 1 } });
-    const r2 = await w2.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D11. the account ceiling reached (by any account's sends): refused, reservation removed", r2.status === 409 && r2.body.reason === "account_ceiling_reached" && w2.st.posted.length === 0 && w2.st.sends.length === 1, J(r2));
-    const w3 = world([mkLead()], [], { stubs: { OUTREACH_DAILY_CAP: 5, OUTREACH_ACCOUNT_DAILY_CEILING: 25 } });
-    w3.st.failCount = true;
-    const r3 = await w3.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D12. a cap that cannot be counted fails closed: refused, reservation removed", r3.status === 409 && r3.body.reason === "check_failed" && w3.st.posted.length === 0 && w3.st.sends.length === 0, J(r3));
-    const w4 = world([mkLead()], [], { fail: true });
-    const r4 = await w4.run({ user: { id: OWNER }, body: { lead_post_uri: mkLead().post_uri, text: GOOD } });
-    check("D13. a post that fails is not counted: the reservation is removed", r4.status === 502 && w4.st.sends.length === 0, J(r4) + J(w4.st.sends));
-  }
-  {
-    const A = mkLead({ post_uri: "at://did:plc:a/app.bsky.feed.post/A" }), B = mkLead({ post_uri: "at://did:plc:a/app.bsky.feed.post/B" });
-    const w = world([A, B], [], { stubs: { OUTREACH_DAILY_CAP: 1, OUTREACH_ACCOUNT_DAILY_CEILING: 25 } });
-    const both = await Promise.all([w.run({ user: { id: OWNER }, body: { lead_post_uri: A.post_uri, text: GOOD } }), w.run({ user: { id: OWNER }, body: { lead_post_uri: B.post_uri, text: GOOD } })]);
-    check("D14. two racing requests with one slot left: exactly one posts, the other is refused, one send recorded", w.st.posted.length === 1 && w.st.sends.length === 1 && both.filter(x => x.status === 200).length === 1, J(both.map(x => [x.status, x.body && x.body.reason])));
-    const sameW = world([A], [], { stubs: { OUTREACH_DAILY_CAP: 5, OUTREACH_ACCOUNT_DAILY_CEILING: 25 } });
-    const same = await Promise.all([sameW.run({ user: { id: OWNER }, body: { lead_post_uri: A.post_uri, text: GOOD } }), sameW.run({ user: { id: OWNER }, body: { lead_post_uri: A.post_uri, text: GOOD } })]);
-    check("D15. two racing requests for the same post: one reply only", sameW.st.posted.length === 1 && sameW.st.sends.length === 1, J(same.map(x => x.status)));
-    // the reservation alone, without the in-process queue: run reserveOutreachSend twice at once
-    const st = { sends: [], nextId: 1 };
-    const db = H.fakeDb(function (t, q) {
-      if (q.op === "insert") { if (st.sends.some(r => r.user_id === q.payload.user_id && r.lead_post_uri === q.payload.lead_post_uri)) return { error: { code: "23505" } }; const row = Object.assign({ id: "r" + st.nextId++ }, q.payload); st.sends.push(row); return { data: { id: row.id }, error: null }; }
-      if (q.op === "delete") { const id = H.filterVal(q, "eq", "id"); st.sends = st.sends.filter(r => r.id !== id); return { data: null, error: null }; }
-      if (q.head) return { count: st.sends.length, error: null };
-      return { data: st.sends.filter(r => r.lead_post_uri === H.filterVal(q, "eq", "lead_post_uri")), error: null };
-    });
-    const out = { reserve: bareCtx(["reserveOutreachSend"], { supabase: db.client, OUTREACH_DAILY_CAP: 1, OUTREACH_ACCOUNT_DAILY_CEILING: 25 }).reserveOutreachSend };
-    const got = await Promise.all([out.reserve(OWNER, A), out.reserve(OWNER, B)]);
-    check("D16. the reservation alone (no queue) never lets two racing sends past a cap of one", got.filter(g => g.ok).length <= 1 && st.sends.length <= 1, J(got));
-    check("D17. the route is in group M and its owner check is in the handler", require(path.join(H.REPO, "lib", "routeAccess.js")).groupOf("post /api/agents/sales/send-approved") === "M" &&
-      /if \(userId !== OUTREACH_CREDENTIAL_OWNER_ID\) return res\.status\(403\)\.json\(OUTREACH_UNAVAILABLE\);/.test(routeBody("post", "/api/agents/sales/send-approved")));
+    const r = await w.run({ user: { id: OTHER, role: "member" }, member: true, body: { text: GOOD, draft: "something else" } });
+    check("D1. a member's approved text is posted exactly as written, once, from the member's own account", r.status === 200 && r.body.sent === true && J(w.st.posted) === J([{ kind: "member", text: GOOD }]), J([r, w.st.posted]));
+    check("D2. ... reserved in member_lead_replies before it posted, with that text", w.st.replies.length === 1 && w.st.replies[0].text === GOOD && w.st.replies[0].user_id === OTHER);
+    const free = await sendWorld(mkLead()).run({ user: { id: OTHER }, member: false, body: { text: GOOD } });
+    check("D3. a free account is refused (402), members only", free.status === 402);
+    const off = sendWorld(mkLead(), { live: false });
+    const offR = await off.run({ user: { id: OTHER }, member: true, body: { text: GOOD } });
+    check("D4. SALES_SEND_LIVE not exactly \"true\": refused, nothing reserved or posted", offR.status === 409 && offR.body.code === "send_off" && off.st.posted.length === 0 && off.st.replies.length === 0, J(offR));
+    check("D5. server.js: SALES_SEND_LIVE is the master switch and the caps are OUTREACH_DAILY_CAP and OUTREACH_ACCOUNT_DAILY_CEILING, read at the send",
+      /sendLive: function \(\) \{ return process\.env\.SALES_SEND_LIVE === "true"; \},/.test(SRC) &&
+      /caps: \{ get perMember\(\) \{ return OUTREACH_DAILY_CAP; \}, get ceiling\(\) \{ return OUTREACH_ACCOUNT_DAILY_CEILING; \} \},/.test(SRC));
+    const plat = sendWorld(mkLead());
+    const pr = await plat.run({ user: { id: OTHER, role: "admin" }, member: true, body: { text: GOOD } });
+    check("D6. a member who is an admin is never given the platform account (Connect your Bluesky account to reply)", pr.status === 409 && pr.body.code === "not_connected" && plat.st.posted.length === 0, J(pr));
+    const ow = sendWorld(mkLead({ user_id: OWNER }));
+    const orr = await ow.run({ user: { id: OWNER, role: "admin" }, member: true, body: { text: GOOD } });
+    check("D7. the owner, with no connection, posts from the platform account (the owner's own)", orr.status === 200 && ow.st.posted.length === 1 && ow.st.posted[0].kind === "platform", J(orr));
+    const un = sendWorld(mkLead({ outreach_safe: null }));
+    const ur = await un.run({ user: { id: OTHER }, member: true, body: { text: GOOD } });
+    check("D8. a lead not scored SAFE is refused, nothing reserved or posted", ur.status === 422 && ur.body.code === "not_safe" && un.st.posted.length === 0 && un.st.replies.length === 0, J(ur));
+    const cap = sendWorld(mkLead(), { count: 5 });
+    const cr = await cap.run({ user: { id: OTHER }, member: true, body: { text: GOOD } });
+    check("D9. the member's 5 a day reached (counted WITH the reservation): refused at the send, the reservation removed, nothing posted",
+      cr.status === 429 && cr.body.code === "member_daily_cap" && cap.st.posted.length === 0 && cap.st.released === 1, J(cr));
+    const four = sendWorld(mkLead(), { count: 4 });
+    const fr = await four.run({ user: { id: OTHER }, member: true, body: { text: GOOD } });
+    check("D10. ... the 5th of the day posts", fr.status === 200 && four.st.posted.length === 1, J(fr));
+    const fc = sendWorld(mkLead(), { failCount: true });
+    const fcr = await fc.run({ user: { id: OTHER }, member: true, body: { text: GOOD } });
+    check("D11. a cap that cannot be counted fails closed: refused, reservation removed, nothing posted", fcr.status === 503 && fcr.body.code === "check_failed" && fc.st.posted.length === 0 && fc.st.released === 1, J(fcr));
+    const rt = code(FILES[RT]);
+    check("D12. the reservation and the post run inside one serial step (LR.serial), the reservation first",
+      /var outcome = await LR\.serial\(async function \(\) \{\n\s*var slot = await LR\.reserveReply\(deps\.sb,/.test(rt) && rt.indexOf("LR.reserveReply(") < rt.indexOf("postBluesky(userId, acct"));
     const iife = /const OUTREACH_DAILY_CAP = (\(function \(\) \{[\s\S]*?\}\)\(\));/.exec(SRC);
     const parse = v => iife ? vm.runInNewContext(iife[1], { process: { env: v === undefined ? {} : { OUTREACH_DAILY_CAP: v } }, Number, Math, String }) : NaN;
     const table = [[undefined, 5], ["", 5], ["  ", 5], ["abc", 5], ["0", 5], ["-2", 5], ["7", 7], ["2.9", 2]].map(([v, want]) => [v, parse(v), want]);
-    check("D18. OUTREACH_DAILY_CAP fails closed to 5, never NaN (" + J(table.map(x => x[1])) + ")", table.every(x => x[1] === x[2]), J(table));
+    check("D13. OUTREACH_DAILY_CAP fails closed to 5, never NaN (" + J(table.map(x => x[1])) + ")", table.every(x => x[1] === x[2]), J(table));
+    const RA = (() => { const m = new Module("ra", module); m._compile(FILES[ACCESS], path.join(H.REPO, "lib", "routeAccess.js")); return m.exports; })();
+    check("D14. the route is in group M", RA.groupOf("post /api/leads/:id/send") === "M" && RA.groupOf("post /api/leads/:id/draft") === "M");
+    check("D15. drafting never posts: the draft route makes no account call but the account check", (function () { const d = rt.slice(rt.indexOf("app.post(\"/api/leads/:id/draft\""), rt.indexOf("app.post(\"/api/leads/:id/send\"")); const body = d.slice(d.indexOf("{")); return body.length > 300 && !/actAs|postBluesky|\.post\(|threads\.reply/.test(body); })());
   }
 
   /* ── E ───────────────────────────────────────────────────────────────── */
-  section("E. the scorer is on the spend ledger");
+  section("E. scoring is on the member's ledger");
   {
-    const lr = code(FILES[LR]), yr = code(FILES[YR]);
-    const creates = (lr.match(/\.messages\.create\(/g) || []).length;
-    const helper = fnBody(lr, "async function createScoringMessage(") || "";
-    check("E1. leadRadar.js calls Anthropic only inside createScoringMessage (2 sites: the call and its one auth retry)", creates === 2 && (helper.match(/\.messages\.create\(/g) || []).length === 2);
-    const uses = (lr.match(/createScoringMessage\(/g) || []).length;
-    const at = lr.indexOf("var response = await createScoringMessage(");
-    const enforceAt = lr.lastIndexOf("await modelLedger.enforce(SCORING_ACCOUNT_ID, SCORER_LEDGER_ROUTE);", at);
-    const recordAt = lr.indexOf("await modelLedger.record({", at);
-    check("E2. createScoringMessage is called once; the caps are checked before it and the call recorded right after", uses === 2 && enforceAt !== -1 && at - enforceAt < 400 && recordAt !== -1 && recordAt - at < 400);
-    check("E3. the record names agent_type lead_radar, route scoreNewLeads, the model Anthropic returned and its usage",
-      /const SCORER_AGENT_TYPE = "lead_radar";/.test(FILES[LR]) && /const SCORER_LEDGER_ROUTE = "scoreNewLeads";/.test(FILES[LR]) &&
-      /agentType: SCORER_AGENT_TYPE,\n\s*route:\s*SCORER_LEDGER_ROUTE,\n\s*model:\s*\(response && response\.model\) \|\| "claude-sonnet-4-6",\n\s*usage:\s*response && response\.usage,/.test(FILES[LR]));
-    check("E4. youtubeRadar.js makes no Anthropic call at all", !/anthropic|messages\.create\(/i.test(yr));
-    check("E5. server.js hands recordModelCall and enforceDailyModelCallLimit to the radar before it starts",
-      /require\("\.\/leadRadar"\)\.setModelLedger\(\{ record: recordModelCall, enforce: enforceDailyModelCallLimit \}\);\n\s*startLeadRadar\(/.test(SRC));
-
-    // run the real scorer against fakes
-    async function score(opts) {
-      const calls = { creates: [], records: [], enforces: [], updates: [] };
-      const fakeSb = { createClient: () => ({ from: (t) => {
-        const q = { t, op: "select", filters: [] }; const b = {};
-        ["select", "eq", "in", "order", "limit", "neq", "is", "lt", "gt", "gte", "maybeSingle", "single"].forEach(m => { b[m] = function () { if (m === "maybeSingle" || m === "single") return Promise.resolve({ data: null, error: null }); return b; }; });
-        b.update = p => { q.op = "update"; calls.updates.push(p); return b; };
-        b.upsert = () => b;
-        b.then = (res, rej) => Promise.resolve(t === "bsky_leads" && q.op === "select" ? { data: [{ id: 1, source: "bluesky", status: "new", post_text: "my legs are weak, any help?", matched_keyword: "weak legs", lang: "en", score_attempts: 0 }], error: null } : { data: null, error: null }).then(res, rej);
-        return b; } }) };
-      function FakeAnthropic() { this.messages = { create: async (p) => { calls.creates.push(p.model); return { model: "claude-sonnet-4-6", usage: { input_tokens: 120, output_tokens: 30 }, content: [{ type: "text", text: "{\"score\": 70, \"reason\": \"asks\", \"product\": \"none\", \"outreach_safe\": true, \"reply_invited\": true}" }] }; } }; }
-      const stubs = { "@supabase/supabase-js": fakeSb, "@anthropic-ai/sdk": FakeAnthropic, "@atproto/api": { BskyAgent: function () { return {}; } }, "dotenv": { config() {} } };
-      const m = new Module(path.join(H.REPO, "leadRadar.js"), module);
-      m.filename = path.join(H.REPO, "leadRadar.js"); m.paths = Module._nodeModulePaths(H.REPO);
-      const realReq = m.require.bind(m);
-      m.require = function (n) {
-        if (stubs[n]) return stubs[n];
-        if (n === "./lib/resolveAnthropicKey") return () => { const f = async () => null; f.withSource = async () => ({ key: null }); return f; };
-        if (n === "./youtubeRadar") return { runYoutubeRadarOnce: async () => null };
-        return realReq(n);
-      };
-      const saved = process.env.ANTHROPIC_API_KEY; process.env.ANTHROPIC_API_KEY = "sk-check-fake-never-sent";
-      const quiet = console.log, qe = console.error, qw = console.warn; console.log = console.error = console.warn = function () {};
-      try {
-        m._compile(FILES[LR], m.filename);
-        if (opts.ledger) m.exports.setModelLedger({ record: async d => { calls.records.push(d); }, enforce: async (u, r) => { calls.enforces.push([u, r, calls.creates.length]); if (opts.refuse) { const e = new Error("cap"); e.status = 429; throw e; } return true; } });
-        await m.exports.scoreNewLeads();
-      } finally { console.log = quiet; console.error = qe; console.warn = qw; if (saved === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved; }
-      return calls;
-    }
-    const ok = await score({ ledger: true });
-    check("E6. a scored lead: the caps were checked before the call and the call was recorded once with its tokens",
-      ok.creates.length === 1 && ok.enforces.length === 1 && ok.enforces[0][2] === 0 && ok.records.length === 1 && ok.records[0].agentType === "lead_radar" &&
-      ok.records[0].route === "scoreNewLeads" && ok.records[0].model === "claude-sonnet-4-6" && ok.records[0].usage.input_tokens === 120, J(ok));
-    const none = await score({ ledger: false });
-    check("E7. no ledger handed in: nothing is scored (no call made)", none.creates.length === 0 && none.updates.length === 0, J(none));
-    const refused = await score({ ledger: true, refuse: true });
-    check("E8. a cap refusal: no call is made and no attempt is counted against the lead", refused.creates.length === 0 && refused.updates.length === 0, J(refused));
+    const files = [FILES[LR], FILES[YR], FILES[MR], FILES[RT], FILES[LRP], FILES["@lib/leadFingerprint.js"]];
+    check("E1. no Lead Radar file calls a model of its own (no Anthropic client, no messages.create)", files.every(f => !/anthropic|messages\.create\(/i.test(code(f))));
+    check("E2. every score is ONE deps.callModel call with the member's id and the route memberRadarScore (agent_type lead_radar)",
+      (code(FILES[MR]).match(/deps\.callModel\(/g) || []).length === 1 && /out = await deps\.callModel\(userId, scoringPrompt\(member\.fp, names, lead\), 300, SCORE_ROUTE\);/.test(FILES[MR]) &&
+      /const SCORE_ROUTE = "memberRadarScore";/.test(FILES[MR]) && /const AGENT_TYPE = "lead_radar";/.test(FILES[MR]));
+    check("E3. server.js: callModel is callAnthropicText (limits first, the member's key first, the ledger row), with the member as payer and on the ledger as lead_radar",
+      /function leadRadarModelCall\(userId, prompt, maxTokens, route\) \{\n\s*return callAnthropicText\(prompt, maxTokens, userId, "claude-haiku-4-5-20251001", \{ user_id: userId, agent_type: "lead_radar", route: route \}\);/.test(SRC) &&
+      /callModel: leadRadarModelCall,/.test(SRC));
+    check("E4. server.js hands the member radar its deps before the radar starts", /require\("\.\/leadRadar"\)\.setMemberRadarDeps\(leadRadarMemberDeps\);[\s\S]{0,400}startLeadRadar\(/.test(SRC));
+    check("E5. with no deps handed in the radar captures and scores nothing", /if \(!memberDeps\) \{/.test(FILES[LR]) && /memberDeps = deps && typeof deps\.tierOf === "function" && typeof deps\.callModel === "function" \? deps : null;/.test(FILES[LR]));
+    check("E6. youtubeRadar.js makes no Anthropic call at all", !/anthropic|messages\.create\(/i.test(code(FILES[YR])));
   }
 
   /* ── F ───────────────────────────────────────────────────────────────── */
   section("F. the PART D fixes, SMS, and archived rows");
   {
-    const RA = require(path.join(H.REPO, "lib", "routeAccess.js"));
     const accessFile = FILES[ACCESS];
     const g = k => { const m = new Module("ra", module); m._compile(accessFile, path.join(H.REPO, "lib", "routeAccess.js")); return m.exports.groupOf(k); };
-    const inH = (() => { const m = new Module("ra", module); m._compile(accessFile, path.join(H.REPO, "lib", "routeAccess.js")); return m.exports.ADMIN_IN_HANDLER; })();
-    const demand = routeBody("post", "/api/agents/rd/demand-signals") || "";
-    check("F1. demand-signals checks the owner by OWNER_ACCOUNT_ID, not role, and is in group A with the check in the handler",
-      /if \(userId !== OWNER_ACCOUNT_ID\) \{\n\s*return res\.status\(403\)\.json\(\{ error: DEMAND_OWNER_ONLY \}\);/.test(demand) && !/req\.user\.role !== "admin"/.test(code(demand)) &&
-      g("post /api/agents/rd/demand-signals") === "A" && inH.indexOf("post /api/agents/rd/demand-signals") !== -1);
-    const dr = bareRoute("post", "/api/leads/draft-reply", ["LEAD_RADAR_UNAVAILABLE"], { supabase: H.fakeDb(() => ({ data: null, error: null })).client, OUTREACH_CREDENTIAL_OWNER_ID: OWNER });
-    const drr = dr ? await dr({ user: { id: OTHER }, body: { post_text: "help", handle: "x" } }) : null;
-    check("F2. draft-reply refuses every account but the owner (403 lead_radar_unavailable) and is in group A", drr && drr.status === 403 && drr.body.code === "lead_radar_unavailable" &&
-      g("post /api/leads/draft-reply") === "A" && inH.indexOf("post /api/leads/draft-reply") !== -1, J(drr));
+    const demand = fnBody(SRC, "async function loadDemandRows(") || "";
+    check("F1. demand-signals is every member's (group M) and reads only that member's own leads (member_leads, user_id)",
+      g("post /api/agents/rd/demand-signals") === "M" && /q = q\.eq\("user_id", userId\)/.test(demand) && /\.from\("member_leads"\)/.test(demand) && !/bsky_leads/.test(code(demand)));
+    check("F2. the owner's old draft-reply route is gone", SRC.indexOf("app.post(\"/api/leads/draft-reply\"") === -1 && g("post /api/leads/draft-reply") === null);
     check("F3. the card leads read is in group F (a member always reads their own leads), and its comment says so",
       g("get /api/digital-cards/:id/leads") === "F" && /in group F now \(lib\/routeAccess\.js\), which is what makes that sentence true/.test(SRC));
     check("F4. no import of startRedditRadar or runMastodonRadarOnce; the reddit_leads table is kept (no migration drops it)",
       !/require\("\.\/redditRadar"\)|require\("\.\/mastodonRadar"\)/.test(code(SRC) + code(FILES[LR])) &&
       !fs.readdirSync(path.join(H.REPO, "supabase", "migrations")).filter(f => /.sql$/.test(f)).some(f => /drop table[^;]*reddit_leads/i.test(fs.readFileSync(path.join(H.REPO, "supabase", "migrations", f), "utf8"))));
-    check("F5. youtubeRadar counts what the upsert inserted (a .select after it) and logs matched and new apart",
-      /\.upsert\(rows, \{ onConflict: "post_uri", ignoreDuplicates: true \}\)\n\s*\.select\("post_uri"\);/.test(FILES[YR]) && /var newCount = \(insertedRows \|\| \[\]\)\.length;/.test(FILES[YR]) && / matched, " \+ newCount \+ " new"/.test(FILES[YR]));
-    check("F6. radar_status is written for youtube too (its own source row, after each pass)",
-      count(FILES[LR], '"youtube pass", "youtube");') === 2 && /upsert\(Object\.assign\(\{ source: source \|\| RADAR_HEARTBEAT_SOURCE \}, fields\)/.test(FILES[LR]) && /return pass;\n\}/.test(FILES[YR]));
-    check("F7. the stale comments are fixed: five lead-reading routes, and leadRadar.js names every bsky_leads status (068 is not edited)",
-      !/The refusal the four lead-reading routes send/.test(SRC) && /the bsky_leads\.status values in use\. Migration 068/.test(FILES[LR]) &&
-      cp.execFileSync("git", ["diff", "--name-only", "HEAD", "--", "supabase/migrations/068_*"], { cwd: H.REPO, encoding: "utf8", shell: false }).trim() === "");
+    check("F5. the radar counts what the upsert inserted (ignoreDuplicates, then .select), never the rows it tried",
+      /\.upsert\(rows, \{ onConflict: "user_id,source,external_id", ignoreDuplicates: true \}\)\.select\("id"\);\n\s*if \(r\.error\) throw r\.error;\n\s*return \(r\.data \|\| \[\]\)\.length;/.test(FILES[MR]));
+    check("F6. radar_status is written after every tick (migration 135's outcomes)", /if \(memberDeps\) await writeRadarHeartbeat\(tickHeartbeat\(startedAt, result\), "tick"\);/.test(FILES[LR]));
+    check("F7. the stale comment is fixed: no \"four lead-reading routes\"; migration 068 is not edited",
+      !/The refusal the four lead-reading routes send/.test(SRC) && cp.execFileSync("git", ["diff", "--name-only", "HEAD", "--", "supabase/migrations/068_*"], { cwd: H.REPO, encoding: "utf8", shell: false }).trim() === "");
     const smsSend = routeBody("post", "/api/sms/send") || "";
     const sms = bareRoute("post", "/api/sms/send", [], {});
     const smsR = sms ? await sms({ body: { to: "15551234567", message: "hi" } }) : null;
@@ -485,9 +392,10 @@ const ALL = Object.assign({ "server.js": SRC, "leadRadar.js": FILES[LR], "youtub
     check("F17. migration 203 is paste-safe: no <= or >=, no DO block, no BEGIN or COMMIT, CHECK dropped if exists first",
       !/<=|>=|\bDO\b|\bBEGIN\b|\bCOMMIT\b/i.test(mig.replace(/--[^\n]*/g, "")) && mig.indexOf("DROP CONSTRAINT IF EXISTS sales_lead_pipeline_status_check") !== -1 &&
       mig.indexOf("DROP CONSTRAINT IF EXISTS sales_lead_pipeline_status_check") < mig.indexOf("ADD CONSTRAINT sales_lead_pipeline_status_check") && /'archived'\)\);/.test(mig));
-    check("F18. archived rows never appear as leads: the pipeline, the command centre, demand and the high-intent trigger skip them; members cannot set it",
-      count(SRC, '.neq("status", "archived")') === 4 && /\.neq\("status", "archived"\)\.order\("id"/.test(FILES["@lib/triggerRunner.js"]) &&
-      /var SALES_LEAD_STATUSES = \["new", "drafted", "contacted", "replied", "converted"\];/.test(SRC));
+    check("F18. archived rows never appear as leads: the command centre's pipeline, demand, the high-intent trigger and the member's list skip them; members cannot set it",
+      /\.neq\("status", "archived"\)   \/\/ NAMED \(Nov 23 2026, LR-1\): archived rows are not leads/.test(SRC) && /\.neq\("status", "archived"\);/.test(demand) &&
+      /\.neq\("status", "archived"\)\.order\("id"/.test(FILES["@lib/triggerRunner.js"]) && /\.not\("status", "in", "\(dismissed,archived\)"\)/.test(FILES[RT]) &&
+      /const MEMBER_STATUSES = \["new", "saved", "dismissed", "won", "lost"\];/.test(FILES[RT]) && /var SALES_LEAD_STATUSES = \["new", "drafted", "contacted", "replied", "converted"\];/.test(SRC));
     const arch = FILES["@scripts/oneoff/lr1Archive.js"] || "";
     check("F19. the archive script is a dry run by default, never deletes, never re-scores, never touches YouTube or a Bluesky row from 2026-08-20 on",
       /const APPLY = process\.argv\.indexOf\("--apply"\) !== -1;/.test(arch) && !/\.delete\(|anthropic|scoreNewLeads/i.test(code(arch)) && !/eq\("source", "youtube"\)/.test(arch) &&
@@ -498,21 +406,22 @@ const ALL = Object.assign({ "server.js": SRC, "leadRadar.js": FILES[LR], "youtub
   section("G. the pages");
   {
     const sp = FILES[SALES] || "";
-    check("G1. sales.html: no confirm dialog, no bulk post, no segment", !/window\.confirm\(/.test(sp) && !/salesConvertAllBtn|convertAllHighIntent|segment:/.test(sp));
-    const draft = fnBody(sp, "function convertLead(") || "";
-    check("G2. Draft asks for the draft only; it never calls send-approved", /\/api\/agents\/sales\/convert/.test(draft) && !/send-approved|postApprovedReply/.test(draft));
-    const post = fnBody(sp, "function postApprovedReply(") || "";
-    check("G3. \"Post my reply\" sends exactly the text in the box to send-approved, and is bound only to its own button",
-      /\/api\/agents\/sales\/send-approved/.test(post) && /var text = box\.value\.trim\(\);/.test(post) && /body: JSON\.stringify\(\{ lead_post_uri: lead\.post_uri, text: text \}\)/.test(post) &&
-      count(sp, "postApprovedReply(") === 2 && /var approveBtn = e\.target\.closest\("\.sales-approve-btn"\);\n\s*if \(approveBtn\) \{ postApprovedReply\(/.test(sp) && count(sp, "send-approved") === 1);
-    check("G4. the box shows the draft for editing, with the button labelled Post my reply", /<textarea class="sales-approve-text"/.test(sp) && />Post my reply<\/button>/.test(sp));
+    check("G1. sales.html: no confirm dialog, no bulk post, no segment, no draft or send route of the old radar", !/window\.confirm\(/.test(sp) && !/salesConvertAllBtn|convertAllHighIntent|segment:/.test(sp) &&
+      !/\/api\/agents\/sales\/(convert|send-approved|leads|pipeline|lead-status)/.test(code(sp)) && !/postApprovedReply/.test(sp));
+    check("G2. ... the owner's read-only archive comes from GET /api/leads/archive", /fetch\(API_URL \+ "\/api\/leads\/archive", \{ headers: \{ "Authorization": "Bearer " \+ token \} \}\)/.test(sp));
     const rp = FILES[RADAR] || "";
-    check("G5. lead-radar.html: never \"Check console\"; signed out it asks for sign-in", !/Check console/.test(rp) && /if \(!tok\(\)\) \{ showSignIn\(countEl, list\); return; \}/.test(rp) && /if \(res\.status === 401\) \{ showSignIn\(countEl, list\); return; \}/.test(rp) && /Sign in to see Lead Radar/.test(rp));
+    const send = fnBody(rp, "function send(") || "";
+    check("G3. lead-radar.html: \"Post my reply\" sends exactly the text in the box to /api/leads/:id/send, bound only to its own button",
+      /var text = box\.value\.trim\(\);/.test(send) && /call\("POST", "\/api\/leads\/" \+ encodeURIComponent\(l\.id\) \+ "\/send", \{ text: text, add_link: S\.sheetLink \}\)/.test(send) &&
+      count(rp, "/send\"") === 1 && count(rp, "send();") === 1 && /if \(e\.target\.closest\("#lrPost"\)\) \{ send\(\); return; \}/.test(rp));
+    const draft = fnBody(rp, "function draft(") || "";
+    check("G4. Write it again and the first draft only ask for a draft; nothing posts until Post my reply", /\/draft"/.test(draft) && !/\/send"|send\(\)/.test(draft) && />Post my reply<\/button>/.test(rp) && /<textarea class="lr-draft" id="lrDraft"/.test(rp));
+    check("G5. lead-radar.html: never \"Check console\"; signed out it asks for sign-in", !/Check console/.test(rp) && /Sign in to see Lead Radar\./.test(rp));
     check("G6. bf-access.js no longer names \"#sfMessage\"", !/#sfMessage/.test(code(FILES[BFA])));
     check("G7. sitemap-pages.xml no longer lists /suppressed.html", !/suppressed\.html/.test(FILES[SITEMAP]));
-    // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
-    check("G8. sw.js SHELL_REV is \"lr1b\"", /var SHELL_REV = "lr1b";/.test(FILES["sw.js"]));
-    check("G9. the Privacy Policy no longer says Mastodon receives outreach replies", !/Bluesky and Mastodon: replies sent through outreach/.test(FILES["privacy.html"]) && /Bluesky: replies sent through outreach, each one approved by a person before it posts\./.test(FILES["privacy.html"]));
+    // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
+    check("G8. sw.js SHELL_REV is \"lr2b\"", /var SHELL_REV = "lr2b";/.test(FILES["sw.js"]));
+    check("G9. the Privacy Policy no longer says Mastodon receives outreach replies", !/Bluesky and Mastodon: replies sent through outreach/.test(FILES["privacy.html"]));
     const smsPage = FILES[SMS] || "";
     check("G10. sms.html sends where and when consent was given, or no consent", /consent_source: source, consent_at: day \+ "T00:00:00\.000Z"/.test(smsPage) && /id="sms-add-source"/.test(smsPage) && /id="sms-bulk-source"/.test(smsPage));
   }

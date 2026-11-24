@@ -130,9 +130,12 @@ const MUTATIONS = {
   "pipeline-counts-archived": [[SERVER, '          .eq("user_id", userId)\n          .neq("status", "archived")   // NAMED (Nov 23 2026, LR-1): archived rows are not leads\n          .order("id", { ascending: true });',
     '          .eq("user_id", userId)\n          .order("id", { ascending: true });']],
   // NAMED (Nov 23 2026, LR-1): Mastodon finds are counted again (S6)
-  "radar-counts-mastodon": [[SERVER, '      var sources = ["bluesky", "youtube"];', '      var sources = ["bluesky", "mastodon", "youtube"];']],
-  "radar-to-non-owner": [[SERVER, "    if (OUTREACH_CREDENTIAL_OWNER_ID === userId) {\n      r.radar = {};", "    if (true) {\n      r.radar = {};"],
-    [SIGLIB, "  if (opts.isOwner === true && r.radar) {", "  if (r.radar) {"]],
+  // NAMED (Nov 23 2026, LR-2): BEFORE the owner's list ["bluesky", "youtube"]. AFTER every member's four sources, plus Mastodon.
+  "radar-counts-mastodon": [[SERVER, '      var sources = ["bizforce", "bluesky", "youtube", "threads"];', '      var sources = ["bizforce", "bluesky", "mastodon", "youtube", "threads"];']],
+  // NAMED (Nov 23 2026, LR-2): BEFORE "radar-to-non-owner" (the owner gate, gone: every member has a radar). AFTER the radar
+  // counts every member's leads, not the member's own.
+  "radar-not-own": [[SERVER, "              .eq(\"user_id\", userId)\n              .eq(\"source\", src)\n              .gte(\"created_at\", new Date(now.getTime() - days * 86400000).toISOString()));",
+    "              .eq(\"source\", src)\n              .gte(\"created_at\", new Date(now.getTime() - days * 86400000).toISOString()));"]],
   // the connection row is read whole and passed through, app password and all (S3)
   "bluesky-secret-in-payload": [[SERVER, "        .select(\"handle, status, auto_post, auto_post_changed_at, last_ok_at, last_error_at, last_error_code, created_at\")\n", "        .select(\"*\")\n"],
     [SIGLIB, "    out.connection = c && c.handle ? {\n", "    out.connection = c && c.handle ? Object.assign({}, c, {\n"],
@@ -803,6 +806,13 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     const lead = (source, m) => ({ id: "bl" + (++L), source, status: source === "youtube" ? "signal" : "scored", post_text: "OWNER LEAD TEXT", created_at: ago(m) });
     t.bsky_leads = [lead("bluesky", 60), lead("bluesky", DAY), lead("bluesky", 6 * DAY), lead("bluesky", 8 * DAY), lead("bluesky", 20 * DAY), lead("bluesky", 40 * DAY),
       lead("mastodon", 2 * DAY), lead("youtube", 30), lead("youtube", DAY), lead("youtube", 3 * DAY), lead("youtube", 6 * DAY), lead("youtube", 12 * DAY)];
+    // NAMED (Nov 23 2026, LR-2): the radar counts each member's own Lead Radar leads (member_leads); bsky_leads is the
+    // frozen archive and stays seeded only to prove it is never read. U1 has the owner's old figures plus Inside BizForce
+    // and Threads; U2 has one Bluesky lead of their own.
+    const ml = (user_id, source, m) => ({ id: "ml" + (++L), user_id, source, status: "new", text: "MEMBER LEAD TEXT", created_at: ago(m) });
+    t.member_leads = [ml(U1, "bluesky", 60), ml(U1, "bluesky", DAY), ml(U1, "bluesky", 6 * DAY), ml(U1, "bluesky", 8 * DAY), ml(U1, "bluesky", 20 * DAY), ml(U1, "bluesky", 40 * DAY),
+      ml(U1, "youtube", 30), ml(U1, "youtube", DAY), ml(U1, "youtube", 3 * DAY), ml(U1, "youtube", 6 * DAY), ml(U1, "youtube", 12 * DAY),
+      ml(U1, "bizforce", DAY), ml(U1, "bizforce", 10 * DAY), ml(U1, "threads", 2 * DAY), ml(U2, "bluesky", DAY)];
     return t;
   }
   const SIG_PAGES = { analytics: "agents/analytics.html", store: "store-agent.html", social: "agents/social.html", email: "email-agent.html", seo: "agents/seo.html", sales: "agents/sales.html" };
@@ -934,31 +944,36 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
       none.sig.audits_30d.runs === 0 && none.sig.latest_audit === null && none.sig.posts_published_30d === 0 && none.sig.arrivals_30d.none && none.sig.latest_optimize === null);
   }
 
-  console.log("\n══ S6. Sales: the pipeline, and the radar for the owner only ══");
+  console.log("\n══ S6. Sales: the pipeline, and the member's own radar (NAMED Nov 23 2026, LR-2: BEFORE the owner only) ══");
   {
     const r = await sigCall("sales");
     const g = r.sig;
     check("S6. the owner's pipeline by stage: 2 new, 1 contacted (another member's converted lead is not counted)",
       g && JSON.stringify(g.pipeline) === JSON.stringify({ stages: { new: 2, drafted: 0, contacted: 1, replied: 0, converted: 0 }, total: 3 }), g && JSON.stringify(g.pipeline));
-    // NAMED (Nov 23 2026, LR-1): BEFORE "Bluesky 3 / 5, Mastodon 1 / 1". AFTER Mastodon lead search is removed: no Mastodon row, and the seeded Mastodon lead is never counted.
-    check("S6. the owner's radar finds: Bluesky 3 / 5 (7 / 30 days), and no Mastodon row",
-      g && g.radar && JSON.stringify(g.radar.bluesky) === JSON.stringify({ d7: 3, d30: 5 }) && g.radar.mastodon === undefined, g && JSON.stringify(g.radar));
-    check("S6. ... and bsky_leads is never asked for Mastodon rows", r.h.db.log.filter(q => q.table === "bsky_leads").every(q => JSON.stringify(q).indexOf("mastodon") === -1));
+    /* NAMED (Nov 23 2026, LR-2): BEFORE the owner's finds in the shared bsky_leads pool, owner only (Bluesky and YouTube).
+       AFTER every member's own Lead Radar leads (member_leads), by source: Inside BizForce, Bluesky, Threads, YouTube apart. */
+    check("S6. the member's radar finds: Bluesky 3 / 5 (7 / 30 days), Inside BizForce 1 / 2, Threads 1 / 1, and no Mastodon row",
+      g && g.radar && JSON.stringify(g.radar.bluesky) === JSON.stringify({ d7: 3, d30: 5 }) && JSON.stringify(g.radar.bizforce) === JSON.stringify({ d7: 1, d30: 2 }) &&
+      JSON.stringify(g.radar.threads) === JSON.stringify({ d7: 1, d30: 1 }) && g.radar.mastodon === undefined, g && JSON.stringify(g.radar));
+    check("S6. ... read from member_leads for this member only, never from the bsky_leads archive, never for Mastodon",
+      r.h.db.log.every(q => q.table !== "bsky_leads") && r.h.db.log.filter(q => q.table === "member_leads").length === 8 &&
+      r.h.db.log.filter(q => q.table === "member_leads").every(q => JSON.stringify(q).indexOf(U1) !== -1 && JSON.stringify(q).indexOf("mastodon") === -1));
     check("S6. an archived pipeline row is not counted: still 3, no archived stage",
       g && g.pipeline && g.pipeline.total === 3 && g.pipeline.stages.archived === undefined, g && JSON.stringify(g.pipeline));
     check("S6. YouTube in its own row, \"kept 30 days, not combined\": 4 / 5",
       g && g.radar && g.radar.youtube.d7 === 4 && g.radar.youtube.d30 === 5 && g.radar.youtube.note === "kept 30 days, not combined");
-    // NAMED (Nov 23 2026, LR-1): BEFORE "the only total is Bluesky + Mastodon (4 / 6)" and keys bluesky,mastodon,bluesky_and_mastodon,youtube.
-    check("S6. the radar is exactly Bluesky and YouTube, apart: no total adds them",
-      g && g.radar && Object.keys(g.radar).join(",") === "bluesky,youtube",
+    check("S6. the radar is exactly Inside BizForce, Bluesky, Threads and YouTube, apart: no total adds them",
+      g && g.radar && Object.keys(g.radar).join(",") === "bizforce,bluesky,threads,youtube",
       g && JSON.stringify(g.radar));
-    check("S6. no lead text, uri or id leaves bsky_leads: head counts only", JSON.stringify(r.body).indexOf("OWNER LEAD TEXT") === -1 &&
-      r.h.db.log.filter(q => q.table === "bsky_leads").every(q => q.head === true));
+    check("S6. no lead text, uri or id leaves member_leads: head counts only", JSON.stringify(r.body).indexOf("MEMBER LEAD TEXT") === -1 &&
+      JSON.stringify(r.body).indexOf("OWNER LEAD TEXT") === -1 && r.h.db.log.filter(q => q.table === "member_leads").every(q => q.head === true));
     const other = await sigCall("sales", null, { id: U2 });
-    check("S6. a member who is not the owner: their own pipeline (1 converted), no radar key at all", other.sig.pipeline.total === 1 && other.sig.radar === undefined &&
-      JSON.stringify(other.body).indexOf("youtube") === -1 && JSON.stringify(other.body).indexOf("radar") === -1, JSON.stringify(other.sig));
-    check("S6. ... and bsky_leads is not read for them", other.h.db.log.every(q => q.table !== "bsky_leads"));
-    const nc = await sigCall("sales", { nullCount: ["bsky_leads"] });
+    check("S6. another member: their own pipeline (1 converted) and their own radar (Bluesky 1 / 1, the rest 0)", other.sig.pipeline.total === 1 &&
+      other.sig.radar && JSON.stringify(other.sig.radar.bluesky) === JSON.stringify({ d7: 1, d30: 1 }) && other.sig.radar.youtube.d30 === 0 && other.sig.radar.bizforce.d30 === 0,
+      JSON.stringify(other.sig));
+    check("S6. ... every count is theirs (user_id U2), and bsky_leads is not read", other.h.db.log.every(q => q.table !== "bsky_leads") &&
+      other.h.db.log.filter(q => q.table === "member_leads").every(q => JSON.stringify(q).indexOf(U2) !== -1 && JSON.stringify(q).indexOf(U1) === -1));
+    const nc = await sigCall("sales", { nullCount: ["member_leads"] });
     check("S6. a radar count that comes back null is { unavailable }, and so is the total built on it",
       nc.sig.radar.bluesky.d7.unavailable && nc.sig.radar.youtube.d30.unavailable);   // NAMED (Nov 23 2026, LR-1): BEFORE also bluesky_and_mastodon
   }
@@ -987,13 +1002,15 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     check("S7. GET /api/agents/live carries no signature (signature: null for all 18) and says where the modules are",
       Object.values(allR.body.agents).every(a => a.signature === null) && /\/api\/agents\/<type>\/live only/.test(allR.body.signatures) && JSON.stringify(allR.body).length <= 24 * 1024);
 
-    // The exact Chart.js tag, from agents/lead-radar.html
-    const LR = lf(fs.readFileSync(path.join(FRONTEND, "agents/lead-radar.html"), "utf8"));
+    // The exact Chart.js tag, from agents/sales.html (NAMED Nov 23 2026, LR-2: BEFORE from agents/lead-radar.html, which has no chart now)
+    const LR = lf(fs.readFileSync(path.join(FRONTEND, "agents/sales.html"), "utf8"));
+    const LR_NOW = lf(fs.readFileSync(path.join(FRONTEND, "agents/lead-radar.html"), "utf8"));
     const TAG = (/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/chart\.js@4\.4\.1\/dist\/chart\.umd\.min\.js"[^>]*><\/script>/.exec(LR) || [])[0] || "";
+    // NAMED (Nov 23 2026, LR-2): BEFORE lead-radar.html carried the tag too. AFTER it was rebuilt to the boards with no chart, so three pages.
     const pageTags = ["agents/sales.html", "analytics-dashboard.html"].map(f => lf(fs.readFileSync(path.join(FRONTEND, f), "utf8"))).concat([FILES[ANALYTICS_PAGE]])
       .map(h => (h.match(/<script[^>]*chart\.js[^>]*><\/script>/g) || []));
-    check("S7. Chart.js 4.4.1 on agents/analytics.html with exactly the SRI tag of lead-radar.html, sales.html and analytics-dashboard.html",
-      /integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg\/P5HG5lF1urn4" crossorigin="anonymous"/.test(TAG) && pageTags.every(t => t.length === 1 && t[0] === TAG),
+    check("S7. Chart.js 4.4.1 on agents/analytics.html with exactly the SRI tag of sales.html and analytics-dashboard.html (and none on the rebuilt lead-radar.html)",
+      /integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg\/P5HG5lF1urn4" crossorigin="anonymous"/.test(TAG) && pageTags.every(t => t.length === 1 && t[0] === TAG) && !/chart.js/.test(LR_NOW),
       JSON.stringify(pageTags));
     const SIGSRC = FILES[PROFILE].slice(FILES[PROFILE].indexOf("══ SIGNATURE MODULES"), FILES[PROFILE].indexOf("/* ── boot ── */"));
     check("S7. the modules set every string with textContent: no innerHTML or insertAdjacentHTML in them", SIGSRC.length > 5000 && !/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(SIGSRC));
@@ -1081,12 +1098,15 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     const sa = await mountSig("sales", A.sales);
     const rows = [...sa.doc.querySelectorAll("#apLiveSignature .ap-sig-radar tr")].map(tr => [...tr.children].map(c => c.textContent));
     // NAMED (Nov 23 2026, LR-1): BEFORE rows Mastodon 1/1 and Bluesky + Mastodon 4/6; AFTER Bluesky and YouTube only (Mastodon lead search removed).
-    check("S7. Sales (owner): the pipeline bars and the radar table — Bluesky, then YouTube on its own row, labelled, no Mastodon",
-      JSON.stringify(rows) === JSON.stringify([["Source", "7 days", "30 days"], ["Bluesky", "3", "5"],
+    // NAMED (Nov 23 2026, LR-2): BEFORE Bluesky and YouTube for the owner only. AFTER the member's own leads: Inside BizForce,
+    // Bluesky, Threads, then YouTube on its own row; another member sees their own table instead of none.
+    check("S7. Sales: the pipeline bars and the radar table — Inside BizForce, Bluesky, Threads, then YouTube on its own row, labelled, no Mastodon",
+      JSON.stringify(rows) === JSON.stringify([["Source", "7 days", "30 days"], ["Inside BizForce", "1", "2"], ["Bluesky", "3", "5"], ["Threads", "1", "1"],
         ["YouTube — kept 30 days, not combined", "4", "5"]]) && sa.doc.querySelectorAll("#apLiveSignature .ap-sig-bar").length === 5, JSON.stringify(rows));
     const saO = await mountSig("sales", await answer("sales", { id: U2 }));
-    check("S7. Sales (not the owner): the pipeline only, no radar section", saO.doc.querySelectorAll("#apLiveSignature .ap-sig-radar").length === 0 &&
-      !/Lead Radar/.test(slotText(saO)) && /1 lead/.test(slotText(saO)), slotText(saO));
+    const rowsO = [...saO.doc.querySelectorAll("#apLiveSignature .ap-sig-radar tr")].map(tr => [...tr.children].map(c => c.textContent));
+    check("S7. Sales (another member): their own pipeline and their own radar table, \"Your account only\"",
+      JSON.stringify(rowsO[2]) === JSON.stringify(["Bluesky", "1", "1"]) && /Your account only/.test(slotText(saO)) && /1 lead/.test(slotText(saO)), slotText(saO));
     const saE = await mountSig("sales", A.sales_empty);
     check("S7. Sales empty: \"No leads in your pipeline yet.\"", /No leads in your pipeline yet\./.test(slotText(saE)), slotText(saE));
 

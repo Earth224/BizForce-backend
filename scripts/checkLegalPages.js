@@ -284,7 +284,9 @@ const fmt = n => Number(n).toLocaleString("en-US");
       // NAMED (Nov 15 2026, W3): BEFORE no Shopify figure. AFTER the Shopify notice retention (lib/shopifyAuth.js WEBHOOK_RETENTION_MS).
       shopifyNoticeDays: 17,
       // NAMED (Nov 20 2026, P2-3): BEFORE no post figure. AFTER the post retention's three (lib/postRetention.js).
-      postBodyDays: 91, postPhotoDays: 31, postShareDays: 33 });
+      postBodyDays: 91, postPhotoDays: 31, postShareDays: 33,
+      // NAMED (Nov 23 2026, LR-2): BEFORE no Lead Radar figure but YouTube's. AFTER the member leads' retention (lib/memberRadar.js RETENTION_DAYS).
+      memberLeadDays: 27 });
     const b2 = LP.buildLegalPages(other), t2 = textOf(b2["terms.html"]), r2 = textOf(b2["refund.html"]), p2 = textOf(b2["privacy.html"]);
     const expect = [["$249 per year", t2], ["charged $249 at the start of each new year", t2], ["up to 11 days", t2], ["member welcome of 1,234 BFC", t2]   /* NAMED (Nov 21 2026, P3-1C): BEFORE "welcome bonus of 1,234 BFC" */,
       ["77 BFC for each certification", t2], ["there are 9", t2], ["at most 4,321 BFC", t2], ["at most 8,765 BFC in any rolling 24 hours", t2],
@@ -292,7 +294,7 @@ const fmt = n => Number(n).toLocaleString("en-US");
       ["every 5 days, and deletes the connection if it cannot be refreshed for 23 days", p2],
       ["within 6 days; after a removal on Google's side, within 23 days", p2], ["email you 8 to 29 days before the new price applies", t2],
       ["Each notice is kept 17 days; a customer data request is kept until 17 days after it is answered", p2],
-      ["its text is erased 91 days later", p2], ["let go from it after 31 days", p2], ["The share tally is deleted after 33 days.", p2]];
+      ["its text is erased 91 days later", p2], ["let go from it after 31 days", p2], ["The share tally is deleted after 33 days.", p2], ["your other Lead Radar leads 27 days after they were found", p2]];
     const missing = expect.filter(([needle, hay]) => hay.indexOf(needle) === -1).map(([n]) => n);
     const stale = [["$199", t2], ["$199", r2], ["1,000 BFC", t2], ["2,000 BFC", t2], ["100 BFC", t2], ["14 days", t2], ["30 days", p2],
       ["every 7 days", p2], ["within 7 days", p2], ["7 to 30 days", t2]]
@@ -482,12 +484,22 @@ const fmt = n => Number(n).toLocaleString("en-US");
       ph.indexOf("<a href=\"https://www.youtube.com/t/terms\">YouTube Terms of Service</a>") !== -1 && ph.indexOf("<a href=\"https://policies.google.com/privacy\">Google Privacy Policy</a>") !== -1);
     check("G2. says BizForce uses YouTube API Services, what is accessed and stored, and not combined", ["BizForce uses YouTube API Services",
       "What is accessed: public YouTube videos", "What is stored: those public comments", "not combined with data from any other source"].every(x => P.indexOf(x) !== -1));
-    const lr = SRC["leadRadar.js"], sv = SRC["server.js"];
-    const scorable = (/const SCORABLE_SOURCES = (\[[^\]]*\]);/.exec(lr) || [])[1] || "";
-    check("G3. the code backs \"not combined\": never scored, excluded from demand, its own route",
-      scorable && !/youtube/.test(scorable) && /\nvar DEMAND_EXCLUDED_SOURCE = "youtube";/.test(sv) && /app\.get\("\/api\/leads\/youtube-signals"/.test(sv), scorable);
+    /* NAMED (Nov 23 2026, LR-2): BEFORE G3 read leadRadar.js SCORABLE_SOURCES and the owner's GET /api/leads/youtube-signals,
+       and G4 the fixed KEYWORDS list in youtubeRadar.js. AFTER the member radar: YouTube comments are never scored
+       (lib/memberRadar.js SCORED_SOURCES), never replied to (lib/leadReplies.js REPLY_PLATFORMS), never in demand figures
+       (DEMAND_EXCLUDED_SOURCE, applied in loadDemandRows), and stored marked as YouTube; the search is the member's own
+       Fingerprint word, only when the member turned YouTube on, sent with BizForce's API key and no member account. */
+    const sv = SRC["server.js"], mr = fs.readFileSync(path.join(REPO, "lib", "memberRadar.js"), "utf8"), lrp = fs.readFileSync(path.join(REPO, "lib", "leadReplies.js"), "utf8");
+    const scored = (/\nconst SCORED_SOURCES = (\[[^\]]*\]);/.exec(mr) || [])[1] || "";
+    const replies = (/\nconst REPLY_PLATFORMS = (\[[^\]]*\]);/.exec(lrp) || [])[1] || "";
+    check("G3. the code backs \"not combined\": never scored, never replied to, excluded from demand, stored marked as YouTube",
+      scored !== "" && !/youtube/.test(scored) && replies !== "" && !/youtube/.test(replies) && /\nvar DEMAND_EXCLUDED_SOURCE = "youtube";/.test(sv) &&
+      /q = q\.eq\("user_id", userId\)\.neq\("source", DEMAND_EXCLUDED_SOURCE\)/.test(sv) && /source: "youtube"/.test(mr), scored + " " + replies);
     const yr = fs.readFileSync(path.join(REPO, "youtubeRadar.js"), "utf8");
-    check("G4. the code backs \"no member's data is sent\": the searches are a fixed list", /\nconst KEYWORDS = \[/.test(yr) && /var keywords = KEYWORDS;/.test(yr));
+    check("G4. the code backs \"no member's data is sent\": the member's own word, with BizForce's key and no member account, only when YouTube is on",
+      /"\?part=snippet&q=" \+ encodeURIComponent\(keyword\) \+/.test(yr) && /&key=" \+ YOUTUBE_API_KEY/.test(yr) &&
+      !/require\("\.\/lib\/(googleAuth|youtubeApi)"\)/.test(yr) && !/access_token|Authorization/.test(yr) &&
+      /m\.fp\.sources\.youtube && m\.fp\.keywords\.length/.test(mr));
   }
 
   /* ── H ─────────────────────────────────────────────────────────────────── */
@@ -873,12 +885,13 @@ const fmt = n => Number(n).toLocaleString("en-US");
     // for free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule.
     // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
     // NAMED (Nov 21 2026, P3-1C): BEFORE "2026-11-21c" (P3-1B). AFTER "2026-11-21d": members start with 1,000 BizCash and free accounts hold none (the same day again, so the next letter).
-    check("P12. W3's privacy-only clarification made no new version; P3-1, P3-2 and then P3-1B moved TERMS_VERSION to " + LEGAL.TERMS_VERSION, LEGAL.TERMS_VERSION === "2026-11-21d");
+    check("P12. W3's privacy-only clarification made no new version; P3-1, P3-2 and then P3-1B moved TERMS_VERSION to " + LEGAL.TERMS_VERSION + " (NAMED (Nov 24 2026, LR-2B): then LR-2B, BEFORE 2026-11-21d)", LEGAL.TERMS_VERSION === "2026-11-24");
     // NAMED (Nov 21 2026, P3-1B): the published pages carry the owner's final rules (checkLegalL1 A19 and A20 read them word for word)
     const termsFe = FE["terms.html"] || "", privacyFe = FE["privacy.html"] || "";
     // NAMED (Nov 21 2026, P3-1C): BEFORE version 2026-11-21c (P3-1B). AFTER 2026-11-21d, and the members sentence is on the page.
-    check("P13. terms.html shows version 2026-11-21d and the final free-account rules; privacy.html says which posts search engines may index",
-      termsFe.indexOf("Version 2026-11-21d") !== -1 && termsFe.indexOf("Members start with 1,000 BizCash. Free accounts do not hold BizCash.") !== -1 && termsFe.indexOf("On a free account: a share post needs at least one photo") !== -1 &&
+    // NAMED (Nov 24 2026, LR-2B): BEFORE "Version 2026-11-21d"; terms.html also lists Lead Radar in what membership adds.
+    check("P13. terms.html shows version 2026-11-24, Lead Radar among what membership adds, and the final free-account rules; privacy.html says which posts search engines may index",
+      termsFe.indexOf("Version 2026-11-24") !== -1 && termsFe.indexOf("Lead Radar: people asking for what you offer, found from your Fingerprint, with every reply approved by you") !== -1 && termsFe.indexOf("Members start with 1,000 BizCash. Free accounts do not hold BizCash.") !== -1 && termsFe.indexOf("On a free account: a share post needs at least one photo") !== -1 &&
       termsFe.indexOf("A free account never holds, receives or sends BizCash") !== -1 &&
       privacyFe.indexOf("Only a member&#39;s published public post with Show in Google on can be indexed by search engines") + privacyFe.indexOf("Only a member's published public post with Show in Google on can be indexed by search engines") !== -2);
   }

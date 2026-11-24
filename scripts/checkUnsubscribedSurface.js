@@ -449,7 +449,7 @@ const EXPECTED_OWN = [
   "post /api/social-drafts", "put /api/social-drafts/:id",
   "post /api/content-library", "post /api/content-library/empty", "delete /api/content-library/:id",
   "post /api/content-library/:id/external-published",
-  "post /api/agents/sales/lead-status",  // refuses every account but the credential owner (checkLeadRadarOwnerGate)
+  // NAMED (Nov 23 2026, LR-2): BEFORE "post /api/agents/sales/lead-status" (the owner's pipeline), removed with the platform radar.
   // Let the owner see and stop every sequence: pauses, resumes or cancels the
   // caller's own sequence. Deliberately ungated, so stopping mail never needs a subscription.
   "post /api/email/sequences/:id/status",
@@ -552,6 +552,9 @@ const EXPECTED_OWN = [
   // work, subscribed or not. The posts list and a post's status (through lib/instagramApi.js) write only the member's own
   // rows, finishing a post the member already approved, and need no entry here.
   "post /api/instagram/disconnect",
+  // NAMED (Nov 23 2026, LR-2, migration 204e; one more effectful login-only route): a member disconnects their own Threads
+  // account: their own threads_connections row is deleted; disconnecting must always work, subscribed or not.
+  "post /api/social/threads/disconnect",
   // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages; migration 180; one more effectful login-only route): BEFORE no Facebook
   // connection. AFTER a member disconnects their own Facebook Page: their own member_facebook_pages row and their own
   // facebook_login oauth_states are deleted; nothing another member is served is written, and disconnecting must always work,
@@ -634,7 +637,16 @@ const EXPECTED_UNAUTH_WRITES = {
   "get /api/marketplace/listings/:id":      "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)",
   // NAMED (Nov 20 2026, P2-3; 26 -> 27): BEFORE no public post page. AFTER /p/<id> asks who the viewer is (viewerIdFrom) to leave
   // a blocked viewer out, as P2-2's three reads do; nothing else is written (checkPublicPostPage).
-  "get /p/:id":                             "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-3)"
+  "get /p/:id":                             "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-3)",
+  // NAMED (Nov 23 2026, LR-2, migration 204e; 27 -> 28): BEFORE no Threads connection. AFTER Meta redirects a member back here;
+  // the code is exchanged and the member's own threads_connections row written only for the member an HMAC-signed, single-use
+  // state names (lib/threadsRoutes.js, checkThreadsConnect).
+  "get /api/social/threads/callback":       "a member's own Threads connection, for the member a signed single-use state names (migration 204e)",
+  // NAMED (Nov 24 2026, LR-2B; 28 -> 30): BEFORE no Meta callbacks. AFTER Meta's Uninstall and Delete callbacks, each refused
+  // (400, nothing written) without a signed_request verified by HMAC-SHA256 under THREADS_APP_SECRET; they only DELETE: the
+  // connection Meta names, and for a deletion that member's Threads leads and replies (checkThreadsConnect M).
+  "post /api/social/threads/deauthorize":   "Meta's Uninstall Callback, signed_request verified: deletes the Threads connection it names (migration 204e)",
+  "post /api/social/threads/data-deletion": "Meta's Delete Callback, signed_request verified: deletes that member's Threads leads, replies and connection (migration 204)"
 };
 
 /* Login-only routes that gate PART of what they do inside the handler. The
@@ -858,7 +870,8 @@ const wrongA = ROUTES.filter(function (r) {
   return a !== (r.cls === "admin" || inHandler) || (inHandler && r.cls !== "login-only" && r.cls !== "gated");   // NAMED (Nov 23 2026, LR-1): BEFORE in-handler had to be login-only
 });
 check("2. A is exactly requireAdmin's routes and the owner-in-handler routes (" + RA.ADMIN.length + ")", wrongA.length === 0, wrongA.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
-const OWNER_TEXT = /isOwnerAccount\(req\.user\.id\)|!== OUTREACH_CREDENTIAL_OWNER_ID|userId !== OWNER_ACCOUNT_ID/;   // NAMED (Nov 23 2026, LR-1): + demand-signals' owner check by id
+// NAMED (Nov 23 2026, LR-2): + the archive's check by id in lib/leadRoutes.js (req.user.id !== deps.ownerId).
+const OWNER_TEXT = /req\.user\.id !== deps\.ownerId|isOwnerAccount\(req\.user\.id\)|!== OUTREACH_CREDENTIAL_OWNER_ID|userId !== OWNER_ACCOUNT_ID/;   // NAMED (Nov 23 2026, LR-1): + demand-signals' owner check by id
 const inHandlerNoCheck = RA.ADMIN_IN_HANDLER.filter(function (k) { const r = byKeyOf(k); return !r || !OWNER_TEXT.test(r.text); });
 check("2. each owner-in-handler route's handler carries the owner check (" + RA.ADMIN_IN_HANDLER.length + ")", inHandlerNoCheck.length === 0, inHandlerNoCheck.join(", "));
 const wrongF = ROUTES.filter(function (r) { return groupOf(r.key) === "F" && r.cls !== "login-only"; });
@@ -866,17 +879,26 @@ check("2. F is sign-in only (" + RA.FREE.length + ")", wrongF.length === 0, wron
 sameSet("2. the requireAdmin routes are exactly the " + EXPECTED_ADMIN.length + " reviewed", keys(of("admin")), EXPECTED_ADMIN);
 /* NAMED (Nov 20 2026, P3-1): BEFORE section 2 held the gated set to EXPECTED_GATED. AFTER M (lib/routeAccess.js) is the set; every
    route EXPECTED_GATED reviewed must still be M, except the three P3-1 freed (posting, post photos, a new listing). */
-/* NAMED (Nov 23 2026, LR-1): the two owner-only model routes LR-1 moved to A. Each must be A, owner-in-handler, and still gated. */
-const MOVED_TO_A_BY_LR1 = ["post /api/leads/draft-reply", "post /api/agents/rd/demand-signals"];
-const movedA = MOVED_TO_A_BY_LR1.filter(function (k) { return groupOf(k) !== "A" || RA.ADMIN_IN_HANDLER.indexOf(k) === -1 || !byKeyOf(k) || byKeyOf(k).cls !== "gated"; });
-check("2. LR-1: lead draft-reply and demand signals are the owner's (A, owner check in the handler, still gated)", movedA.length === 0, movedA.join(", "));
-check("2. LR-1: POST /api/agents/sales/send-approved is members only (M, gated) with the owner check",
-  groupOf("post /api/agents/sales/send-approved") === "M" && !!byKeyOf("post /api/agents/sales/send-approved") &&
-  byKeyOf("post /api/agents/sales/send-approved").cls === "gated" && OWNER_TEXT.test(byKeyOf("post /api/agents/sales/send-approved").text));
+/* NAMED (Nov 23 2026, LR-2): BEFORE LR-1 held POST /api/leads/draft-reply and POST /api/agents/rd/demand-signals in A (owner in
+   the handler, still gated) and POST /api/agents/sales/send-approved in M with the owner check. AFTER LR-2 removed draft-reply,
+   send-approved, convert and the pipeline routes, and made Lead Radar and the demand signals every member's: each is M and gated,
+   and none of the removed routes is live or grouped. */
+const REMOVED_BY_LR2 = ["post /api/leads/draft-reply", "post /api/agents/sales/send-approved", "post /api/agents/sales/convert",
+  "post /api/agents/sales/lead-status", "get /api/agents/sales/leads", "get /api/agents/sales/pipeline", "get /api/leads/youtube-signals"];
+const MEMBER_BY_LR2 = ["get /api/leads", "get /api/leads/fingerprint", "put /api/leads/fingerprint", "post /api/leads/fingerprint/rebuild",
+  "post /api/leads/fingerprint/suggest", "get /api/leads/summary", "post /api/leads/:id/status", "post /api/leads/:id/draft", "post /api/leads/:id/send",
+  "post /api/agents/rd/demand-signals"];
+const removedLive = REMOVED_BY_LR2.filter(function (k) { return !!byKeyOf(k) || groupOf(k) !== null; });
+check("2. LR-2: the old owner-only Lead Radar routes are gone (not live, in no group)", removedLive.length === 0, removedLive.join(", "));
+const lr2NotGated = MEMBER_BY_LR2.filter(function (k) { return groupOf(k) !== "M" || !byKeyOf(k) || byKeyOf(k).cls !== "gated"; });
+check("2. LR-2: Lead Radar's routes and the demand signals are members only (M, gated)", lr2NotGated.length === 0, lr2NotGated.join(", "));
+check("2. LR-2: the owner's archive is A with the owner check by id in its handler, sign-in only",
+  groupOf("get /api/leads/archive") === "A" && RA.ADMIN_IN_HANDLER.indexOf("get /api/leads/archive") !== -1 && !!byKeyOf("get /api/leads/archive") &&
+  byKeyOf("get /api/leads/archive").cls === "login-only" && OWNER_TEXT.test(byKeyOf("get /api/leads/archive").text));
 check("2. LR-1: GET /api/digital-cards/:id/leads is free (F, sign-in only)",
   groupOf("get /api/digital-cards/:id/leads") === "F" && !!byKeyOf("get /api/digital-cards/:id/leads") && byKeyOf("get /api/digital-cards/:id/leads").cls === "login-only");
-const lostGate = EXPECTED_GATED.filter(function (k) { return FREED_BY_P31.indexOf(k) === -1 && MOVED_TO_A_BY_LR1.indexOf(k) === -1 && groupOf(k) !== "M"; });   // NAMED (Nov 23 2026, LR-1): but the two moved to A
-check("2. every route reviewed as gated before P3-1 is still members only, but the three P3-1 freed", lostGate.length === 0, lostGate.join(", "));
+const lostGate = EXPECTED_GATED.filter(function (k) { return FREED_BY_P31.indexOf(k) === -1 && REMOVED_BY_LR2.indexOf(k) === -1 && groupOf(k) !== "M"; });   // NAMED (Nov 23 2026, LR-2): BEFORE but the two LR-1 moved to A; AFTER but the routes LR-2 removed
+check("2. every route reviewed as gated before P3-1 is still members only, but the three P3-1 freed and those LR-2 removed", lostGate.length === 0, lostGate.join(", "));
 const freedOk = FREED_BY_P31.every(function (k) { return groupOf(k) === "F" && byKeyOf(k) && byKeyOf(k).cls === "login-only"; });
 check("2. posting and post photos are free (F, sign-in only)", freedOk, FREED_BY_P31.map(function (k) { return k + " " + groupOf(k); }).join(", "));   // NAMED (Nov 21 2026, P3-1B): BEFORE "posting, post photos and a new listing"
 const movedBad = MOVED_BY_P31B.filter(function (k) { return groupOf(k) !== "M" || !byKeyOf(k) || byKeyOf(k).cls !== "gated"; });

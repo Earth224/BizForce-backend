@@ -41,10 +41,13 @@
      12. TASKS PER AGENT. getLiveStats, run against a fake table of 7,951 rows
         that returns at most 1,000 to a non-count select, reports sales as
         7,900, every agent exactly, and a breakdown summing to tasksRun.
-     13. LEAD RADAR BY ACCOUNT. getLiveStats says "available" to the credential
-        owner and "not available" to anyone else, with the constant the lead
-        routes refuse on; the knowledge text points at that line and covers
-        available, not available and absent.
+     13. LEAD RADAR BY ACCOUNT. NAMED (Nov 23 2026, LR-2): BEFORE getLiveStats
+        said "available" to the credential owner only, with the constant the
+        lead routes refused on. AFTER Lead Radar is every member's: getLiveStats
+        says "available" to a member (the owner's pass included), "not available"
+        to a free account and nothing (null) when the plan cannot be read; the
+        knowledge text points at that line and covers available, not available
+        and absent.
      14. WHAT A ZERO MEANS. A zero-stats account — every figure getLiveStats
         produces, at 0 — renders a stats block that says the counts cover only
         BizForce on this account, that a zero means nothing recorded here,
@@ -98,7 +101,7 @@
    MUTATE=banned   drops the banned_topics line                → 3 goes red
    MUTATE=ceiling  puts operations back to 1,200               → 4 goes red
    MUTATE=stop     stops writing the stop reason               → 5 goes red
-   MUTATE=radar    restores "scores against the profile"       → 6 goes red
+   MUTATE=radar    restores "scores against the profile"       → 6 goes red (NAMED (Nov 23 2026, LR-2): re-anchored on the LR-2 text)
    MUTATE=sms      restores "broadcasts segmentable by filter" → 7 goes red
    MUTATE=social   leaves social publishing out                → 8 goes red
    MUTATE=socialstale restores "publishing ... currently unavailable" → 8 goes red
@@ -329,7 +332,8 @@ if (MUTATE === "banned") {
   console.log("\n!! MUTATION: banned_topics is no longer rendered — 3 must fail.");
 }
 if (MUTATE === "radar") {
-  BRAIN = mutate(BRAIN, /"A background job that every 5 minutes collects public Bluesky posts[^"]*"/.exec(BRAIN)[0],
+  // NAMED (Nov 23 2026, LR-2): BEFORE anchored on "collects public Bluesky posts"; AFTER on the LR-2 first sentence.
+  BRAIN = mutate(BRAIN, /"A background job that every 5 minutes looks for people asking[^"]*"/.exec(BRAIN)[0],
     `"A background job that scans Bluesky every 5 minutes for buying-intent posts, scores them against the user's business profile (industry, competitors), and separates genuine buyers from competitor mentions by matched keyword and suggested product (stored in bsky_leads)."`, "radar");
   console.log("\n!! MUTATION: Lead Radar is described as scoring against the business profile again — 6 must fail.");
 }
@@ -359,8 +363,9 @@ if (MUTATE === "invent") {
   console.log("\n!! MUTATION: the no-invention rule is pushed directly after the directives, before the agent prompt, profile, stats and memories, and its final blocks.push is removed — it is no longer last, so 11's ordering assertion must fail.");
 }
 if (MUTATE === "owner") {
-  BRAIN = mutate(BRAIN, /IT WORKS ON ONE ACCOUNT ONLY:[^"]*"/.exec(BRAIN)[0],
-    `UNAVAILABLE TO CUSTOMER ACCOUNTS: it runs against the platform's own connected social account, and its leads, scores and replies are shown to no other account."`, "owner");
+  // NAMED (Nov 23 2026, LR-2): BEFORE replaced "IT WORKS ON ONE ACCOUNT ONLY: ..."; AFTER replaces the sentence that points at the leadRadar line.
+  BRAIN = mutate(BRAIN, `"The leadRadar line in LIVE PLATFORM STATS says whether this user has it. If it says available, Lead Radar is theirs to use. "`,
+    `"UNAVAILABLE TO CUSTOMER ACCOUNTS: it runs against the platform's own connected social account, and its leads, scores and replies are shown to no other account. "`, "owner");
   console.log("\n!! MUTATION: Lead Radar is \"unavailable to customer accounts\" again, with nothing to tell the owner apart — 13 must fail.");
 }
 if (MUTATE === "zero") {
@@ -542,37 +547,58 @@ function runTask(agentType, stopReason, opts) {
 
   console.log("\n══ 6. Lead Radar ══");
   const radar = systemLine("Lead Radar");
-  const tick = radarDef("radarTick"), scorer = radarDef("scoreNewLeads"), start = radarDef("startLeadRadar");
-  const scorerPromptStart = scorer.indexOf("var prompt =");
-  const scorerPrompt = scorer.slice(scorerPromptStart, scorer.indexOf("\";\n", scorerPromptStart) + 2);
+  /* NAMED (Nov 23 2026, LR-2): BEFORE the owner's radar: runLeadRadarOnce, scoreNewLeads with fixed prompts about the owner's
+     products, bsky_leads, and five routes refusing every other account with LEAD_RADAR_UNAVAILABLE. AFTER radarTick runs
+     lib/memberRadar.js for every member (their Fingerprint words, member_leads), scoringPrompt scores against the member's
+     own Fingerprint on their own ledger, and the lead routes are members-only (lib/routeAccess.js M). Each code fact is
+     still paired with the sentence the agents are told. */
+  const tick = radarDef("radarTick"), start = radarDef("startLeadRadar");
+  const MR = fs.readFileSync(path.join(REPO, "lib", "memberRadar.js"), "utf8").replace(/\r\n/g, "\n");
+  const MRL = require(path.join(REPO, "lib", "memberRadar.js"));
+  const J = JSON.stringify;   // NAMED (Nov 23 2026, LR-2)
+  const scorer = definitionOf(MR, "scoringPrompt") || "";
+  const scorerPrompt = scorer;
+  const scorerPromptStart = scorer ? 0 : -1;
   console.log("    " + radar.slice(0, 110) + "…");
-  check("6. code: the tick runs every 300,000 ms and Bluesky capture is not behind a switch",
-    /setInterval\(radarTick, 300000\)/.test(start) && tick.indexOf("runLeadRadarOnce(") !== -1 && tick.indexOf("runLeadRadarOnce(") < tick.indexOf("process.env.ENABLE_"));
-  // NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon and YouTube capture run only when their switch is exactly true". AFTER Mastodon lead search is removed:
-  // no mastodonRadar.js, no ENABLE_MASTODON_RADAR in the tick; YouTube stays behind its switch.
+  const enables = tick.match(/process\.env\.ENABLE_[A-Z_]+/g) || [];
+  check("6. code: the tick runs every 300,000 ms and runs every member's radar (memberRadar.runTick) behind no switch",
+    /setInterval\(radarTick, 300000\)/.test(start) && tick.indexOf("result = await memberRadar.runTick(deps);") !== -1 &&
+    J(enables.slice().sort()) === J(["process.env.ENABLE_LEAD_SCORING", "process.env.ENABLE_YOUTUBE_RADAR"]) && !/if \(process\.env\.ENABLE_[A-Z_]+[^)]*\) \{[^}]*runTick/.test(tick), J(enables));
   check("6. code: Mastodon lead search is removed, and YouTube capture runs only when its switch is exactly \"true\"",
     !fs.existsSync(path.join(REPO, "mastodonRadar.js")) && tick.indexOf("process.env.ENABLE_MASTODON_RADAR") === -1 && tick.indexOf("runMastodonRadarOnce(") === -1 &&
-    tick.indexOf('process.env.ENABLE_YOUTUBE_RADAR === "true"') !== -1);
+    tick.indexOf('youtube: process.env.ENABLE_YOUTUBE_RADAR === "true" ? ') !== -1);
   check("6. code: Reddit is never started (every startRedditRadar call is commented out)",
     SERVER.split("\n").filter(l => l.indexOf("startRedditRadar(") !== -1).every(l => l.trim().startsWith("//")));
-  // NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon and YouTube collection exist behind switches that are off by default; Reddit is disabled". AFTER YouTube off by default, no Mastodon or Reddit lead search, no reply without approval.
-  check("6. told: Bluesky every 5 minutes, YouTube off by default, no Mastodon or Reddit lead search, no reply without approval",
-    /every 5 minutes collects public Bluesky posts/.test(radar) && /YouTube collection exists behind a switch that is off by default/.test(radar) && /There is no Mastodon or Reddit lead search/.test(radar) &&
-    /nothing is ever replied to without a person approving the exact text first/.test(radar) && !/Mastodon and YouTube collection exist/.test(radar), radar.slice(0, 80));
+  check("6. told: every 5 minutes, the member's own Fingerprint words, YouTube off by default and never scored or replied to, no Mastodon or Reddit lead search, only the approved text from their own account",
+    /every 5 minutes looks for people asking for what a member offers, searching the member's own Fingerprint words\./.test(radar) &&
+    /YouTube \(behind a switch that is off by default; its comments are never scored and cannot be replied to\)/.test(radar) && /There is no Mastodon or Reddit lead search/.test(radar) &&
+    /A reply posts only the exact text the member approved, from their own connected account; nothing is ever posted or sent on its own\./.test(radar) &&
+    !/collects public Bluesky posts|ONE ACCOUNT ONLY|fixed list/.test(radar), radar.slice(0, 80));
   const PROFILE_FIELDS = ["business_profiles", "industry", "competitor", "target_audience", "products_services", "business_name", "profile"];
-  check("6. code: neither scoreNewLeads nor its prompt reads a business-profile field",
-    scorerPromptStart !== -1 && PROFILE_FIELDS.every(f => scorer.indexOf(f) === -1), PROFILE_FIELDS.filter(f => scorer.indexOf(f) !== -1).join(","));
+  check("6. code: neither memberRadar.js nor its scoring prompt reads a business-profile field (it reads the Fingerprint)",
+    !!scorer && /FP\.shape\(fp\)/.test(scorer) && PROFILE_FIELDS.every(f => scorer.indexOf(f) === -1) && MR.indexOf("business_profiles") === -1,
+    PROFILE_FIELDS.filter(f => scorer.indexOf(f) !== -1).join(","));
   check("6. told: it does not read the business profile, and nothing says it scores against industry or competitors",
     /It does not read the user's business profile\./.test(radar) && !/business profile \(|competitor/i.test(radar), radar.slice(0, 80));
-  check("6. code: scoring runs only when ENABLE_LEAD_SCORING is exactly \"true\"",
-    /if \(process\.env\.ENABLE_LEAD_SCORING === "true"\) \{[^}]*scoreNewLeads\(/.test(tick));
-  check("6. code: the scorer separates seekers from teachers and sellers, scores 0-100, and screens safety and invitation",
-    ["teaching, coaching, promoting, or selling", "<integer 0-100>", "SAFE | UNSAFE", "INVITED | NOT_INVITED"].every(s => scorerPrompt.indexOf(s) !== -1));
-  check("6. told: scoring is switched, 0-100, seekers vs teachers, coaches and sellers, a fixed product list, safety and invitation",
-    /When scoring is switched on/.test(radar) && /rated 0-100/.test(radar) && /teachers, coaches and sellers/.test(radar) && /fixed list/.test(radar) && /safe and invited/.test(radar));
-  const radarRefusals = (SERVER.match(/res\.status\(403\)\.json\(LEAD_RADAR_UNAVAILABLE\)/g) || []).length;
-  check("6. code: the lead routes refuse other accounts with LEAD_RADAR_UNAVAILABLE (" + radarRefusals + " routes)",
-    /const LEAD_RADAR_UNAVAILABLE = \{/.test(SERVER) && radarRefusals >= 4, radarRefusals);
+  check("6. code: scoring runs only when ENABLE_LEAD_SCORING is exactly \"true\", on Bluesky and Threads only, at most 40 a day by default",
+    /var scoringOn = process\.env\.ENABLE_LEAD_SCORING === "true";/.test(tick) && /scoringOn: scoringOn/.test(tick) && /\n  if \(deps\.scoringOn\) \{/.test(MR) &&
+    J(MRL.SCORED_SOURCES) === J(["bluesky", "threads"]) && MRL.SCORE_CAP_DEFAULT === 40);
+  check("6. code: the scorer rates 0-100, scores the same seller low, and screens safety and invitation",
+    ["selling the same thing", "<integer 0-100>", "SAFE | UNSAFE", "INVITED | NOT_INVITED"].every(x => scorerPrompt.indexOf(x) !== -1));
+  check("6. code: its one model call passes the member's id, to their allowance and ledger",
+    /function leadRadarModelCall\(userId, prompt, maxTokens, route\) \{\n  return callAnthropicText\(prompt, maxTokens, userId, /.test(SERVER));
+  check("6. code: leads not saved, replied to or won are deleted after 30 days", MRL.RETENTION_DAYS === 30 && J(MRL.KEEP_STATUSES) === J(["saved", "replied", "won"]));
+  check("6. told: switched scoring, 0-100, Bluesky and Threads only, the member's own Fingerprint and allowance, 40 a day, safety and invitation, 30 days, Needs never scored",
+    /When scoring is switched on, Bluesky and Threads leads are rated 0-100 against the member's own Fingerprint by one AI call each, on the member's own AI allowance and ledger, at most 40 a day/.test(radar) &&
+    /selling the same thing/.test(radar) && /safe and invited/.test(radar) && /deleted after 30 days/.test(radar) && /BizForce Needs \(matched by category and place, never scored by AI\)/.test(radar));
+  const RA = require(path.join(REPO, "lib", "routeAccess.js"));
+  const LEAD_ROUTES = ["get /api/leads", "get /api/leads/fingerprint", "put /api/leads/fingerprint", "get /api/leads/summary", "post /api/leads/:id/status", "post /api/leads/:id/draft", "post /api/leads/:id/send"];
+  const radarMembers = LEAD_ROUTES.every(k => RA.MEMBER.indexOf(k) !== -1) && RA.ADMIN.indexOf("get /api/leads/archive") !== -1 && SERVER.indexOf("LEAD_RADAR_UNAVAILABLE =") === -1;
+  check("6. code: the lead routes are members-only (route group M), the old leads are the owner's archive (A), and the owner-only refusal is gone",
+    radarMembers, J(LEAD_ROUTES.filter(k => RA.MEMBER.indexOf(k) === -1)));
+  check("6. told: a members' feature, free accounts do not have it, kept in member_leads, the old bsky_leads only the owner's read-only archive",
+    /It is a members' feature \(the owner counts as a member\); free accounts do not have it\./.test(radar) && /Each member's leads are kept in member_leads/.test(radar) &&
+    /The owner's old leads \(bsky_leads\) are a read-only archive for the owner\./.test(radar) && (radar.match(/bsky_leads/g) || []).length === 1, radar.slice(0, 80));
 
   console.log("\n══ 7. SMS ══");
   const sms = systemLine("SMS Marketing / Drip System");
@@ -633,24 +659,30 @@ function runTask(agentType, stopReason, opts) {
      BEFORE pricing: "SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on ...".
      AFTER pricing:  "SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on ...".
      BEFORE platform: "Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only".
-     AFTER platform:  "Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only". */
+     AFTER platform:  "Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only".
+     NAMED (Nov 23 2026, LR-2): BEFORE "... and Lead Radar works only on the one account that holds the platform's connected social credentials" and
+     "Lead Radar works on one account only". AFTER "... and Lead Radar is for members only, so a free account does not have it" and "Lead Radar is a members' feature". */
   check("9. told: the pricing line says SMS sending is unavailable, social publishing reaches only the member's own Bluesky, and Lead Radar works on one account, as the code has them",
-    smsSendsNothing && socialGated && blueskyPath && radarRefusals >= 4 &&
-    /SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on the one account that holds the platform's connected social credentials\./.test(pricing), pricing.slice(-200));
+    smsSendsNothing && socialGated && blueskyPath && radarMembers &&   // NAMED (Nov 23 2026, LR-2): BEFORE radarRefusals >= 4
+    /SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar is for members only, so a free account does not have it\./.test(pricing), pricing.slice(-200));
   check("9. told: the platform line claims no SMS marketing or lead detection, and names what is unavailable and what reaches Bluesky",
-    !/SMS marketing|lead detection/.test(platform) && /Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only/.test(platform), platform.slice(0, 80));
+    !/SMS marketing|lead detection/.test(platform) && /Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar is a members' feature/.test(platform), platform.slice(0, 80));
 
   console.log("\n══ 10. data_model (documentation: never rendered into a prompt) ══");
   const memDoc = brain.PLATFORM_KNOWLEDGE.data_model.agent_memory;
   check("10. data_model is not rendered into the agents' prompt", prompt.indexOf("Longer-lived per-agent") === -1);
-  const memInserts = ["orchestrateAgentWorkflow", "processAiTask", "convertSingleLead"].map(def)
-    .concat(['app.post("/api/oracle"', 'app.post("/api/memory"', 'app.post("/api/agents/seo/optimize"', 'app.post("/api/agents/sales/lead-status"'].map(routeBody));
-  check("10. code: agent_memory is inserted by the task, assignment, Oracle, memory-page, SEO and sales paths it names",
+  // NAMED (Nov 23 2026, LR-2): BEFORE + convertSingleLead and POST /api/agents/sales/lead-status (the sales tools), which LR-2 removed;
+  // AFTER the doc says "by the SEO tool", and neither sales path exists.
+  const memInserts = ["orchestrateAgentWorkflow", "processAiTask"].map(def)
+    .concat(['app.post("/api/oracle"', 'app.post("/api/memory"', 'app.post("/api/agents/seo/optimize"'].map(routeBody));
+  check("10. code: the removed sales tools are gone (no convertSingleLead, no POST /api/agents/sales/lead-status)",
+    !definitionOf(SERVER, "convertSingleLead") && SERVER.indexOf('app.post("/api/agents/sales/lead-status"') === -1);
+  check("10. code: agent_memory is inserted by the task, assignment, Oracle, memory-page and SEO paths it names",
     memInserts.every(b => /\.from\("agent_memory"\)\s*\.insert\(/.test(b)), memInserts.map(b => /\.from\("agent_memory"\)\s*\.insert\(/.test(b)).join(","));
   check("10. code: a typed task reads its agent's five newest memories",
     /\.from\("agent_memory"\)[\s\S]{0,300}\.eq\("agent_type", agentType\)[\s\S]{0,100}\.limit\(5\)/.test(def("handleAiTaskRequest")));
   check("10. documented: the same writers, and five newest read into the next typed task",
-    /when a task completes/.test(memDoc) && /when an assignment starts/.test(memDoc) && /on each Oracle exchange/.test(memDoc) && /by the SEO and sales tools/.test(memDoc) && /from the memory page/.test(memDoc) && /five newest per agent are read into that agent's next typed task/.test(memDoc), memDoc);
+    /when a task completes/.test(memDoc) && /when an assignment starts/.test(memDoc) && /on each Oracle exchange/.test(memDoc) && /by the SEO tool, and by the user/.test(memDoc) && !/sales tools/.test(memDoc) && /from the memory page/.test(memDoc) && /five newest per agent are read into that agent's next typed task/.test(memDoc), memDoc);
 
   console.log("\n══ 11. no invented numbers or offers — present, short, and last ══");
   const rule = brain.NO_INVENTION_RULE || "";
@@ -713,10 +745,13 @@ function runTask(agentType, stopReason, opts) {
       }
     };
   }
-  const statsCtx = { supabase: statsDb(), console: { error() {}, log() {}, warn() {} }, OWNER_ACCOUNT_ID: require("../lib/ownerAccount").OWNER_ACCOUNT_ID };
+  // NAMED (Nov 23 2026, LR-2): getLiveStats now asks leadRadarStatLine, which reads the plan; getUserPlan is faked by account.
+  const STAT_MEMBER = "c0000000-0000-4000-8000-0000000000c1", STAT_THROWS = "c0000000-0000-4000-8000-0000000000c2";
+  const statsCtx = { supabase: statsDb(), console: { error() {}, log() {}, warn() {} }, OWNER_ACCOUNT_ID: require("../lib/ownerAccount").OWNER_ACCOUNT_ID,
+    getUserPlan: async function (id) { if (id === STAT_THROWS) throw new Error("plan read failed"); return { active: id === STAT_MEMBER || id === require("../lib/ownerAccount").OWNER_ACCOUNT_ID }; } };
   vm.createContext(statsCtx);
   const helper = definitionOf(SERVER, "countTasksByAgent");
-  vm.runInContext([def("AGENT_SYSTEM_PROMPTS"), def("OUTREACH_CREDENTIAL_OWNER_ID"), def("getLiveStats"), helper || ""]
+  vm.runInContext([def("AGENT_SYSTEM_PROMPTS"), def("OUTREACH_CREDENTIAL_OWNER_ID"), def("accessTier"), def("leadRadarStatLine"), def("getLiveStats"), helper || ""]
     .map(s => s.replace(/^const /, "var ")).join("\n\n") + "\nthis.run = getLiveStats;", statsCtx);
   const ownerStats = await statsCtx.run(statsCtx.OWNER_ACCOUNT_ID);
   const expectedByAgent = { seo: 3, sales: 7900, content: 21, email: 2, operations: 1, executive: 13, social: 7, rd: 2, general: 3, other: 3 };
@@ -731,22 +766,28 @@ function runTask(agentType, stopReason, opts) {
   check("12. the breakdown sums to tasksRun (" + ownerStats.tasksRun + ")",
     Object.values(ownerStats.byAgent).reduce((a, b) => a + b, 0) === ownerStats.tasksRun, Object.values(ownerStats.byAgent).reduce((a, b) => a + b, 0));
 
-  console.log("\n══ 13. Lead Radar — the owner told apart from a customer ══");
+  console.log("\n══ 13. Lead Radar — a member told apart from a free account ══");
   const customerStats = await statsCtx.run(SUBJECT_USER_ID);
   const radarLine = systemLine("Lead Radar");
   console.log("    owner: " + ownerStats.leadRadar + " | other account: " + customerStats.leadRadar);
-  check("13. code: getLiveStats decides with the same constant the lead routes refuse on",
-    /userId === OUTREACH_CREDENTIAL_OWNER_ID/.test(def("getLiveStats")) && /req\.user\.id !== OUTREACH_CREDENTIAL_OWNER_ID/.test(SERVER));
-  check("13. code: the credential owner is told available, any other account not available",
-    /^available on this account/.test(ownerStats.leadRadar || "") && customerStats.leadRadar === "not available on this account",
-    JSON.stringify([ownerStats.leadRadar, customerStats.leadRadar]));
+  /* NAMED (Nov 23 2026, LR-2): BEFORE "available" for OUTREACH_CREDENTIAL_OWNER_ID only, "not available" for every other account.
+     AFTER a member (the owner's pass counts) is told available, a free account not available, and a plan that cannot be read gives null. */
+  const memberStats = await statsCtx.run(STAT_MEMBER), throwsStats = await statsCtx.run(STAT_THROWS);
+  console.log("    member: " + memberStats.leadRadar + " | unreadable plan: " + throwsStats.leadRadar);
+  check("13. code: getLiveStats takes the leadRadar line from leadRadarStatLine, which reads accessTier(await getUserPlan(userId)) and nothing owner-only",
+    /leadRadar: await leadRadarStatLine\(userId\),/.test(def("getLiveStats")) && /accessTier\(await getUserPlan\(userId\)\)/.test(def("leadRadarStatLine")) &&
+    !/OUTREACH_CREDENTIAL_OWNER_ID|OWNER_ACCOUNT_ID/.test((def("leadRadarStatLine") + def("getLiveStats")).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
+  check("13. code: the owner and a member are told available, a free account not available, an unreadable plan nothing (null)",
+    /^available on this account/.test(ownerStats.leadRadar || "") && /^available on this account/.test(memberStats.leadRadar || "") &&
+    customerStats.leadRadar === "not available on this account (a members' feature)" && throwsStats.leadRadar === null,
+    JSON.stringify([ownerStats.leadRadar, memberStats.leadRadar, customerStats.leadRadar, throwsStats.leadRadar]));
   const ownerPrompt = brain.buildAgentSystemPrompt("X", {}, { leadRadar: ownerStats.leadRadar }, []);
   check("13. the leadRadar line reaches the prompt", ownerPrompt.indexOf("- leadRadar: available on this account") !== -1);
-  check("13. told: one account only, the leadRadar line names which, all three cases covered, no blanket \"customer accounts\"",
-    /IT WORKS ON ONE ACCOUNT ONLY/.test(radarLine) && /The leadRadar line in LIVE PLATFORM STATS says which this user is\./.test(radarLine) &&
-    /If it says available, this user holds the credentials and Lead Radar is theirs to use\./.test(radarLine) &&
-    /If it says not available, it is unavailable to them\./.test(radarLine) &&
-    /If there is no leadRadar line, you do not know which account this is: do not tell the user either way\./.test(radarLine) &&
+  check("13. told: the leadRadar line says whether this user has it, all three cases covered, no blanket \"customer accounts\"",
+    /The leadRadar line in LIVE PLATFORM STATS says whether this user has it\./.test(radarLine) &&
+    /If it says available, Lead Radar is theirs to use\./.test(radarLine) &&
+    /If it says not available, it is a members' feature they do not have\./.test(radarLine) &&
+    /If there is no leadRadar line, you do not know which: do not tell the user either way\./.test(radarLine) &&
     !/CUSTOMER ACCOUNTS/i.test(radarLine), radarLine.slice(-200));
 
   console.log("\n══ 14. what a zero in the stats means ══");

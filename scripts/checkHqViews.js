@@ -136,8 +136,8 @@ const MUTATIONS = {
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"lr1b\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
+  // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"lr2b\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
   // FX3B (Nov 22 2026): a moon whose photo failed shows again (drawn whole) at every repaint, until the error hides it
   "fx3b-moon-reveal": [[MOON, "    el.hidden = failed;\n", "    el.hidden = false;\n"]],
   // FX3B: no probe, so a moon whose photo failed never shows again
@@ -208,11 +208,12 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
     // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
     // NAMED (Nov 21 2026, FX2, migration 200): 200_categories_and_intent.sql (the shared categories table, post category, intent, need_place and need_when, marketplace_listings.category_slug, and 200e's agents_card_view, search_visible and the SEO fields; applied by hand Nov 21 2026) is allowed above too, by name; "the highest" (200) is checkBuyListingDigital R1's.
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
-    top === 203 /* NAMED (Nov 23 2026, LR-1): BEFORE 202 */ && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
+    top === 204 /* NAMED (Nov 23 2026, LR-2): BEFORE 203 */ && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
     // NAMED (Nov 23 2026, P3-3, migration 202): 202_need_found_and_alerts.sql (posts.need_found_at, a Need marked Found, and user_preferences.need_alerts) is allowed too, by name.
     // NAMED (Nov 23 2026, LR-1, migration 203): 203_lr1_archived_and_sms_pending.sql (sales_lead_pipeline may be 'archived'; sms_subscribers.consent_status defaults to 'pending') is allowed too, by name.
-    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql,202_need_found_and_alerts.sql,203_lr1_archived_and_sms_pending.sql", J([top]));
+    // NAMED (Nov 23 2026, LR-2, migration 204): 204_lr2_member_lead_radar.sql (lead_fingerprints, member_leads, member_lead_replies, lead_search_cache, threads_connections) is allowed too, by name.
+    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql,202_need_found_and_alerts.sql,203_lr1_archived_and_sms_pending.sql,204_lr2_member_lead_radar.sql", J([top]));
   check("R2. it adds hq_card_view and hq_orbit as text, only if they do not exist (safe to re-run)",
     has(mig, "ADD COLUMN IF NOT EXISTS hq_card_view text,") && has(mig, "ADD COLUMN IF NOT EXISTS hq_orbit     text;"));
   check("R3. the named CHECKs as live: user_preferences_hq_card_view_check (NULL or large, compact, grid) and user_preferences_hq_orbit_check (NULL or shown, hidden), each dropped if it exists first",
@@ -641,8 +642,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
-  check("W1. SHELL_REV \"lr1b\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", /var SHELL_REV = "lr1b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]) &&
+  // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
+  check("W1. SHELL_REV \"lr2b\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", /var SHELL_REV = "lr2b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]) &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js (NAMED, Nov 22 2026, FX3: bf-abyss.js, the abyss sun's stars, just before bf-oracle-moon.js)", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-abyss\.js"><\/script>\n<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

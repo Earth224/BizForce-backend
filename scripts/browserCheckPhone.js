@@ -184,7 +184,33 @@
                        down). agents/sales.html, agents/lead-radar.html and
                        dashboard.html are unchanged at 1440. The proof is
                        Downloads\phone1\lr1-desktop-proof.json.
-     PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
+                       NAMED (Nov 23 2026, LR-2): two pages are re-recorded in
+                       desktop-baseline-pplr2-<page>.json (the names sort after pplr1):
+                       agents/lead-radar.html (rebuilt to the LeadsHome board for every
+                       member: none of its 64 elements kept, 62 new, the page 640 px
+                       wide and centred) and rd-agent.html (Demand Signals is a
+                       members' tool: its owner gate is gone and its description reads
+                       the member's own finds; 3 elements gone, 2 new, 102 the same).
+                       Two more are re-recorded the same way: integrations.html (the
+                       Threads tile: 7 new, none gone; the grid reflows one tile along,
+                       the page 76 px taller) and privacy.html (Your data names the
+                       Fingerprint, leads, replies and Threads connection; Bluesky's
+                       third-party line reworded, Threads added: 6 new, 1 gone, 324
+                       below moved down, the page 475 px taller). agents/sales.html,
+                       agents/social.html (the Threads tile is in the closed Accounts
+                       tab) and dashboard.html are unchanged at 1440. The proof is
+                       Downloads\phone1\lr2-desktop-proof.json.
+                       NAMED (Nov 24 2026, LR-2B): two more in
+                       desktop-baseline-pplr2b-<page>.json (the names sort after pplr2):
+                       terms.html (the Lead Radar line in "What members get": 4 boxes
+                       grew 26.4 px, 148 below moved down 26.4 px, 69 the same, none
+                       new or gone, the page 27 px taller) and threads-deletion.html (a
+                       new page, Meta's data-deletion status: 72 elements, height 900).
+                       agents/lead-radar.html (the spare words sit in the Fingerprint
+                       tab, closed at 1440), privacy.html, dashboard.html and
+                       integrations.html are unchanged at 1440. The proof is
+                       Downloads\phone1\lr2b-desktop-proof.json.
+     PHONE_P21=1        only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
                            at 360, 390 and 430; screenshots to Downloads\p21.
@@ -216,6 +242,12 @@
      PHONE_P33=1           only P3-3's own screens (p33Run): the composer's Share, Offer or Need, the
                            Need post and I can help, Found, the Market's categories, Need alerts in Settings
                            (NAMED (Nov 23 2026, P3-3)); screenshots to PHONE_P33_OUT (default Downloads\p33)
+     PHONE_LR2=1           only LR-2's Lead Radar (lr2Run; NAMED (Nov 23 2026, LR-2)): the boards LeadsHome,
+                           LeadsReply and LeadsFingerprint measured, the source chips filtering, Save and
+                           Not a fit, the sheet posting the EDITED text, no Bluesky account (Connect), a free
+                           account (the members panel, no lead request), signed out (the sign-in page), and
+                           Threads waiting for Meta; fixtures only, nothing is ever sent; at 360, 390 and 430;
+                           screenshots at 390 x 844 to PHONE_LR2_OUT (default Downloads\lr2)
      PHONE_P32=1           only P3-2's own screens (p32Run): the Verified badge on the
                            Following feed, Talk, the profile, a storefront and the public
                            post page /p/; its tap sheet ("Verified: [kind]. This is not an
@@ -269,7 +301,7 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && PAGES.length > 15) {   // NAMED (Nov 23 2026, P3-3): and PHONE_P33   // HQ1 and P2-1: their own runs, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && process.env.PHONE_LR2 !== "1" && PAGES.length > 15) {   // NAMED (Nov 23 2026, P3-3): and PHONE_P33. NAMED (Nov 23 2026, LR-2): and PHONE_LR2   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -467,6 +499,7 @@ const TONE = (() => { const n = 160000, b = Buffer.alloc(44 + n * 2); b.write("R
   b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(16000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write("data", 36); b.writeUInt32LE(n * 2, 40); return b; })();
 function api(method, u, request) {
   const p = u.pathname;
+  if (LR2) { const a = lr2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 23 2026, LR-2)
   if (FX3) { const a = fx3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 22 2026, FX3)
   if (P23 && FX2S.on && !FX2S.inner) { const a = fx2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, FX2)
   // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
@@ -823,6 +856,7 @@ const ORBIT = String.raw`(function(){
     else if (P32) { await p32Run(cdp, origin); PAGES = []; }   // NAMED (Nov 21 2026, P3-2)
     else if (FX3) { await fx3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 22 2026, FX3)
     else if (P33) { await p33Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, P3-3)
+    else if (LR2) { await lr2Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, LR-2)
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -3042,5 +3076,280 @@ async function p33Run(cdp, origin) {
     const stFree = await ev("(function(){var r=document.getElementById('needAlertsRow');return !!r&&(r.hidden||r.getBoundingClientRect().height===0);})()");
     check("P33 Settings (a free account) at " + w + ": no Need alerts switch (alerts go to members only)", stFree === true);
     P33S.member = true;
+  }
+}
+
+/* ══ LR-2 (Nov 23 2026): PHONE_LR2=1 ═════════════════════════════════════════════════════════════════════
+   NAMED (Nov 23 2026, LR-2): every member's Lead Radar (agents/lead-radar.html) at PHONE_LR2_WIDTHS (default 360, 390, 430),
+   fixtures only: no request leaves the browser, and POST /api/leads/:id/send is answered here ({ sent: true, uri, text },
+   as lib/leadRoutes.js answers it), so nothing is ever posted. The leads are the owner's board copy (LeadsHome): a BizForce
+   Need, a Bluesky post that asked the room, a YouTube comment. Measured against scripts/designSpec.js LEADS: the header,
+   the two tabs, the stats, the chips, the cards, the badges and the buttons; the chips filter (?source=); Save and Not a
+   fit (POST /api/leads/:id/status); the sheet (LeadsReply) posts the box's EDITED text; with no Bluesky account the draft's
+   409 not_connected shows "Connect your Bluesky account to reply" and Connect; the Fingerprint (LeadsFingerprint) with
+   Threads "Waiting for Meta's approval"; a free account sees the members panel and makes no lead request; signed out, the
+   page goes to the sign-in page (bf-session.js) and makes no lead request. Five screenshots at 390 x 844 (DPR 2). */
+const LR2 = process.env.PHONE_LR2 === "1";
+const LR2_WIDTHS = String(process.env.PHONE_LR2_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const LR2_OUT = process.env.PHONE_LR2_OUT || path.join(os.homedir(), "Downloads", "lr2");
+const LR2S = { member: true, connected: true, calls: [], statuses: [], drafts: [], sends: [], fpPuts: [], fp: null, leads: [] };
+const LR2_IDS = { need: "dddddddd-0000-4000-8000-000000000201", bsky: "dddddddd-0000-4000-8000-000000000202", yt: "dddddddd-0000-4000-8000-000000000203", needPost: uid(8201) };
+const LR2_DRAFT = "I do cover-ups in North Park, San Diego. Black and grey is most of my work. Happy to look at a photo of the old piece and tell you honestly what is possible. My booking page is on my profile.";
+function lr2Leads() {
+  return [
+    { id: LR2_IDS.need, source: "bizforce", status: "new", text: "Looking for a tattoo artist for a forearm piece, black and grey, this month.", author_handle: "Marcus R.", author_place: "San Diego",
+      posted_at: ago(2), match_reason: "Strong match: Tattoo and Body Art · your city", need_post_id: LR2_IDS.needPost, can_reply: false },
+    { id: LR2_IDS.bsky, source: "bluesky", status: "new", text: "Anyone in San Diego do cover-up tattoos? Want to fix an old piece before summer.", reply_invited: true, reply_platform: "bluesky",
+      posted_at: ago(5), match_reason: "Good match: \"cover up\" · San Diego", url: "https://bsky.app/profile/someone.example/post/3lr2", can_reply: true },
+    { id: LR2_IDS.yt, source: "youtube", status: "new", text: "Where do people even find a fine line artist who does lettering?", posted_at: ago(24), can_reply: false }
+  ];
+}
+function lr2Fp() {
+  return { fingerprint: { categories: ["tattoo_body_art", "art"], place_city: "San Diego", place_region: "CA", reach: "city", keywords: ["tattoo artist", "cover up", "black and grey", "fine line"],
+    not_for_me: ["tattoo removal"], sources: { bizforce: true, bluesky: true, youtube: true, threads: false } },
+    all_categories: P33_CATS.map(c => ({ slug: c.slug, name: c.slug === "tattoo_body_art" ? "Tattoo and Body Art" : c.slug === "art" ? "Art" : c.name })),
+    accounts: { bluesky: { state: "ready" }, threads: { state: "waiting_approval" } } };
+}
+function lr2Api(method, u, request) {
+  const p = u.pathname;
+  let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; }
+  if (/^\/api\/leads/.test(p)) LR2S.calls.push(method + " " + p + u.search);
+  if (p === "/api/auth/me") return { user: Object.assign({}, ROSE, { role: "user", email_verified_at: ago(24) }),
+    access: LR2S.member ? { active: true, exempt: false, access_reason: "subscription", inactive_reason: null, tier: "member", email_verified: true, members_panel: require("../lib/membership").membersPanelFromCode() }
+      : { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: true, members_panel: require("../lib/membership").membersPanelFromCode() },
+    subscription: null, profile: { username: "rose" } };
+  if (/^\/api\/leads/.test(p) && !LR2S.member) return { __status: 402, __body: { error: "Lead Radar is for members.", code: "members_only", members_panel: require("../lib/membership").membersPanelFromCode() } };
+  if (p === "/api/leads" && method === "GET") {
+    const src = u.searchParams.get("source") || "all";
+    return { leads: LR2S.leads.filter(l => src === "all" || l.source === src), stats: { new_this_week: 12, replied: 4, won: 2 },
+      sources_on: { bizforce: true, bluesky: true, youtube: true, threads: false }, weaker_hidden: 0 };
+  }
+  let m = /^\/api\/leads\/([^/]+)\/status$/.exec(p);
+  if (m && method === "POST") { LR2S.statuses.push({ id: m[1], status: b.status }); const l = LR2S.leads.find(x => x.id === m[1]);
+    if (l && b.status === "dismissed") LR2S.leads = LR2S.leads.filter(x => x.id !== m[1]); else if (l) l.status = b.status; return { lead: { id: m[1], status: b.status } }; }
+  m = /^\/api\/leads\/([^/]+)\/draft$/.exec(p);
+  if (m && method === "POST") { LR2S.drafts.push({ id: m[1], body: b });
+    if (!LR2S.connected) return { __status: 409, __body: { code: "not_connected", platform: "bluesky", error: "Connect your Bluesky account to reply." } };
+    return { draft: LR2_DRAFT, platform: "bluesky", posts_as: { kind: "member" }, checks: { answers: true, no_hard_sell: true, invited: true } }; }
+  m = /^\/api\/leads\/([^/]+)\/send$/.exec(p);
+  if (m && method === "POST") { LR2S.sends.push({ id: m[1], body: b }); const l = LR2S.leads.find(x => x.id === m[1]); if (l) { l.status = "replied"; l.can_reply = false; }
+    return { sent: true, uri: "at://did:plc:check/app.bsky.feed.post/lr2", text: b.text }; }
+  if (p === "/api/leads/fingerprint" && method === "GET") return LR2S.fp;
+  if (p === "/api/leads/fingerprint" && method === "PUT") { LR2S.fpPuts.push(b); Object.assign(LR2S.fp.fingerprint, b); return LR2S.fp; }
+  // NAMED (Nov 24 2026, LR-2B): the spare-word swap, as lib/leadFingerprint.js swapPlan answers it.
+  if (p === "/api/leads/fingerprint/spare/swap" && method === "POST") {
+    (LR2S.swaps = LR2S.swaps || []).push(b);
+    const kw = LR2S.fp.fingerprint.keywords, sp = LR2S.fp.spare_words || [];
+    if (sp.indexOf(b.add) === -1) return { __status: 400, __body: { error: "That word is not in your spare words.", code: "not_spare" } };
+    const rest = sp.filter(x => x !== b.add);
+    if (kw.length < 12) { LR2S.fp.fingerprint.keywords = kw.concat([b.add]); LR2S.fp.spare_words = rest; return Object.assign({}, LR2S.fp, { replaced: null }); }
+    const at = kw.indexOf(b.replace);
+    if (at === -1) return { __status: 409, __body: { error: "Your Fingerprint has 12 words. Pick the one to replace.", code: "pick_one" } };
+    const next = kw.slice(); next[at] = b.add; LR2S.fp.fingerprint.keywords = next; LR2S.fp.spare_words = [b.replace].concat(rest);
+    return Object.assign({}, LR2S.fp, { replaced: b.replace });
+  }
+  if (p === "/api/leads/summary") return { new_this_week: 12 };
+  return undefined;
+}
+async function lr2Run(cdp, origin) {
+  fs.mkdirSync(LR2_OUT, { recursive: true });
+  console.log("browserCheckPhone LR-2 (Lead Radar: the boards, the chips, Save and Not a fit, the reply sheet, Connect, the Fingerprint, Threads waiting, a free account, signed out) at " + LR2_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const L = require("./designSpec").LEADS;
+  const SHEET = /^div#lr(Veil|Sheet)[. ]/, VEIL = /^div#bf-members-panel /;
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    check(at + "no text cut off", m.clipped.length === 0, J(m.clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const ok = x => (opts && opts.sheet && SHEET.test(x)) || (opts && opts.panel && VEIL.test(x));
+    const deco = m.deco.filter(x => !ok(x));
+    check(at + "decoration is under the text", deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !ok(x));
+    check(at + "no fixed element over text or a control at rest" + (opts && (opts.sheet || opts.panel) ? " (the sheet or the panel is meant to cover the page)" : ""), over.length === 0, J(over));
+  };
+  const BOX = "function bx(e){if(!e)return null;var r=e.getBoundingClientRect(),c=getComputedStyle(e);return {w:Math.round(r.width),h:Math.round(r.height),l:Math.round(r.left),r:Math.round(r.right),t:Math.round(r.top),b:Math.round(r.bottom),rad:c.borderTopLeftRadius,pad:c.paddingTop+' '+c.paddingRight,fs:c.fontSize,tt:c.textTransform,op:c.opacity,txt:(e.innerText||'').replace(/\\s+/g,' ').trim()};}";
+  const READ_HOME = "(function(){" + BOX + "var q=function(s){return document.querySelector(s);},qa=function(s){return [].slice.call(document.querySelectorAll(s));};" +
+    "return {title:(q('.lr-title')||{}).textContent,hbtn:qa('.lr-head .lr-hbtn').filter(function(e){return !e.hidden;}).map(bx),mark:bx(q('.lr-mark')),tabs:qa('.lr-tb').map(function(t){return {f:bx(t.querySelector('.lr-tbf')),hit:bx(t),on:t.getAttribute('aria-selected')};})," +
+    "stats:qa('.lr-stat').map(function(s){return s.innerText.replace(/\\s+/g,' ').trim();}),chips:qa('#lrChips .lr-chip').map(function(c){return {v:c.getAttribute('data-v'),on:c.getAttribute('aria-pressed'),f:bx(c.querySelector('.lr-chipf')),hit:bx(c)};})," +
+    "cards:qa('#lrList .lr-card[data-lead]').map(function(c){var b=c.querySelector('.lr-badge');return {id:c.getAttribute('data-lead'),src:c.getAttribute('data-source'),card:bx(c),badge:bx(b),meta:(c.querySelector('.lr-meta')||{}).textContent||'',match:(c.querySelector('.lr-match')||{}).textContent||'',acts:(c.querySelector('.lr-acts')||{}).textContent||''," +
+    "btns:[].map.call(c.querySelectorAll('.lr-acts .lr-btn'),function(x){return {t:x.innerText.trim(),f:bx(x.querySelector('.lr-btnf')),hit:bx(x)};})};})," +
+    "foot:(q('.lr-foot')||{}).textContent,state:q('#lrState')&&!q('#lrState').hidden?q('#lrState').getAttribute('data-state'):null,panel:!!document.getElementById('bf-members-panel')};})()";
+  const READ_SHEET = "(function(){" + BOX + "var q=function(s){return document.querySelector(s);},sh=q('#lrSheet');if(!sh||sh.hidden)return null;var d=q('#lrDraft'),sw=q('#lrLinkSw');" +
+    "return {sheet:bx(sh),vh:innerHeight,title:(q('#lrSheetTitle')||{}).textContent,quote:(q('.lr-quote')||{}).textContent,label:bx(q('label[for=lrDraft]')),draft:bx(d),value:d?d.value:null,checks:[].map.call(sh.querySelectorAll('.lr-checks .lr-row'),function(r){return r.innerText.replace(/^\\W+/,'').trim();})," +
+    "sw:sw?{hit:bx(sw),f:bx(sw.querySelector('.lr-swf')),on:sw.getAttribute('aria-checked')}:null,big:[].map.call(sh.querySelectorAll('.lr-big'),bx),foot:(q('.lr-sfoot')||{}).textContent,body:(q('#lrSheetBody')||{}).innerText," +
+    "connect:[].map.call(sh.querySelectorAll('a.lr-big'),function(a){return [a.textContent,a.getAttribute('href')];}),msg:(q('#lrSheetMsg')||{}).textContent||''};})()";
+  const READ_FP = "(function(){" + BOX + "var q=function(s){return document.querySelector(s);},qa=function(s){return [].slice.call(document.querySelectorAll(s));};" +
+    "return {intro:(q('.lr-intro')||{}).textContent,labels:qa('#lrFpBody .lr-lbl').map(function(e){return e.innerText.trim();}),chips:qa('#lrFpBody .lr-wrap .lr-chip').map(function(c){return c.innerText.trim();})," +
+    "look:qa('#lrFpBody .lr-look').map(function(r){var s=r.querySelector('.lr-sw');return {src:r.getAttribute('data-source'),t:(r.querySelector('.lr-look-t')||{}).textContent,s:(r.querySelector('.lr-look-s')||{}).textContent,sw:s?{hit:bx(s),f:bx(s.querySelector('.lr-swf')),on:s.getAttribute('aria-checked')}:null};})};})()";
+  const tap = sel => ev("(function(){var e=document.querySelector(" + J(sel) + ");if(!e)return false;e.scrollIntoView({block:'center'});e.click();return true;})()");
+  const px = n => n + "px";
+  for (const w of LR2_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(LR2_OUT, name + ".png"), Buffer.from(r.data, "base64")); } };
+    Object.assign(LR2S, { member: true, connected: true, calls: [], statuses: [], drafts: [], sends: [], fpPuts: [], fp: lr2Fp(), leads: lr2Leads() });
+
+    // 1. LeadsHome, a member
+    await open(cdp, origin, "agents/lead-radar.html", w, h, true);
+    let at = "LR2 Leads (a member) at " + w + ": ";
+    let r = await ev(READ_HOME);
+    check(at + "the header: \"" + L.HEADER.TITLE + "\", 44 px buttons (Back, " + L.HEADER.SETTINGS + "), the " + L.HEADER.MARK + " px mark", r.title === L.HEADER.TITLE && r.hbtn.length === 2 && r.hbtn.every(b => b.w === L.HEADER.BUTTON && b.h === L.HEADER.BUTTON) &&
+      !!r.mark && r.mark.w === L.HEADER.MARK && r.mark.h === L.HEADER.MARK && r.mark.rad === px(L.HEADER.MARK_RADIUS), J([r.title, r.hbtn, r.mark]));
+    check(at + "two tabs only (" + L.TABS.ITEMS.join(", ") + "): faces " + L.TABS.H + " px, radius " + L.TABS.RADIUS + ", hit 44; Leads chosen", r.tabs.length === 2 && r.tabs.map(t => t.f.txt).join() === L.TABS.ITEMS.join() &&
+      r.tabs.every(t => t.f.h === L.TABS.H && t.f.rad === px(L.TABS.RADIUS) && t.hit.h >= 44) && r.tabs[0].on === "true", J(r.tabs));
+    check(at + "the stats 12 / 4 / 2: " + L.STATS.LABELS.join(", "), r.stats.join("|") === ["12 " + L.STATS.LABELS[0], "4 " + L.STATS.LABELS[1], "2 " + L.STATS.LABELS[2]].join("|"), J(r.stats));
+    check(at + "the chips " + L.CHIP.SOURCES.join(", ") + " (no Threads while it is off): faces " + L.CHIP.H + " px, radius " + L.CHIP.RADIUS + ", hit 44; All pressed", r.chips.map(c => c.f.txt).join() === L.CHIP.SOURCES.join() &&
+      r.chips.every(c => c.f.h === L.CHIP.H && c.f.rad === px(L.CHIP.RADIUS) && c.hit.h >= 44) && r.chips[0].on === "true", J(r.chips));
+    const [cN, cB, cY] = [r.cards.find(c => c.src === "bizforce"), r.cards.find(c => c.src === "bluesky"), r.cards.find(c => c.src === "youtube")];
+    check(at + "three cards, radius " + L.CARD.RADIUS + ", padding " + L.CARD.PAD + ", inside the screen", r.cards.length === 3 && r.cards.every(c => c.card.rad === px(L.CARD.RADIUS) && c.card.pad === px(L.CARD.PAD) + " " + px(L.CARD.PAD) && c.card.l >= 0 && c.card.r <= w), J(r.cards.map(c => c.card)));
+    check(at + "the badges, " + L.BADGE.H + " px: " + [L.BADGE.NEED.TEXT, L.BADGE.BSKY.TEXT, L.BADGE.YT.TEXT].join(" / "), !!cN && !!cB && !!cY && cN.badge.txt === L.BADGE.NEED.TEXT && cB.badge.txt === L.BADGE.BSKY.TEXT && cY.badge.txt === L.BADGE.YT.TEXT &&
+      [cN, cB, cY].every(c => c.badge.h === L.BADGE.H), J([cN && cN.badge, cB && cB.badge, cY && cY.badge]));
+    check(at + "the Need's meta and match: \"Marcus R. · San Diego · 2h\", \"Strong match: Tattoo and Body Art · your city\"", !!cN && cN.meta === "Marcus R. · San Diego · 2h" && cN.match === "Strong match: Tattoo and Body Art · your city", J(cN && [cN.meta, cN.match]));
+    check(at + "the buttons: Need " + L.BUTTON.NEED.join(", ") + "; Bluesky " + L.BUTTON.BSKY.join(", ") + "; YouTube none (opacity " + L.BADGE.YT.CARD_OPACITY + "); faces " + L.BUTTON.H + " px, radius " + L.BUTTON.RADIUS + ", hit 44",
+      !!cN && !!cB && !!cY && cN.btns.map(b => b.t).join() === L.BUTTON.NEED.join() && cB.btns.map(b => b.t).join() === L.BUTTON.BSKY.join() && cY.btns.length === 0 && cY.card.op === String(L.BADGE.YT.CARD_OPACITY) &&
+      cN.btns.concat(cB.btns).every(b => b.f.h === L.BUTTON.H && b.f.rad === px(L.BUTTON.RADIUS) && b.hit.h >= 44), J([cN && cN.btns, cB && cB.btns, cY && cY.card.op]));
+    check(at + "the footer \"" + L.FOOT.TEXT + "\"", r.foot === L.FOOT.TEXT, r.foot);
+    check(at + "\"I can help\" opens the Need's post on Home", await ev("(function(){var a=[].filter.call(document.querySelectorAll('#lrList a.lr-btn'),function(x){return x.innerText.trim()==='I can help';})[0];return a?a.getAttribute('href'):null;})()") === "/home.html?post=" + LR2_IDS.needPost);
+    await ev("window.scrollTo(0,0),true"); await sleep(150);
+    await pageChecks(at);
+    await shot("leads-home");
+
+    // 2. the chips filter
+    await tap('#lrChips .lr-chip[data-v="bluesky"]'); await sleep(700);
+    r = await ev(READ_HOME);
+    check(at + "Bluesky: GET /api/leads?source=bluesky, only the Bluesky card, its chip pressed", LR2S.calls.indexOf("GET /api/leads?source=bluesky") !== -1 && r.cards.length === 1 && r.cards[0].src === "bluesky" &&
+      (r.chips.find(c => c.v === "bluesky") || {}).on === "true" && (r.chips.find(c => c.v === "all") || {}).on === "false", J([LR2S.calls, r.cards.map(c => c.src)]));
+    await tap('#lrChips .lr-chip[data-v="bizforce"]'); await sleep(700);
+    r = await ev(READ_HOME);
+    check(at + "Inside BizForce: only the Need", r.cards.length === 1 && r.cards[0].src === "bizforce", J(r.cards.map(c => c.src)));
+    await tap('#lrChips .lr-chip[data-v="all"]'); await sleep(700);
+    r = await ev(READ_HOME);
+    check(at + "All: the three again", r.cards.length === 3, J(r.cards.map(c => c.src)));
+
+    // 3. Save, then Not a fit
+    await tap('#lrList .lr-btn[data-act="save"][data-id="' + LR2_IDS.need + '"]');
+    for (let i = 0; i < 20 && !(await ev("(function(){var b=document.querySelector('#lrList .lr-btn[data-act=save][data-id=\"" + LR2_IDS.need + "\"]');return !!b&&b.getAttribute('aria-pressed')==='true';})()")); i++) await sleep(100);
+    const saved = await ev("(function(){var b=document.querySelector('#lrList .lr-btn[data-act=save][data-id=\"" + LR2_IDS.need + "\"]');return b?[b.innerText.trim(),b.getAttribute('aria-pressed')]:null;})()");
+    check(at + "Save: POST /api/leads/:id/status saved; the button reads Saved, pressed", J(LR2S.statuses) === J([{ id: LR2_IDS.need, status: "saved" }]) && J(saved) === J(["Saved", "true"]), J([LR2S.statuses, saved]));
+    await tap('#lrList .lr-btn[data-act="dismiss"][data-id="' + LR2_IDS.need + '"]'); await sleep(600);
+    r = await ev(READ_HOME);
+    check(at + "Not a fit: POST status dismissed; the card goes", (LR2S.statuses[1] || {}).status === "dismissed" && (LR2S.statuses[1] || {}).id === LR2_IDS.need && r.cards.length === 2 && !r.cards.some(c => c.id === LR2_IDS.need), J([LR2S.statuses, r.cards.map(c => c.id)]));
+
+    // 4. LeadsReply: the sheet, the EDITED text posted
+    await ev("window.scrollTo(0,0),true");
+    await tap('#lrList .lr-btn[data-act="draft"][data-id="' + LR2_IDS.bsky + '"]'); await sleep(300);
+    for (let i = 0; i < 40 && !(await ev("!!document.querySelector('#lrDraft, #lrSheetBody [data-state]')")); i++) await sleep(100);   // the draft, or the Connect state
+    at = "LR2 reply sheet at " + w + ": ";
+    let sh = await ev(READ_SHEET);
+    check(at + "\"" + L.SHEET.TITLE + "\", " + L.SHEET.H + " px tall (or the screen less 16), radius " + L.SHEET.RADIUS + ", at the bottom", !!sh && sh.title === L.SHEET.TITLE && sh.sheet.h === Math.min(L.SHEET.H, sh.vh - 16) &&
+      sh.sheet.rad === px(L.SHEET.RADIUS) && sh.sheet.b === sh.vh, J(sh && [sh.title, sh.sheet, sh.vh]));
+    check(at + "the quote, \"" + L.SHEET.DRAFT_LABEL + "\", the box (at least " + L.SHEET.DRAFT.MIN_H + " px, radius " + L.SHEET.DRAFT.RADIUS + ", " + L.SHEET.DRAFT.PHONE_FONT + " px on a phone) holding the draft",
+      !!sh && /^Anyone in San Diego/.test(sh.quote || "") && sh.label.txt === L.SHEET.DRAFT_LABEL && sh.label.tt === "uppercase" && sh.draft.h >= L.SHEET.DRAFT.MIN_H && sh.draft.rad === px(L.SHEET.DRAFT.RADIUS) &&
+      sh.draft.fs === px(L.SHEET.DRAFT.PHONE_FONT) && sh.value === LR2_DRAFT, J(sh && [sh.label, sh.draft, sh.value]));
+    check(at + "the three checks; the link switch " + L.SWITCH.W + " x " + L.SWITCH.H + " (hit 44), off; \"" + L.SHEET.AGAIN + "\" and \"" + L.SHEET.POST + "\" " + L.SHEET.BIG_H + " px; the footer",
+      !!sh && J(sh.checks) === J(L.SHEET.CHECKS) && !!sh.sw && sh.sw.f.w === L.SWITCH.W && sh.sw.f.h === L.SWITCH.H && sh.sw.hit.h >= 44 && sh.sw.on === "false" &&
+      sh.big.map(b => b.txt).join() === [L.SHEET.AGAIN, L.SHEET.POST].join() && sh.big.every(b => b.h === L.SHEET.BIG_H) && sh.foot === L.SHEET.FOOT, J(sh && [sh.checks, sh.sw, sh.big, sh.foot]));
+    check(at + "a draft was asked for (POST /api/leads/:id/draft, add_link false) and nothing was sent", J(LR2S.drafts) === J([{ id: LR2_IDS.bsky, body: { add_link: false } }]) && LR2S.sends.length === 0, J([LR2S.drafts, LR2S.sends]));
+    await pageChecks(at, { sheet: true });
+    await shot("leads-reply");
+    const edited = "I do cover-ups in North Park. Send me a photo of the old piece and I will tell you honestly what can be done.";
+    await ev("(function(){var d=document.getElementById('lrDraft');d.focus();d.value=" + J("  " + edited + "  ") + ";d.dispatchEvent(new Event('input',{bubbles:true}));d.blur();return true;})()");
+    await tap("#lrPost"); await sleep(900);
+    sh = await ev(READ_SHEET);
+    r = await ev(READ_HOME);
+    const bsCard = r.cards.find(c => c.id === LR2_IDS.bsky) || {};
+    check(at + "Post my reply sends the EDITED text (trimmed), never the draft, once, to /api/leads/:id/send", LR2S.sends.length === 1 && LR2S.sends[0].id === LR2_IDS.bsky && LR2S.sends[0].body.text === edited && LR2S.sends[0].body.add_link === false, J(LR2S.sends));
+    check(at + "...then the sheet closes, the card says You replied, and replied counts 5", sh === null && /You replied/.test(bsCard.acts || "") && r.stats[1] === "5 " + L.STATS.LABELS[1], J([sh, bsCard.acts, r.stats]));
+
+    // 5. no Bluesky account: Connect
+    Object.assign(LR2S, { connected: false, leads: lr2Leads(), drafts: [], sends: [] });
+    await open(cdp, origin, "agents/lead-radar.html", w, h, true);
+    await tap('#lrList .lr-btn[data-act="draft"][data-id="' + LR2_IDS.bsky + '"]'); await sleep(300);
+    for (let i = 0; i < 40 && !(await ev("!!document.querySelector('#lrDraft, #lrSheetBody [data-state]')")); i++) await sleep(100);   // the draft, or the Connect state
+    at = "LR2 reply sheet (no Bluesky account) at " + w + ": ";
+    sh = await ev(READ_SHEET);
+    check(at + "the draft's 409 not_connected shows \"" + L.SHEET.CONNECT + "\" and Connect (the Social Agent page's Bluesky connect); no box, nothing sent", !!sh && (sh.body || "").indexOf(L.SHEET.CONNECT) === 0 &&
+      J(sh.connect) === J([["Connect", "/agents/social.html#bskyConnect"]]) && sh.value === null && LR2S.sends.length === 0, J(sh && [sh.body, sh.connect]));
+    await pageChecks(at, { sheet: true });
+    await ev("(function(){document.getElementById('lrSheetClose').click();return true;})()"); await sleep(300);
+    check(at + "Close closes it", await ev("document.getElementById('lrSheet').hidden") === true);
+
+    // 6. LeadsFingerprint, Threads waiting for Meta
+    await tap("#lrTabFp"); await sleep(800);
+    at = "LR2 Fingerprint at " + w + ": ";
+    const fp = await ev(READ_FP);
+    check(at + "the intro and the labels " + L.FINGERPRINT.LABELS.join(", "), fp.intro === L.FINGERPRINT.INTRO && J(fp.labels) === J(L.FINGERPRINT.LABELS), J([fp.intro, fp.labels]));
+    check(at + "the chips: what you do, San Diego, CA and " + L.FINGERPRINT.REACH.join(", ") + ", the four words, Not for me, each with \"" + L.FINGERPRINT.ADD + "\"",
+      J(fp.chips) === J(["Tattoo and Body Art", "Art", "+ Add", "San Diego, CA"].concat(L.FINGERPRINT.REACH, ["tattoo artist", "cover up", "black and grey", "fine line", "+ Add", "tattoo removal", "+ Add"])), J(fp.chips));
+    const rows = fp.look.filter(x => x.src !== "threads"), thr = fp.look.find(x => x.src === "threads") || {};
+    check(at + "Where to look: the three rows, each a switch " + L.SWITCH.W + " x " + L.SWITCH.H + " (hit 44), on", J(rows.map(x => [x.t, x.s])) === J(L.FINGERPRINT.LOOK.ROWS) &&
+      rows.every(x => x.sw && x.sw.f.w === L.SWITCH.W && x.sw.f.h === L.SWITCH.H && x.sw.hit.h >= 44 && x.sw.on === "true"), J(rows));
+    check(at + "Threads: \"" + L.FINGERPRINT.LOOK.THREADS_WAITING + "\", no switch, no Connect", thr.t === "Threads" && thr.s === L.FINGERPRINT.LOOK.THREADS_WAITING && !thr.sw, J(thr));
+    await ev("window.scrollTo(0,0),true"); await sleep(200);
+    await pageChecks(at);
+    await shot("leads-fingerprint");
+    await ev("(function(){var t=document.querySelector('.lr-look[data-source=threads]');if(t)t.scrollIntoView({block:'center'});return !!t;})()"); await sleep(250);
+    await shot("threads-waiting");
+    await tap('.lr-sw[data-src="youtube"]'); await sleep(700);
+    check(at + "a switch saves: YouTube off is PUT /api/leads/fingerprint with sources.youtube false", LR2S.fpPuts.length === 1 && LR2S.fpPuts[0].sources && LR2S.fpPuts[0].sources.youtube === false, J(LR2S.fpPuts));
+
+    // 6b. NAMED (Nov 24 2026, LR-2B): spare words under Words people use, tappable chips that swap in; at 12 the next word
+    // tapped is the one replaced. The page redraws from each save's answer, so YouTube back on redraws it with them.
+    LR2S.fp.spare_words = ["walk in tattoo", "tattoo touch up", "custom tattoo design"]; LR2S.swaps = [];
+    await tap('.lr-sw[data-src="youtube"]'); await sleep(700);
+    const READ_SPARE = "(function(){var w=document.querySelector('[data-spare]');var lbl=document.getElementById('lrSpareLbl');var n=document.querySelector('[data-spare-note]');" +
+      "var kw=document.querySelector('.lr-wrap[data-field=keywords]');var words=Array.prototype.map.call(document.querySelectorAll('.lr-lbl'),function(x){return x.textContent;});" +
+      "return {label:lbl?lbl.textContent:null,after:words.indexOf('Spare words')===words.indexOf('Words people use')+1,note:n?n.textContent:null," +
+      "chips:w?Array.prototype.map.call(w.querySelectorAll('.lr-chip'),function(c){var r=c.getBoundingClientRect();return {t:c.textContent,h:Math.round(r.height),pressed:c.getAttribute('aria-pressed')};}):[]," +
+      "keywords:kw?Array.prototype.map.call(kw.querySelectorAll('.lr-chip'),function(c){return c.textContent;}):[],replaceable:kw?kw.querySelectorAll('.lr-chip[data-replace]').length:0," +
+      "overflow:document.documentElement.scrollWidth>innerWidth};})()";
+    let sp = await ev(READ_SPARE);
+    check(at + "spare words: the label \"Spare words\" right after Words people use, \"Tap a spare word to add it.\", one chip each (hit 44), no sideways scroll",
+      sp.label === "Spare words" && sp.after && sp.note === "Tap a spare word to add it." && J(sp.chips.map(x => x.t)) === J(LR2S.fp.spare_words) && sp.chips.every(x => x.h >= 44) && !sp.overflow, J(sp));
+    await ev("(function(){var t=document.getElementById('lrSpareLbl');if(t)t.scrollIntoView({block:'center'});return !!t;})()"); await sleep(250);
+    await shot("leads-spare-words");
+    await tap('[data-spare] .lr-chip[data-v="walk in tattoo"]'); await sleep(700);
+    sp = await ev(READ_SPARE);
+    check(at + "under 12 words a tap swaps it in: POST /api/leads/fingerprint/spare/swap { add } and the chip moves up",
+      J(LR2S.swaps) === J([{ add: "walk in tattoo" }]) && sp.keywords.indexOf("walk in tattoo") !== -1 && sp.chips.map(x => x.t).indexOf("walk in tattoo") === -1, J([LR2S.swaps, sp.keywords]));
+    LR2S.fp.fingerprint.keywords = ["w one", "w two", "w three", "w four", "w five", "w six", "w seven", "w eight", "w nine", "w ten", "w eleven", "w twelve"];
+    await tap('.lr-sw[data-src="youtube"]'); await sleep(700);
+    sp = await ev(READ_SPARE);
+    check(at + "at 12 words the note says to tap a spare word, then the word it replaces", sp.note === "Your 12 words are full. Tap a spare word, then the word it replaces.", sp.note);
+    const swapsBefore = LR2S.swaps.length;
+    await tap('[data-spare] .lr-chip[data-v="tattoo touch up"]'); await sleep(500);
+    sp = await ev(READ_SPARE);
+    check(at + "a tap at 12 asks nothing yet: the spare chip is pressed, every word is a target, and Cancel shows",
+      LR2S.swaps.length === swapsBefore && sp.note === "Tap the word to replace with tattoo touch up." && sp.replaceable === 12 &&
+      (sp.chips.find(x => x.t === "tattoo touch up") || {}).pressed === "true" && sp.chips.some(x => x.t === "Cancel"), J(sp));
+    await tap('.lr-wrap[data-field=keywords] .lr-chip[data-v="w three"]'); await sleep(700);
+    sp = await ev(READ_SPARE);
+    check(at + "tapping a word replaces it: { add, replace }, the replaced word is now spare, 12 words still",
+      J(LR2S.swaps.slice(swapsBefore)) === J([{ add: "tattoo touch up", replace: "w three" }]) && sp.keywords.indexOf("tattoo touch up") !== -1 && sp.keywords.indexOf("w three") === -1 &&
+      sp.chips.map(x => x.t)[0] === "w three" && sp.replaceable === 0, J([LR2S.swaps, sp]));
+    LR2S.fp.spare_words = []; LR2S.fp.fingerprint.keywords = ["tattoo artist", "cover up", "black and grey", "fine line"];
+
+    // 7. a free account: the members panel, no lead request (the member page is left first: its re-read after the switch is its own)
+    await cdp.send("Page.navigate", { url: "about:blank" }); await sleep(400);
+    Object.assign(LR2S, { member: false, calls: [] });
+    await open(cdp, origin, "agents/lead-radar.html", w, h, true); await sleep(600);
+    at = "LR2 a free account at " + w + ": ";
+    r = await ev(READ_HOME);
+    check(at + "the members panel over the page, the page's \"Lead Radar is for members\" under it, no tabs", r.panel && r.state === "members_only" && await ev("document.getElementById('lrTabs').hidden") === true, J([r.panel, r.state]));
+    check(at + "no lead request was made", LR2S.calls.length === 0, J(LR2S.calls));
+    await pageChecks(at, { panel: true });
+    await shot("leads-free-panel");
+    LR2S.member = true;
+
+    // 8. signed out: the sign-in page, no lead request
+    LR2S.calls = [];
+    await ev("(function(){try{sessionStorage.setItem('phone_check_out','1');localStorage.removeItem('bf_token');localStorage.removeItem('bf_user');}catch(e){}return true;})()");
+    await open(cdp, origin, "agents/lead-radar.html", w, h, true);
+    at = "LR2 signed out at " + w + ": ";
+    const out = await ev("({p:location.pathname,pw:!!document.querySelector('input[type=password]')})");
+    check(at + "the page goes to the sign-in page (/app.html, a password box), and no lead request was made", out.p === "/app.html" && out.pw && LR2S.calls.length === 0, J([out, LR2S.calls]));
+    await ev("(function(){try{sessionStorage.removeItem('phone_check_out');}catch(e){}return true;})()");
   }
 }

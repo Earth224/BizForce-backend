@@ -1013,8 +1013,15 @@ const everything = b => JSON.stringify(b.db.tables);
   // byte-identical; leadRadar.js was changed on purpose by LR-1 (Mastodon removed, scorer on the ledger, youtube heartbeat),
   // proven by checkLeadRadarRepair. Here: it still logs in to Bluesky only through lib/bskyGate.js.
   const loginLines = t => t.split("\n").filter(l => /BskyAgent|createBskyGate|\.login\(|BLUESKY_(HANDLE|APP_PASSWORD|IDENTIFIER|PASSWORD)/.test(l)).join("\n");
-  check("L1. lib/bskyGate.js is byte-identical to 553d7da (the platform login is unchanged); leadRadar.js's login lines are the same as at 553d7da",
-    atBase("lib/bskyGate.js") === GATE && loginLines(RADAR).length > 0 && loginLines(RADAR) === loginLines(atBase("leadRadar.js") || ""));
+  // NAMED (Nov 23 2026, LR-2): BEFORE leadRadar.js's login lines equal to 553d7da's. AFTER LR-2 added one line naming
+  // BLUESKY_IDENTIFIER, "      platformHandle: BLUESKY_IDENTIFIER || null," (the platform's own handle, handed to the member
+  // radar so its own posts are never a lead). Still true and proved: every 553d7da login line is there, in order, and the
+  // only other line is that one, which passes the handle and never the password.
+  const baseLogin = loginLines(atBase("leadRadar.js") || "").split("\n"), nowLogin = loginLines(RADAR).split("\n");
+  const extraLogin = nowLogin.filter(l => baseLogin.indexOf(l) === -1);
+  check("L1. lib/bskyGate.js is byte-identical to 553d7da (the platform login is unchanged); leadRadar.js's 553d7da login lines are all there in order, and the one new line only hands the radar the platform handle",
+    atBase("lib/bskyGate.js") === GATE && baseLogin.length > 1 && JSON.stringify(nowLogin.filter(l => baseLogin.indexOf(l) !== -1)) === JSON.stringify(baseLogin) &&
+    JSON.stringify(extraLogin) === JSON.stringify(["      platformHandle: BLUESKY_IDENTIFIER || null,"]), JSON.stringify(extraLogin));
 
   /* ── Z. no network ──────────────────────────────────────────────────────── */
   console.log("\n══ Z. no network ══");

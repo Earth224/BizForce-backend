@@ -29,6 +29,14 @@
      8. Migration 128 creates the table with those columns and constraints,
         RLS on, anon and authenticated revoked, no policy.
 
+   NAMED (Nov 23 2026, LR-2): BEFORE sections 2 to 6 ran the real convertSingleLead, which wrote the platform's own
+   replies and added ?ref=lr-<token> to the BizForce destination. AFTER LR-2 removed the platform's own outreach
+   (convertSingleLead, withOutreachTracking, the product destinations, send-approved; the original is in git, 65c0825):
+   a reply is now the member's own approved text from their own account, with no parameter added. Still true and
+   kept: 1 (the token, which still joins earlier lr- arrivals back to outreach_sends), 7 (the route) and 8 (the
+   migration). 2 to 6 become one removal proof: none of that code remains, and the member reply path adds no
+   parameter and no link. The mutations order, everydomain, lengthguard and pathless are removed with their code.
+
    MUTATIONS — each must turn the named section red:
      MUTATE=order        tracking runs before rejection               → 2, 3, 4
      MUTATE=everydomain  every reply gets a parameter, any host        → 5
@@ -59,7 +67,7 @@ residue.install();
 /* The commit before the arrival parameter existed. Pinned, not HEAD. */
 const BASELINE = "ed0636f";
 
-const MUTATIONS = ["order", "everydomain", "personal", "lengthguard", "visitfields", "visitref", "pathless"];
+const MUTATIONS = ["personal", "visitfields", "visitref", "member-tracked"];   // NAMED (Nov 23 2026, LR-2): see the header
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -78,23 +86,15 @@ function mutate(src, from, to, what) {
 let SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
 const SERVER0 = execSync("git show " + BASELINE + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
 
-const TRACK_BLOCK = "  if (cleanMessage && offerKind === \"bizforce\") {\n    cleanMessage = withOutreachTracking(cleanMessage, OUTREACH_BIZFORCE_DESTINATION, lead);\n  }\n";
-if (MUTATE === "order") {
-  SERVER = mutate(SERVER, TRACK_BLOCK, "", "order");
-  SERVER = mutate(SERVER, "  var draftRejection = cleanMessage\n", TRACK_BLOCK + "  var draftRejection = cleanMessage\n", "order");
-}
-if (MUTATE === "everydomain") {
-  SERVER = mutate(SERVER, TRACK_BLOCK, "  if (cleanMessage) {\n    cleanMessage = withOutreachTracking(cleanMessage, offerKind === \"book\" ? OUTREACH_BOOK_DESTINATION : OUTREACH_PRODUCT_DESTINATIONS[suggestedProduct], lead);\n  }\n", "everydomain");
-  SERVER = mutate(SERVER, "  if (OUTREACH_TRACKED_HOSTS.indexOf(host) === -1 || dest.search || dest.hash) return text;", "  if (dest.search || dest.hash) return text;", "everydomain");
-}
 if (MUTATE === "personal") SERVER = mutate(SERVER, "crypto.createHash(\"sha256\").update(\"leadradar:\" + String((lead && lead.post_uri) || \"\")).digest(\"hex\").slice(0, 10)",
   "String((lead && lead.author_handle) || \"\").slice(0, 10)", "personal");
-if (MUTATE === "lengthguard") SERVER = mutate(SERVER, "  if (Array.from(out).length > 300) {", "  if (false) {", "lengthguard");
 if (MUTATE === "visitfields") SERVER = mutate(SERVER, ".insert({ ref: ref, landing_path: landingPath })",
   ".insert({ ref: ref, landing_path: landingPath, ip: req.ip, user_agent: req.headers[\"user-agent\"], referrer: req.headers.referer })", "visitfields");
 if (MUTATE === "visitref") SERVER = mutate(SERVER, "    if (!ENGINE_VISIT_REF.test(ref)) return", "    if (!ref) return", "visitref");
-if (MUTATE === "pathless") SERVER = mutate(SERVER, "  var pathPattern = dest.pathname === \"/\" ? \"\\\\/?\" : dest.pathname",
-  "  var pathPattern = \"\\\\/?\"; var unusedPath = dest.pathname", "pathless");
+// NAMED (Nov 23 2026, LR-2): the member reply path starts adding the tracking parameter
+let REPLIES = fs.readFileSync(path.join(REPO, "lib", "leadRoutes.js"), "utf8").replace(/\r\n/g, "\n");
+const SEND_OPEN = "  app.post(\"/api/leads/:id/send\", M, async function (req, res, next) {\n";
+if (MUTATE === "member-tracked") REPLIES = mutate(REPLIES, SEND_OPEN, SEND_OPEN + "    var withOutreachTracking = function (x) { return x + \"?ref=lr-0000000000\"; };\n", "member-tracked");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 const SHARED = require.resolve("./_shared");
@@ -109,14 +109,9 @@ function defs(src, names, optional) {
 }
 
 /* ── the real convertSingleLead, stubbed at the model, database and senders ── */
-// NAMED (Nov 23 2026, LR-1): OUTREACH_DAILY_CAP is no longer lifted: it is a multi-line parse now, convertSingleLead does not read it,
-// and BASELINE read it in a log line only, so liftAll gives it as 5, its default.
-const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_PRODUCT_FACTS",
-  "OUTREACH_HOME_URL", "OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BIZFORCE_DESTINATION", "OUTREACH_BOOK_DESTINATION",
-  "OUTREACH_OWN_DOMAINS", "outreachDraftRejection", "OUTREACH_TRACKED_HOSTS", "outreachRefToken", "withOutreachTracking", "nowIso",
-  "DRAFT_ATTEMPT_CEILING", "OUTREACH_EMOJI_PATTERN", "stripOutreachEmoji", "truncateOrchestratorPreview", "normalizeMemoryMetadata",
-  "detectOutreachLinkFacets", "convertSingleLead"];
-const NEW_NAMES = ["OUTREACH_TRACKED_HOSTS", "outreachRefToken", "withOutreachTracking"];
+// NAMED (Nov 23 2026, LR-2): only the token and the link facets are lifted; the drafter and its destinations are removed.
+const LIFTED = ["outreachRefToken", "detectOutreachLinkFacets"];
+const NEW_NAMES = [];
 function fakeDb() {
   function q() {
     const st = { one: null, insert: false };
@@ -132,29 +127,11 @@ function fakeDb() {
 function liftAll(src) {
   const ctx = { supabase: fakeDb(), RichText: RichText, URL: URL, crypto: crypto, console: { log() {}, warn() {}, error() {} }, process: { env: {} } };
   vm.createContext(ctx);
-  vm.runInContext("var OUTREACH_DAILY_CAP = 5;\n" + defs(src, LIFTED, NEW_NAMES) + "\nthis.api = { convertSingleLead, detectOutreachLinkFacets, outreachRefToken: typeof outreachRefToken === 'function' ? outreachRefToken : null };", ctx);
+  vm.runInContext(defs(src, LIFTED, NEW_NAMES) + "\nthis.api = { convertSingleLead: null, detectOutreachLinkFacets, outreachRefToken: typeof outreachRefToken === 'function' ? outreachRefToken : null };", ctx);
   return ctx;
 }
 const LEAD = { id: "lead-1", post_uri: "at://did:plc:abcxyz123/app.bsky.feed.post/3kfixture", source: "bluesky", author_handle: "fixture-person.bsky.social",
   author_did: "did:plc:abcxyz123", post_text: "stripe froze my account, what do other brands use?", matched_keyword: "stripe froze my account", intent_score: 80, intent_reason: "asks" };
-async function draftRun(src, product, modelMessage, lead) {
-  const ctx = liftAll(src), prompts = [], sends = [];
-  ctx.canSendOutreach = async () => ({ allowed: true });
-  // NAMED (B2, Nov 1 2026): convertSingleLead now records its G23/G22 decision (checkGates J5); stubbed here.
-  ctx.recordGateDecision = () => Promise.resolve(true);
-  ctx.callAnthropicText = async p => { prompts.push(p); return { text: JSON.stringify({ outreach_message: modelMessage, internal_analysis: "fixture" }), stopReason: "end_turn" }; };
-  ctx.sendBlueskyReply = async (l, text) => { sends.push(text); return { sent: true, uri: "at://fake/post" }; };
-  ctx.sendMastodonReply = async (l, text) => { sends.push(text); return { sent: true, uri: "https://fake/post" }; };
-  const r = await ctx.api.convertSingleLead(SUBJECT_USER_ID, Object.assign({}, lead || LEAD, { suggested_product: product }), "SHARED SYSTEM PROMPT", false);
-  /* NAMED (Nov 23 2026, LR-1): BEFORE convertSingleLead sent the reply, so what went out was the sender's text. AFTER it drafts only
-     (r.draft, offered for approval and posted by POST /api/agents/sales/send-approved), so "sends" is the draft
-     offered for the working copy and the sent text for BASELINE; "posted" is what a sender really received. */
-  const drafting = !!r && Object.prototype.hasOwnProperty.call(r, "draft");
-  const offered = drafting ? (r.draft ? [r.draft] : []) : sends;
-  return { prompt: prompts[0] || null, sends: offered, posted: sends, sent: drafting ? offered.length === 1 && sends.length === 0 : !!(r && r.sent),
-    reason: drafting && r.draft_rejection ? "draft_rejected" : (r && r.send_reason) };
-}
-
 /* ── the route, lifted with a database that records what it is asked to write ── */
 function routeHandler(src, insertError) {
   const { braceMatch } = shared();
@@ -188,85 +165,21 @@ async function post(h, body) {
     now.outreachRefToken(Object.assign({}, LEAD)) === token && now.outreachRefToken(Object.assign({}, LEAD, { post_uri: LEAD.post_uri + "x" })) !== token);
   check("1. nothing of the handle, DID or post is in it", ["fixture", "person", "abcxyz", "did", "plc", "stripe"].every(s => token.indexOf(s) === -1), token);
 
-  console.log("\n══ 2. rejection runs first ══");
-  const csl = defs(SERVER, ["convertSingleLead"]);
-  /* NAMED (Nov 23 2026, LR-1): BEFORE "the rejection, then the tracking, then the send" in convertSingleLead. AFTER convertSingleLead
-     sends nothing: the rejection, then the tracking, then the draft it returns for approval; and the one send,
-     POST /api/agents/sales/send-approved, checks the approved text's links before sendBlueskyReply. */
-  const iReject = csl.indexOf("  var draftRejection = cleanMessage\n"), iTrack = csl.indexOf("withOutreachTracking(cleanMessage"), iSend = csl.indexOf("    draft:           cleanMessage,");
-  check("2. in convertSingleLead: the rejection, then the tracking, then the draft returned (no sender is called)",
-    iReject > 0 && iTrack > iReject && iSend > iTrack && !/sendBlueskyReply\(|sendMastodonReply\(/.test(csl), JSON.stringify([iReject, iTrack, iSend]));
-  const sa = SERVER.slice(SERVER.indexOf("app.post(\"/api/agents/sales/send-approved\""), SERVER.indexOf("// POST /api/agents/sales/lead-status"));
-  check("2. in send-approved: the approved text's link check, then the send",
-    // NAMED (Nov 23 2026, LR-1): the link check reads checkText (the approved text with this lead's own tracked link put back to the plain destination).
-    sa.length > 0 && sa.indexOf("outreachDraftRejection(checkText,") > 0 && sa.indexOf("sendBlueskyReply(lead, text)") > sa.indexOf("outreachDraftRejection(checkText,"));
-  /* The destination as server.js holds it, so these follow it if it moves. */
-  const DEST = (function () { const c = {}; vm.runInNewContext(defs(SERVER, ["OUTREACH_HOME_URL", "OUTREACH_PRODUCT_DESTINATIONS"]) + "\nthis.v = OUTREACH_PRODUCT_DESTINATIONS.BizForceAI;", c); return c.v; })();
-  const DEST_BARE = DEST.replace(/^https:\/\//, "");
-  console.log("    destination: " + DEST);
-  const own = [];
-  for (const m of ["We built this for that: " + DEST + "?ref=lr-0123456789", "We built this: " + DEST + "?utm_source=bluesky", DEST_BARE + "#start"]) {
-    const r = await draftRun(SERVER, "BizForceAI", m);
-    own.push(!r.sent && r.sends.length === 0 && r.reason === "draft_rejected");
-  }
-  check("2. a parameter or fragment the model wrote itself is still held, never sent", own.every(Boolean), JSON.stringify(own));
-  const other = [];
-  for (const m of ["Our homepage: https://bizforceai.net/", "bizforceai.net", "See https://bizforceai.net/pricing", "https://bizforceai.net/Suppressed.html",
-    "https://bizforceai.net/suppressed.html/extra", "https://bizforceai.net/suppressed"]) {
-    const r = await draftRun(SERVER, "BizForceAI", m);
-    other.push(!r.sent && r.reason === "draft_rejected");
-  }
-  check("2. a draft linking any other bizforceai.net path — the homepage, the bare domain, /pricing, another case, a longer or shorter path — is held", other.every(Boolean), JSON.stringify(other));
-
-  console.log("\n══ 3. the code adds the parameter ══");
-  const tracked = DEST + "?ref=" + token;
-  const forms = [DEST, DEST_BARE, DEST_BARE.replace("bizforceai.net", "BizForceAI.net"), DEST.replace("https://", "https://www.")];
-  const got = [];
-  for (const f of forms) {
-    const r = await draftRun(SERVER, "BizForceAI", "Owned channels can't be switched off by an ad network. We built BizForceAI for that: " + f);
-    got.push(r.sent && r.sends.length === 1 && r.sends[0].split(tracked).length === 2 && !/bizforceai\.net/i.test(r.sends[0].split(tracked).join("")) ? "ok" : (r.sends[0] || r.reason));
-  }
-  // NAMED (Nov 23 2026, LR-1): "goes out" is now "is offered for approval" (sends is the draft; see draftRun)
-  check("3. every form the model may write — " + forms.join(", ") + " — is offered for approval as " + tracked, got.every(g => g === "ok"), JSON.stringify(got));
-  const sample = await draftRun(SERVER, "BizForceAI", "We built BizForceAI for exactly this: " + DEST);
-  console.log("    sent: " + (sample.sends[0] || "(nothing)"));
-
-  console.log("\n══ 4. the final URL is a link, parameter included ══");
-  const text = sample.sends[0] || "";
-  const facets = now.detectOutreachLinkFacets(text);
-  const linked = facets.map(f => ({ uri: f.features[0].uri, span: Buffer.from(text, "utf8").slice(f.index.byteStart, f.index.byteEnd).toString("utf8") }));
-  console.log("    facets: " + JSON.stringify(linked));
-  check("4. one link facet, whose uri and whose linked text are both the full tracked URL", linked.length === 1 && linked[0].uri === tracked && linked[0].span === tracked, JSON.stringify(linked));
-
-  console.log("\n══ 5. supplement and book replies are unchanged ══");
-  const SUPP = (function () { const c = {}; vm.runInNewContext(defs(SERVER0, ["OUTREACH_SUPPLEMENT_PRODUCTS"]) + "\nthis.v = OUTREACH_SUPPLEMENT_PRODUCTS;", c); return c.v; })();
-  let same = 0, anyRef = false;
-  for (const p of SUPP.concat(["Quantum Jumping book"])) {
-    const msg = p === "Quantum Jumping book" ? "That frustration is common. BlackSunCircle.com" : "Many people like it. https://mrearthrose.com/";
-    const a = await draftRun(SERVER, p, msg), b = await draftRun(SERVER0, p, msg);
-    if (a.prompt === b.prompt && JSON.stringify(a.sends) === JSON.stringify(b.sends) && a.sent && b.sent) same++;
-    if (a.sends.some(s => /[?&]ref=/.test(s))) anyRef = true;
-  }
-  check("5. for all six supplement products and the book, prompt and reply offered (NAMED (Nov 23 2026, LR-1): BEFORE sent) are identical to what " + BASELINE + " sent", same === SUPP.length + 1, same + " of " + (SUPP.length + 1));
-  check("5. and no supplement or book reply carries a parameter", !anyRef);
-
-  console.log("\n══ 6. the 300-character guard ══");
-  const pad = "We built BizForceAI for businesses ad networks won't serve, and owned channels are the answer: search content and an email list nobody can switch off. ";
-  /* The link stands as its own word, as the model writes it: a domain glued to
-     the word before it is not a mention, and would make this test vacuous. */
-  let long = pad;
-  while (Array.from(long + "x " + DEST).length <= 290) long += "x";
-  long += " " + DEST;
-  const trackedLong = long.replace(DEST, tracked);
-  check("6. (the fixture is real: tracked, this draft would exceed 300 characters, and its link is a mention)",
-    Array.from(trackedLong).length > 300 && Array.from(long).length <= 300 && long.slice(-(DEST.length + 1)) === " " + DEST);
-  const lr = await draftRun(SERVER, "BizForceAI", long);
-  console.log("    a " + Array.from(long).length + "-character draft; with the parameter it would be " + Array.from(trackedLong).length);
-  /* What the parameter costs a reply, against the 300 a Bluesky post allows. */
-  console.log("    characters: destination " + DEST.length + ", tracked " + tracked.length + " (the parameter adds " + (tracked.length - DEST.length) +
-    "); the drafter writes to 280, so a full-length draft carrying the link reaches " + (280 + tracked.length - DEST.length) + " of 300");
-  check("6. it is offered (NAMED (Nov 23 2026, LR-1): BEFORE sent) without the parameter, its link whole, rather than truncated through the link",
-    lr.sent && lr.sends.length === 1 && lr.sends[0] === long && !/\?ref=/.test(lr.sends[0]), lr.sends[0] ? Array.from(lr.sends[0]).length + " chars" : lr.reason);
+  console.log("\n══ 2-6. the platform's own outreach is removed; a member's reply carries no parameter ══");
+  // NAMED (Nov 23 2026, LR-2): BEFORE 2 to 6 ran convertSingleLead; AFTER they prove it and its tracking are gone.
+  const { definitionOf } = shared();
+  const goneNames = ["convertSingleLead", "withOutreachTracking", "OUTREACH_TRACKED_HOSTS", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BIZFORCE_DESTINATION", "formatLeadHandle"];
+  const still = goneNames.filter(n => !!definitionOf(SERVER, n));
+  check("2. convertSingleLead, withOutreachTracking and the destinations it tracked are defined nowhere in server.js", still.length === 0, JSON.stringify(still));
+  check("2. the platform send (POST /api/agents/sales/send-approved) is removed", SERVER.indexOf("app.post(\"/api/agents/sales/send-approved\"") === -1);
+  const sendAt = REPLIES.indexOf(SEND_OPEN);
+  const sendSrc = sendAt < 0 ? "" : REPLIES.slice(sendAt, shared().braceMatch(REPLIES, REPLIES.indexOf("{", sendAt)) + 1);
+  check("3. the member send (lib/leadRoutes.js POST /api/leads/:id/send) posts the approved text with no parameter, no tracking and no link added",
+    sendSrc.length > 200 && !/withOutreachTracking|outreachRefToken|\?ref=|ref=lr-|https?:\/\//.test(sendSrc), sendSrc.length);
+  const linkText = "We built this: https://bizforceai.net/suppressed.html?ref=" + token;
+  const lf4 = now.detectOutreachLinkFacets(linkText);
+  check("4. detectOutreachLinkFacets (still used by the member Bluesky sender) links a whole URL, parameter included",
+    lf4.length === 1 && lf4[0].features[0].uri === "https://bizforceai.net/suppressed.html?ref=" + token, JSON.stringify(lf4));
 
   console.log("\n══ 7. POST /api/engine-visits ══");
   const ok = routeHandler(SERVER);
@@ -276,7 +189,7 @@ async function post(h, body) {
     r1.status === 204 && ok.inserts.length === 1 && ok.inserts[0].table === "engine_visits" &&
     JSON.stringify(Object.keys(ok.inserts[0].payload).sort()) === JSON.stringify(["landing_path", "ref"]) && ok.inserts[0].payload.ref === token, JSON.stringify(ok.inserts));
   const page = routeHandler(SERVER);
-  const pagePath = new URL(DEST).pathname;
+  const pagePath = "/suppressed.html";   // NAMED (Nov 23 2026, LR-2): BEFORE new URL(DEST).pathname; DEST (the BizForceAI destination at 65c0825) is removed
   const r2 = await post(page, { ref: token, path: pagePath });
   const routeRe = (function () { const c = {}; vm.runInNewContext(defs(SERVER, ["ENGINE_VISIT_PATH"]) + "\nthis.v = ENGINE_VISIT_PATH;", c); return c.v; })();
   const MIG128 = fs.readFileSync(path.join(REPO, "supabase", "migrations", "128_engine_visits.sql"), "utf8");

@@ -12,6 +12,9 @@
      B  read-only: no write of any kind, no task row, no model or external call;
      C  scoped: every query is the caller's own rows; Lead Radar's bsky_leads
         (no owner column) is read for the owner account only;
+        NAMED (Nov 23 2026, LR-2): BEFORE counts.leads was the owner's scored bsky_leads, null for everyone else.
+        AFTER it is the caller's OWN new member_leads as GET /api/leads/summary counts them (a BizForce Need, a
+        YouTube find, or a score of 40 or more), for every account; bsky_leads is read by no one here.
      D  bounded: every list read is paged with a cap or limited; counts are
         head counts;
      E  visits: 14 UTC days through the member's own refs, blog AND outreach,
@@ -44,8 +47,12 @@ const MUTATIONS = {
     "    await supabase.from(\"ai_tasks\").insert({ user_id: userId, agent_type: \"analytics\", task_type: \"dashboard/top\", status: \"completed\" });\n    var body = await dashboardTopBody(userId, now);\n"]],
   // the running-now read loses its cap (D)
   "top-unbounded": [[SERVER, "      .limit(DASHBOARD_TOP_RUNNING_CAP), \"running now\").data || [];", "      , \"running now\").data || [];"]],
-  // Lead Radar's leads read for every member (C)
-  "top-other-member": [[SERVER, "  if (userId === OUTREACH_CREDENTIAL_OWNER_ID) {\n    counts.leads = await figure(", "  if (true) {\n    counts.leads = await figure("]],
+  // Lead Radar's leads read for every member (C). NAMED (Nov 23 2026, LR-2): BEFORE the owner test was dropped; AFTER
+  // the member_leads count drops its user_id filter (every member's leads counted).
+  "top-other-member": [[SERVER, "      .from(\"member_leads\")\n      .select(\"id\", { count: \"exact\", head: true })\n      .eq(\"user_id\", userId)\n",
+    "      .from(\"member_leads\")\n      .select(\"id\", { count: \"exact\", head: true })\n"]],
+  // NAMED (Nov 23 2026, LR-2): weaker matches counted
+  "top-leads-weak-counted": [[SERVER, "      .or(\"source.eq.bizforce,source.eq.youtube,score.gt.39\"), \"leads\");", "      , \"leads\");"]],
   // the outreach refs left out of visits (E)
   "visits-blog-only": [[SERVER, "    [loaded.posts, loaded.sends, loaded.visits].forEach(function (part) { if (part.reason) throw new Error(part.reason); });\n",
     "    [loaded.posts, loaded.sends, loaded.visits].forEach(function (part) { if (part.reason) throw new Error(part.reason); });\n" +
@@ -188,6 +195,9 @@ function fakeDb(seed) {
       if (f[0] === "gte") return x !== null && x !== undefined && String(x) >= String(f[2]);
       if (f[0] === "lt") return x !== null && x !== undefined && String(x) < String(f[2]);
       if (f[0] === "not") return f[2] === "is" && f[3] === null ? x !== null && x !== undefined : true;
+      // NAMED (Nov 23 2026, LR-2): or("col.eq.v,col.gt.n,...") as PostgREST reads it, for the lead count
+      if (f[0] === "or") return String(f[1]).split(",").some(c => { const m = /^(\w+)\.(eq|gt)\.(.*)$/.exec(c); if (!m) throw new Error("fake or(): " + c);
+        const v = row[m[1]]; return m[2] === "eq" ? String(v) === m[3] : (typeof v === "number" && v > Number(m[3])); });
       return true;
     });
   }
@@ -219,7 +229,7 @@ function fakeDb(seed) {
     log.push(q);
     const b = { select(cols, opts) { q.cols = cols || "*"; q.opts = opts || null; return b; } };
     ["insert", "update", "upsert", "delete"].forEach(op => { b[op] = function () { q.write = op; return b; }; });
-    ["eq", "neq", "in", "gte", "lt", "not", "order", "range", "limit"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
+    ["eq", "neq", "in", "gte", "lt", "not", "or", "order", "range", "limit"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
     b.single = b.maybeSingle = () => { q.single = true; return answer(q); };
     b.then = (res, rej) => answer(q).then(res, rej);
     return b;
@@ -282,6 +292,12 @@ function world() {
   t.saved_prompts = repeat(4, () => ({ id: id("sp"), user_id: USER }));
   t.bizdoc_documents = [{ id: id("b"), owner_id: USER }];
   t.bsky_leads = repeat(6, () => ({ id: id("l"), status: "scored", intent_score: 80 })).concat([{ id: id("l"), status: "scored", intent_score: null }]);
+  // NAMED (Nov 23 2026, LR-2): each account's own leads. USER: 3 counted (a Need, a YouTube find, an 80), 3 not (a 20, a null
+  // score, a saved 90). OWNER: 2 counted. OTHER: 5 new 80s, never in anyone else's count.
+  const ml = (u, source, status, score) => ({ id: id("ml"), user_id: u, source, status, score });
+  t.member_leads = [ml(USER, "bizforce", "new", null), ml(USER, "youtube", "new", null), ml(USER, "bluesky", "new", 80), ml(USER, "bluesky", "new", 20),
+    ml(USER, "threads", "new", null), ml(USER, "bluesky", "saved", 90), ml(OWNER, "bluesky", "new", 70), ml(OWNER, "threads", "new", 40)]
+    .concat(repeat(5, () => ml(OTHER, "bluesky", "new", 80)));
   t.member_media = [{ id: id("mm"), user_id: USER, bytes: 100, created_at: dayAgo(5) }, { id: id("mm"), user_id: USER, bytes: 200, created_at: dayAgo(4) },
     { id: id("mm"), user_id: OTHER, bytes: 5000, created_at: dayAgo(4) }];
   t.ai_tasks = [
@@ -387,7 +403,7 @@ const keysDeep = (o, out) => { out = out || []; if (o && typeof o === "object") 
     crm_customers: "user_id", prospects: "user_id", sms_subscribers: "user_id", crowdfunding_campaigns: "owner_id", routines: "user_id", saved_prompts: "user_id",
     bizdoc_documents: "owner_id", member_media: "user_id", ai_tasks: "user_id",
     // NAMED (Nov 11 2026, orbit stage 2): the weekly goal's row is the member's own too.
-    user_preferences: "user_id" };
+    user_preferences: "user_id", member_leads: "user_id" };   // NAMED (Nov 23 2026, LR-2): member_leads is the caller's
   const scopedFor = (log, user, cards, refs) => log.filter(q => {
     if (q.table === "marketplace_orders") return !q.filters.some(f => f[0] === "eq" && (f[1] === "seller_id" || f[1] === "buyer_id") && f[2] === user);
     if (q.table === "card_view_counts") return !q.filters.some(f => f[0] === "in" && f[1] === "card_id" && f[2].every(x => cards.indexOf(x) !== -1));
@@ -399,11 +415,14 @@ const keysDeep = (o, out) => { out = out || []; if (o && typeof o === "object") 
   const unscoped = scopedFor(srv.db.log, USER, ["card-1", "card-2", "card-3"], userRefs);
   check("every query the member's read makes is scoped to the member (" + srv.db.log.length + " queries)", unscoped.length === 0, unscoped.join(", "));
   check("a member never reads bsky_leads (it has no owner column)", !srv.db.log.some(q => q.table === "bsky_leads"));
-  check("a member's leads are null, with the reason listed", b.counts && b.counts.leads === null && (b._unreadable || []).some(x => /^counts\.leads/.test(x)), JSON.stringify(b._unreadable));
+  // NAMED (Nov 23 2026, LR-2): BEFORE a member's leads were null with a reason; AFTER their own new leads are counted.
+  check("a member's leads are their own new leads, as the summary counts them (3: a Need, a YouTube find, an 80; not a 20, an unscored one, a saved one or another member's)",
+    b.counts && b.counts.leads === 3 && srv.db.log.filter(q => q.table === "member_leads").every(q => q.opts && q.opts.head), JSON.stringify(b.counts));
   const so = server();
   const ro = await so.call(OWNER);
-  check("the owner account reads its Lead Radar leads as a head count (6 scored with a score)", ro.body && ro.body.counts && ro.body.counts.leads === 6 &&
-    so.db.log.filter(q => q.table === "bsky_leads").every(q => q.opts && q.opts.head), ro.body && JSON.stringify(ro.body.counts));
+  // NAMED (Nov 23 2026, LR-2): BEFORE the owner read bsky_leads (6 scored); AFTER the owner's own member_leads, the same head count.
+  check("the owner account reads its own Lead Radar leads as a head count (2), and no bsky_leads", ro.body && ro.body.counts && ro.body.counts.leads === 2 &&
+    so.db.log.filter(q => q.table === "member_leads").every(q => q.opts && q.opts.head) && !so.db.log.some(q => q.table === "bsky_leads"), ro.body && JSON.stringify(ro.body.counts));
   check("another member's figures are not in the member's answer (wallet 240, not 9999; 2 pending, not 7)", b.wallet && b.wallet.balance === 240 && b.proposals_pending === 2,
     JSON.stringify([b.wallet, b.proposals_pending]));
 
@@ -466,7 +485,8 @@ const keysDeep = (o, out) => { out = out || []; if (o && typeof o === "object") 
   check("media: 300 bytes used of the library cap", b.media && b.media.used_bytes === 300 && b.media.cap_bytes === MEDIA_CAP, JSON.stringify(b.media));
   check("agents running now: seo only (content is stalled, email finished, sales is another member's)", b.agents && JSON.stringify(b.agents.running_now) === JSON.stringify(["seo"]),
     JSON.stringify(b.agents));
-  check("nothing unreadable but the member's leads", JSON.stringify(b._unreadable) === JSON.stringify(["counts.leads (Lead Radar reads the owner account's leads only)"]), JSON.stringify(b._unreadable));
+  // NAMED (Nov 23 2026, LR-2): BEFORE the member's leads were the one unreadable figure; AFTER nothing is.
+  check("nothing unreadable", JSON.stringify(b._unreadable || []) === "[]", JSON.stringify(b._unreadable));
 
   /* ── H. null, never 0 ── */
   console.log("\n══ H. a figure that could not be read is null, with its reason ══");

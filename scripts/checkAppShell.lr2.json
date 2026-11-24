@@ -1,0 +1,22 @@
+[
+ [
+  "dashboard.html",
+  "  <p>People asking for what you offer, found inside BizForce, on Bluesky and on YouTube from your Fingerprint. You approve every reply before it posts.</p>",
+  "  <p>Buying-intent posts from Bluesky, scored and ranked. Runs on a single social account and is enabled only for the account that owns it.</p>"
+ ],
+ [
+  "scripts/bf-orbit.js",
+  "      // NAMED (Nov 23 2026, LR-2): BEFORE \"scored leads\" (the owner account's radar). AFTER counts.leads is the member's own new leads.\n      case \"lead-radar\": return count(\"leads\", \"new lead\", \"new leads\");",
+  "      case \"lead-radar\": return count(\"leads\", \"scored lead\", \"scored leads\");"
+ ],
+ [
+  "scripts/termaximus-guide.js",
+  "    \"sales.html\": [\n      \"Pick \\\"Sales Funnel\\\" or \\\"Outreach Script\\\", describe your offer and your buyer, and press \\\"Launch Task\\\".\",\n      \"The tasks read none of the leads on this page, so say in your request what has changed in your deals.\",\n      \"New leads are found for each member in Lead Radar, where you approve every reply; \\\"Open Lead Radar\\\" takes you there.\",\n      \"Seeing \\\"Archive\\\"? It holds the old radar finds, read only and shown to the owner account alone; nothing in it can be sent.\"\n    ],",
+  "    \"sales.html\": [\n      \"Pick \\\"Sales Funnel\\\" or \\\"Outreach Script\\\", describe your offer and your buyer, and press \\\"Launch Task\\\".\",\n      \"In \\\"Sales Pipeline\\\", move each lead through New, Drafted, Contacted, Replied, Converted; nothing here judges which deals are stalling.\",\n      \"The tasks read none of the leads or pipeline on this page, so say in your request what has changed in your deals.\",\n      \"No leads listed? They come from Lead Radar, which works only for the account that owns its keyword set; press \\\"Refresh\\\" to reload.\",\n      \"On that account, \\\"Lead Radar finds\\\" under the page header counts each source apart; YouTube finds are kept 30 days and never added to the total.\"\n    ],"
+ ],
+ [
+  "scripts/termaximus-guide.js",
+  "    \"lead-radar.html\": [\n      \"Open \\\"Fingerprint\\\" and check what you do, where you work and the words people use; your leads are found with them.\",\n      \"On \\\"Leads\\\", press \\\"Draft a reply\\\", change anything in the draft, then \\\"Post my reply\\\"; nothing posts until you press it.\",\n      \"Replies go from your own connected Bluesky account, one per post and up to 5 a day. A BizForce Need opens its post for \\\"I can help\\\".\",\n      \"No leads yet? Add more \\\"Words people use\\\", or switch on more places under \\\"Where to look\\\".\"\n    ],",
+  "    \"lead-radar.html\": [\n      \"Press \\\"Draft Engagement\\\" on a \\\"High-Intent\\\" lead (60+) for a reply, then \\\"Copy\\\" it to your clipboard and post it on Bluesky yourself.\",\n      \"New Bluesky finds arrive every 5 minutes; YouTube and scoring each wait on their own switch. Press \\\"Refresh\\\" to load.\",\n      \"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code, and does not read your Business Profile.\",\n      \"\\\"Not enabled on this account\\\" means just that: leads appear solely on the account that owns the keyword set and its credentials.\",\n      \"Sub-15 scores are hidden as noise; press \\\"Show Noise\\\" once the high-intent leads run dry.\"\n    ],"
+ ]
+]

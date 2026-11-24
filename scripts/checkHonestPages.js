@@ -10,11 +10,14 @@
 
    WHAT THIS PROVES
      1. The funnel, run in vm with a stubbed DOM: Drafted counts today's
-        dry_run and drafted tasks; Sent counts only "sent" (never "completed");
-        Replied and Converted count today's sales_lead_pipeline rows, from a
-        response made by the real GET /api/agents/sales/pipeline route lifted
-        against a fake database. A failed pipeline read, and a failed task read,
-        each show "could not be read", never 0.
+        dry_run and drafted tasks; Sent counts only "sent" (never "completed").
+        A failed task read shows "could not be read", never 0.
+        NAMED (Nov 23 2026, LR-2): BEFORE also Replied and Converted, today's
+        sales_lead_pipeline rows from the real GET /api/agents/sales/pipeline
+        route. AFTER that route is gone (Lead Radar's replies are every
+        member's, on agents/lead-radar.html; the old pipeline is the owner's
+        read-only archive), so the funnel is Drafted and Sent, and the page
+        makes no call to the removed route.
      2. No capability-pill row or rule on any page (dashboard.html excepted).
      3. No "Run on Dashboard"; every agent page links "Open Dashboard".
      4. "Shop Audit Checklist" and "Competitor Comparison (from your profile)".
@@ -56,9 +59,10 @@ const MUTATIONS = {
   // the marketplace claim comes back
   "restore-marketplace-intelligence": [[INDEX, "Listing copy, keyword candidates measured against the tag limits you enter, and pricing arithmetic on figures you supply.",
     "Shop listings, keywords, pricing, and marketplace intelligence."]],
-  // a failed pipeline read shows 0
-  "zero-on-failed-pipeline": [[SALES, "          setFn(\"mcFnReplied\", \"could not be read\");\n          setFn(\"mcFnConverted\", \"could not be read\");\n",
-    "          setFn(\"mcFnReplied\", 0);\n          setFn(\"mcFnConverted\", 0);\n"]],
+  // NAMED (Nov 23 2026, LR-2): BEFORE "zero-on-failed-pipeline" (the removed pipeline read). AFTER a failed task read shows 0.
+  "zero-on-failed-tasks": [[SALES, "            if (el) el.textContent = \"could not be read\";\n", "            if (el) el.textContent = \"0\";\n"]],
+  // the page reads the removed pipeline route again
+  "removed-route-read": [[SALES, "          var r = await fetch(API_URL + \"/api/ai/tasks?agent_type=sales&limit=50\", {", "          fetch(API_URL + \"/api/agents/sales/pipeline\");\n          var r = await fetch(API_URL + \"/api/ai/tasks?agent_type=sales&limit=50\", {"]],
   // a "Buy with USD" button left on one page
   "buy-usd-left": [["marketplace.html", "'<span class=\"not-for-sale\">Not for sale until the seller sets a BizCash price</span>') +\n",
     "'<span class=\"not-for-sale\">Not for sale until the seller sets a BizCash price</span>') +\n        '<button type=\"button\" class=\"btn-sm btn-buy btn-buy-usd\"' + idAttr + '>Buy with USD</button>' +\n"]]
@@ -90,61 +94,12 @@ function check(label, ok, detail) {
 }
 const flush = async () => { for (let i = 0; i < 40; i++) await new Promise(r => setImmediate(r)); };
 
-/* ── the real pipeline route, lifted ───────────────────────────────────── */
-const SRC = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
-const STUBS = new Set(["supabase", "nowIso", "console", "process", "require", "module", "app", "Buffer", "setTimeout", "fetch",
-  "requireAuth", "OUTREACH_CREDENTIAL_OWNER_ID", "LEAD_RADAR_UNAVAILABLE"]);
-function liftRoute(route) {
-  const start = SRC.indexOf("app.get(\"" + route + "\",");
-  const end = s.braceMatch(SRC, SRC.indexOf("{", SRC.indexOf("async function (req, res, next)", start)));
-  const root = SRC.slice(start, end + 2);
-  const have = new Map(); const queue = [...new Set(root.match(/[A-Za-z_$][A-Za-z0-9_$]*/g))];
-  while (queue.length) {
-    const name = queue.shift();
-    if (have.has(name) || STUBS.has(name)) continue;
-    const def = s.definitionOf(SRC, name);
-    if (!def) continue;
-    if (/^(?:var|const|let) [^=]*=[^;]*\brequire\(/.test(def)) continue;
-    try { new vm.Script(def); } catch (e) { continue; }
-    have.set(name, def);
-    new Set(def.match(/[A-Za-z_$][A-Za-z0-9_$]*/g)).forEach(id => { if (!have.has(id) && !STUBS.has(id)) queue.push(id); });
-  }
-  return [...have.values()].sort((a, b) => SRC.indexOf(a) - SRC.indexOf(b)).join("\n\n") + "\n\n" + root;
-}
-const OWNER = "owner-1";
+/* NAMED (Nov 23 2026, LR-2): the real GET /api/agents/sales/pipeline route was lifted here for Replied and Converted. The
+   route is gone (lib/routeAccess.js lists GET /api/leads/archive, the owner's read-only archive, in its place), so nothing
+   is lifted; the funnel below is Drafted and Sent, from the page's own tasks read. */
 const now = new Date();
 const TODAY = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).toISOString();
 const YESTERDAY = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12).toISOString();
-async function realPipeline() {
-  const rows = {
-    sales_lead_pipeline: [
-      { user_id: OWNER, lead_post_uri: "u1", status: "replied", last_draft: null, updated_at: TODAY },
-      { user_id: OWNER, lead_post_uri: "u2", status: "replied", last_draft: null, updated_at: TODAY },
-      { user_id: OWNER, lead_post_uri: "u3", status: "replied", last_draft: null, updated_at: YESTERDAY },
-      { user_id: OWNER, lead_post_uri: "u4", status: "converted", last_draft: null, updated_at: TODAY },
-      { user_id: OWNER, lead_post_uri: "u5", status: "contacted", last_draft: null, updated_at: TODAY },
-      // NAMED (Nov 23 2026, LR-1): an archived row today; the route's .neq("status", "archived") keeps it out of every group.
-      { user_id: OWNER, lead_post_uri: "u6", status: "archived", last_draft: null, updated_at: TODAY }
-    ],
-    bsky_leads: []
-  };
-  const from = (table) => {
-    const q = { filters: [] };
-    const b = { select() { return b; } };
-    ["eq", "neq", "in", "order", "limit"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
-    b.then = (res, rej) => Promise.resolve({ data: (rows[table] || []).filter(r => q.filters.every(f => (f[0] !== "eq" || r[f[1]] === f[2]) && (f[0] !== "neq" || r[f[1]] !== f[2]))), error: null }).then(res, rej);
-    return b;
-  };
-  let handler = null;
-  const ctx = { supabase: { from }, JSON, Object, Array, Number, String, Promise, Date, console: { log() {}, error() {}, warn() {} },
-    OUTREACH_CREDENTIAL_OWNER_ID: OWNER, LEAD_RADAR_UNAVAILABLE: { error: "no" }, requireAuth: 0,
-    app: { get() { handler = arguments[arguments.length - 1]; } } };
-  vm.createContext(ctx);
-  vm.runInContext(liftRoute("/api/agents/sales/pipeline"), ctx);
-  const res = { code: 200, body: null, status(x) { this.code = x; return this; }, json(x) { this.body = JSON.parse(JSON.stringify(x)); return this; } };
-  await handler({ user: { id: OWNER } }, res, (e) => { res.code = 500; res.body = { error: String(e && e.message) }; });
-  return res;
-}
 
 /* ── the funnel, in a stubbed page ─────────────────────────────────────── */
 function fakeEl(id) {
@@ -165,8 +120,10 @@ async function runFunnel(handlers) {
     querySelector() { return fakeEl(null); }, querySelectorAll() { return []; }, createElement() { return fakeEl(null); },
     addEventListener(type, fn) { if (type === "DOMContentLoaded") ready = fn; }
   };
+  const calls = [];
   const fetchStub = (url) => {
     const p = url.replace(/^https?:\/\/[^/]+/, "");
+    calls.push(p);
     const h = handlers(p.split("?")[0], p);
     if (h === "reject") return Promise.reject(new TypeError("Failed to fetch"));
     return Promise.resolve({ ok: h.status >= 200 && h.status < 300, status: h.status, json: () => Promise.resolve(JSON.parse(JSON.stringify(h.body))) });
@@ -184,7 +141,7 @@ async function runFunnel(handlers) {
   if (ready) { try { ready(); } catch (e) { /* the handler's other loads */ } }
   await flush();
   const read = (id) => els.has(id) ? els.get(id).textContent : "(never written)";
-  return { drafted: read("mcFnDrafted"), sent: read("mcFnSent"), replied: read("mcFnReplied"), converted: read("mcFnConverted"), ready: !!ready };
+  return { drafted: read("mcFnDrafted"), sent: read("mcFnSent"), replied: read("mcFnReplied"), converted: read("mcFnConverted"), ready: !!ready, calls };
 }
 const TASKS = [
   { id: 1, status: "dry_run", created_at: TODAY, prompt: "x" }, { id: 2, status: "dry_run", created_at: TODAY, prompt: "x" },
@@ -197,28 +154,22 @@ const TASKS = [
 (async function main() {
   /* ── 1. the funnel ────────────────────────────────────────────────────── */
   console.log("\n══ 1. the sales funnel ══");
-  const pipe = await realPipeline();
-  check("fixture: the real pipeline route answers 200 with replied and converted groups",
-    pipe.code === 200 && pipe.body.pipeline && pipe.body.pipeline.replied.length === 3 && pipe.body.pipeline.converted.length === 1 &&
-    !JSON.stringify(pipe.body).includes('"u6"'), JSON.stringify(pipe.body).slice(0, 200));
-  const ok = await runFunnel((p) => p === "/api/ai/tasks" ? { status: 200, body: { tasks: TASKS } }
-    : p === "/api/agents/sales/pipeline" ? { status: 200, body: pipe.body } : { status: 200, body: {} });
+  const ok = await runFunnel((p) => p === "/api/ai/tasks" ? { status: 200, body: { tasks: TASKS } } : { status: 200, body: {} });
   check("the page's ready handler ran", ok.ready);
   check("Drafted: today's 3 dry runs and 1 draft = 4", ok.drafted === "4", ok.drafted);
   check("Sent: only today's 2 \"sent\" tasks — not the 3 completed, the failed send or yesterday's", ok.sent === "2", ok.sent);
-  check("Replied: today's 2 pipeline rows at replied (yesterday's is not today)", ok.replied === "2", ok.replied);
-  check("Converted: today's 1 pipeline row at converted", ok.converted === "1", ok.converted);
-  const pfail = await runFunnel((p) => p === "/api/ai/tasks" ? { status: 200, body: { tasks: TASKS } }
-    : p === "/api/agents/sales/pipeline" ? { status: 500, body: { error: "down" } } : { status: 200, body: {} });
-  check("a failed pipeline read: Replied and Converted say could not be read, never 0",
-    pfail.replied === "could not be read" && pfail.converted === "could not be read", JSON.stringify(pfail));
-  check("…while Drafted and Sent still count", pfail.drafted === "4" && pfail.sent === "2");
-  const poff = await runFunnel((p) => p === "/api/agents/sales/pipeline" ? "reject" : p === "/api/ai/tasks" ? { status: 200, body: { tasks: TASKS } } : { status: 200, body: {} });
-  check("an unreachable pipeline says could not be read too", poff.replied === "could not be read" && poff.converted === "could not be read", JSON.stringify(poff));
-  const tfail = await runFunnel((p) => p === "/api/ai/tasks" ? { status: 500, body: {} }
-    : p === "/api/agents/sales/pipeline" ? { status: 200, body: pipe.body } : { status: 200, body: {} });
+  // NAMED (Nov 23 2026, LR-2): BEFORE Replied 2 and Converted 1 from the pipeline route. AFTER no Replied or Converted row,
+  // and no call to the removed route.
+  check("no Replied or Converted figure is drawn (the old pipeline is an archive, not today's work)",
+    ok.replied === "(never written)" && ok.converted === "(never written)" && PAGES[SALES].indexOf("mcFnReplied") === -1 && PAGES[SALES].indexOf("mcFnConverted") === -1,
+    JSON.stringify(ok));
+  check("the page never calls the removed GET /api/agents/sales/pipeline", ok.calls.every(p => p.indexOf("/api/agents/sales/pipeline") === -1) &&
+    PAGES[SALES].indexOf("/api/agents/sales/pipeline") === -1, JSON.stringify(ok.calls));
+  const tfail = await runFunnel((p) => p === "/api/ai/tasks" ? { status: 500, body: {} } : { status: 200, body: {} });
   check("a failed task read: Drafted and Sent say could not be read, never 0",
-    tfail.drafted === "could not be read" && tfail.sent === "could not be read" && tfail.replied === "2", JSON.stringify(tfail));
+    tfail.drafted === "could not be read" && tfail.sent === "could not be read", JSON.stringify(tfail));
+  const toff = await runFunnel((p) => p === "/api/ai/tasks" ? "reject" : { status: 200, body: {} });
+  check("an unreachable task read says could not be read too", toff.drafted === "could not be read" && toff.sent === "could not be read", JSON.stringify(toff));
   const sales = PAGES[SALES];
   check("the status list calls only \"sent\" Sent, and a completed task Completed",
     /sent:\s*\{ label: "Sent"/.test(sales) && /completed:\s*\{ label: "Completed"/.test(sales) && !/completed:\s*\{ label: "Sent"/.test(sales));

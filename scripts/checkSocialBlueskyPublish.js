@@ -599,8 +599,13 @@ async function filed(seedTables, opts, taskId) {
   // AFTER all six, mastodon added to SOCIAL_PLATFORMS.
   check("the social/post platform description names all six platforms",
     DISK.indexOf("Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin, tiktok, bluesky, mastodon); anything else is a 400.") !== -1);
-  check("the outreach sender's gate call is still the only one written that way (checkBskyGate's anchor)",
-    DISK.split("    var posted = await bskyGate.call(function (agent) { return agent.post(postRecord); });").length === 2);
+  // NAMED (Nov 23 2026, LR-2): BEFORE the platform outreach sender's gate call was written this way exactly once, so
+  // checkBskyGate's sender mutations had a unique anchor. AFTER LR-2 removed that sender (replies are each member's, from
+  // their own account, lib/leadRoutes.js) and checkBskyGate dropped those mutations; what stays true: no reply is posted
+  // through the platform gate, and the one platform gate post left is this social publish's.
+  check("no outreach reply is posted through the platform gate any more; the only gate post is the social publish's",
+    DISK.indexOf("bskyGate.call(function (agent) { return agent.post(postRecord); })") === -1 &&
+    (DISK.match(/bskyGate\.call\(function \(agent\) \{[^\n]*agent\.post\(/g) || []).length === 1);
   check("/health reports icu.graphemes_counted", /graphemes_counted: graphemesCounted\(\)/.test(DISK));
 
   /* ── 8. no network ────────────────────────────────────────────────────── */

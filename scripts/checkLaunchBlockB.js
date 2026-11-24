@@ -728,7 +728,10 @@ function fakeDb(tables, fail) {
     // analytics-dashboard.html (checkAgentLive S7 holds the four tags equal).
     // NAMED (Nov 4 2026, campaign sharing): BEFORE nine CDN tags (qrcode x3). AFTER ten: campaigns.html loads the card's
     // same qrcode@1.4.4 with the same SRI hash for each shared campaign's QR code in its Share panel.
-    check("8. the CDN tags are the ten known ones (qrcode x4, html2canvas, jspdf, chart.js x4)", cdnTags.length === 10, cdnTags.length);
+    // NAMED (Nov 23 2026, LR-2): BEFORE ten CDN tags (chart.js x4). AFTER nine: agents/lead-radar.html was rebuilt to the
+    // owner's boards and draws no chart, so its chart.js tag is gone; sales.html, analytics-dashboard.html and
+    // agents/analytics.html keep theirs (checkAgentLive S7 holds the three equal).
+    check("8. the CDN tags are the nine known ones (qrcode x4, html2canvas, jspdf, chart.js x3)", cdnTags.length === 9, cdnTags.length);
     cdnTags.forEach(c => {
       const integ = attr(c.tag, "integrity") || "";
       const m = /^(sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/.exec(integ);

@@ -9,6 +9,18 @@
    and runs scripts/checkOutreachReplies.js in a vm with fetch spied on. NO
    Bluesky call of any kind is made — there is no network here at all.
 
+   NAMED (Nov 23 2026, LR-2): BEFORE the radar searched the owner's 32 phrases in runLeadRadarOnce, and
+   server.js sendBlueskyReply posted the owner's outreach through the same gate. AFTER runLeadRadarOnce and
+   sendBlueskyReply (with formatLeadHandle and truncateToBlueskyLimit) are removed. The radar's Bluesky part
+   is lib/memberRadar.js captureBluesky, searching members' words through leadRadar.js bskySearchFor (the
+   same gate, one login per tick); here a "tick" runs the REAL captureBluesky, loaded in the vm from the
+   working copy, for one member with 20 words (BSKY_SEARCHES_PER_TICK). A to C and E hold as before.
+   D now proves the gate's back-off is shared: a 429 met by any call on the platform session (the
+   owner's platform-account reply, blueskyActAs) stops the radar's searches too, and that path goes through
+   the gate. H is a removal proof plus detectOutreachLinkFacets (still the reply's facet builder,
+   lib/leadRoutes.js linkFacets): only link facets, at UTF-8 byte offsets. The reply's length rule (refused
+   over 300, never cut), its reply target and SALES_SEND_LIVE are pinned by checkLeadRadarMember R1, R2, R9.
+
    WHAT THIS PROVES
      A. A failing login (not a 429) is tried ONCE per radar tick, never once
         per keyword, and the next tick tries once more.
@@ -47,41 +59,36 @@ const MUT = require("./_shared");
 const s = MUT;
 
 const RADAR = "leadRadar.js", SERVER = "server.js", REPLIES = "scripts/checkOutreachReplies.js", GATE = "lib/bskyGate.js";
+const MEMBER_RADAR = "lib/memberRadar.js";   // NAMED (Nov 23 2026, LR-2): the radar's Bluesky capture
 const MUTATIONS = {
   // a failed login is retried for every keyword again: no per-tick login budget, and a failed
   // call goes on to the next keyword instead of ending the tick. Re-anchored (YouTube retention
   // build, Oct 2026) onto the tick.stop assignment the loop gained after 855f997: the old anchor
   // expected `break;` straight after the log line and had matched nothing since.
-  "login-per-keyword": [[RADAR, "        }, tickBudget);", "        });"],
-    [RADAR, "              : { outcome: \"login_failed\", error: call.error || call.reason };\n          break;",
-      "              : { outcome: \"login_failed\", error: call.error || call.reason };\n          continue;"]],
-  // the radar does not skip its tick during a back-off
-  "radar-ignores-backoff": [[RADAR, "    if (bskyGate.backoffRemainingMs() > 0) {\n      if (radarBackoffLogged", "    if (false) {\n      if (radarBackoffLogged"]],
-  // the sender does not check the back-off itself
-  "sender-ignores-backoff": [[SERVER, "  if (bskyGate.backoffRemainingMs() > 0) {\n    var waitSeconds", "  if (false) {\n    var waitSeconds"]],
-  // every send logs in afresh
-  "fresh-login-per-send": [[SERVER, "    var posted = await bskyGate.call(function (agent) { return agent.post(postRecord); });",
-    "    await bskyGate.agent.login({ identifier: process.env.BLUESKY_IDENTIFIER, password: process.env.BLUESKY_APP_PASSWORD });\n" +
-    "    var posted = { ok: true, value: await bskyGate.agent.post(postRecord) };"]],
-  // a reply is posted whole, however long
-  "no-truncation": [[SERVER, "  if (chars.length <= 300) return str;\n  return chars.slice(0, 297).join(\"\") + \"…\";", "  return str;"]],
-  // the reply's parent is not the lead's post
-  "wrong-reply-target": [[SERVER, "    reply: { root: postRef, parent: postRef },", "    reply: { root: postRef, parent: { uri: lead.author_did || \"\", cid: lead.post_cid } },"]],
+  // NAMED (Nov 23 2026, LR-2): BEFORE anchored on runLeadRadarOnce's call and its login_failed break. AFTER bskySearchFor
+  // loses its tick budget and captureBluesky goes on to the next word after a failure.
+  "login-per-keyword": [[RADAR, "    }, tickBudget);", "    });"],
+    [MEMBER_RADAR, "    if (!got || !got.ok) { stopped = (got && got.reason) || \"failed\"; carried = due.length - i; break; }", "    if (!got || !got.ok) { continue; }"]],
+  // the radar does not skip its search during a back-off (NAMED (Nov 23 2026, LR-2): re-anchored on bskySearchFor)
+  "radar-ignores-backoff": [[RADAR, "    if (bskyGate.backoffRemainingMs() > 0) {\n      return { ok: false, reason: \"rate_limited\"", "    if (false) {\n      return { ok: false, reason: \"rate_limited\""]],
+  // NAMED (Nov 23 2026, LR-2): sender-ignores-backoff, fresh-login-per-send, no-truncation and wrong-reply-target are
+  // removed with sendBlueskyReply and truncateToBlueskyLimit (H proves they are gone; checkLeadRadarMember R2, R9 pin the send).
   // mention and tag facets are kept too
   "all-facets": [[SERVER, "          return feature && feature.$type === \"app.bsky.richtext.facet#link\";", "          return !!feature;"]],
   // loading server.js starts the live radar again
   // NAMED (Oct 27 2026, launch item #7): BEFORE the call was startLeadRadar(); AFTER it passes
   // shutdownControl.trackInterval, so a SIGTERM stops the radar's five-minute interval.
   // NAMED (Nov 23 2026, LR-1): BEFORE the anchor ran straight from the guard to startLeadRadar; the ledger hand-in now sits between
-  "radar-starts-when-loaded": [[SERVER, "  if (require.main === module) {\n    // NAMED (Nov 23 2026, LR-1): the scorer's calls go on the model_calls ledger",
-    "  if (true) {\n    // NAMED (Nov 23 2026, LR-1): the scorer's calls go on the model_calls ledger"]],
+  // NAMED (Nov 23 2026, LR-2): BEFORE anchored on the LR-1 ledger comment; AFTER on the LR-2 member-radar comment that replaced it.
+  "radar-starts-when-loaded": [[SERVER, "  if (require.main === module) {\n    /* NAMED (Nov 23 2026, LR-2): BEFORE the platform scorer",
+    "  if (true) {\n    /* NAMED (Nov 23 2026, LR-2): BEFORE the platform scorer"]],
   // checkOutreachReplies logs in live unless told not to
   "replies-live-by-default": [[REPLIES, "const LIVE = process.env.CHECK_LIVE_BLUESKY === \"true\";", "const LIVE = process.env.CHECK_LIVE_BLUESKY !== \"false\";"]]
 };
 if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 const FILES = {};
-[RADAR, SERVER, REPLIES, GATE].forEach(f => { FILES[f] = fs.readFileSync(path.join(REPO, f), "utf8").replace(/\r\n/g, "\n"); });
+[RADAR, SERVER, REPLIES, GATE, MEMBER_RADAR].forEach(f => { FILES[f] = fs.readFileSync(path.join(REPO, f), "utf8").replace(/\r\n/g, "\n"); });
 if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
@@ -156,19 +163,29 @@ function freshRadar(envOverride) {
   const proc = { env: Object.assign({ BLUESKY_IDENTIFIER: "us.bsky.social", BLUESKY_APP_PASSWORD: "app-pass", SUPABASE_URL: "http://fake", SUPABASE_SERVICE_KEY: "x" }, envOverride || {}) };
   const fakeSupabase = { from() { const b = { upsert() { return b; }, select() { return b; }, eq() { return b; }, then(r) { return Promise.resolve({ data: [], error: null }).then(r); } }; return b; } };
   const gateModule = loadModule(FILES[GATE], path.join(REPO, GATE), require, { console: logger, process: proc });
+  // NAMED (Nov 23 2026, LR-2): the real lib/memberRadar.js, from the (possibly mutated) working copy.
+  const memberMod = loadModule(FILES[MEMBER_RADAR], path.join(REPO, MEMBER_RADAR), (n) => n === "./leadFingerprint" ? require(path.join(REPO, "lib", "leadFingerprint.js")) : (() => { throw new Error("unexpected require in memberRadar.js: " + n); })(),
+    { console: logger, process: proc });
   const requireFn = (name) => {
     if (name === "dotenv") return { config() {} };
     if (name === "@supabase/supabase-js") return { createClient: () => fakeSupabase };
     if (name === "@atproto/api") return { BskyAgent: FakeBskyAgent };
     if (name === "@anthropic-ai/sdk") return function Anthropic() { throw new Error("no model in this check"); };
     // NAMED (Nov 23 2026, LR-1): BEFORE a "./mastodonRadar" stub; leadRadar.js no longer requires it (the file is deleted)
-    if (name === "./youtubeRadar") return { runYoutubeRadarOnce: async () => {} };
+    if (name === "./youtubeRadar") return { memberYoutubeDeps: () => null };   // NAMED (Nov 23 2026, LR-2): BEFORE runYoutubeRadarOnce
+    if (name === "./lib/memberRadar") return memberMod;
     if (name === "./lib/resolveAnthropicKey") return () => async () => null;
     if (name === "./lib/bskyGate") return gateModule;
     if (name === "./lib/ownerAccount") return require(path.join(REPO, "lib/ownerAccount"));
     throw new Error("unexpected require in leadRadar.js: " + name);
   };
   const radar = loadModule(FILES[RADAR], path.join(REPO, RADAR), requireFn, { console: logger, process: proc });
+  /* NAMED (Nov 23 2026, LR-2): BEFORE radar.runLeadRadarOnce was leadRadar.js's own capture. AFTER it is this: one tick's
+     Bluesky part, the real captureBluesky with the budget radarTick hands it (bskySearchFor({ logins: 1 }), pinned below),
+     for one member whose 20 words are all due (an empty search cache). The name is kept so A to E read as before. */
+  const memberSb = { from() { const b = { select() { return b; }, eq() { return b; }, in() { return b; }, upsert() { return b; }, then(res, rej) { return Promise.resolve({ data: [], error: null }).then(res, rej); } }; return b; } };
+  const fp = require(path.join(REPO, "lib", "leadFingerprint.js")).shape({ keywords: WORDS, sources: { bluesky: true } });
+  radar.runLeadRadarOnce = async () => { LAST.tick = await memberMod.captureBluesky({ sb: memberSb, bskySearch: radar.bskySearchFor({ logins: 1 }) }, [{ user_id: "m1", fp: fp }], CLOCK); return LAST.tick; };
   // Count every gate.call, so "no call at all" is checkable, not just "no Bluesky call".
   const gate = radar.bskyGate;
   let gateCalls = 0;
@@ -177,7 +194,9 @@ function freshRadar(envOverride) {
   return { radar, gate, gateCalls: () => gateCalls, proc, logger };
 }
 
-/* ── sendBlueskyReply, lifted from server.js onto the radar's gate ──────────── */
+/* ── functions lifted from server.js ──────────────────────────────────────── */
+// NAMED (Nov 23 2026, LR-2): BEFORE sendBlueskyReply, formatLeadHandle and truncateToBlueskyLimit were lifted here and run on the
+// radar's gate. AFTER they are removed; only detectOutreachLinkFacets is lifted (H).
 const SPANS = [];
 {
   const re = /^(?:(?:async )?function [A-Za-z_$][A-Za-z0-9_$]*[(]|app[.][a-z]+[(])/gm; let m;
@@ -189,19 +208,22 @@ function fnSource(name) {
   if (!m) throw new Error(name + " not found in server.js");
   return SRC.slice(m.index, s.braceMatch(SRC, SRC.indexOf(") {", m.index) + 2));
 }
-const SENDER_SRC = ["formatLeadHandle", "truncateToBlueskyLimit", "detectOutreachLinkFacets", "sendBlueskyReply"].map(fnSource).join("\n\n") +
-  "\n\nthis.sendBlueskyReply = sendBlueskyReply;";
-function senderFor(env, envOverride) {
-  const ctx = { console: env.logger, process: { env: Object.assign({ SALES_SEND_LIVE: "true", BLUESKY_IDENTIFIER: "us.bsky.social", BLUESKY_APP_PASSWORD: "app-pass" }, envOverride || {}) },
-    bskyGate: env.gate, RichText: require(require.resolve("@atproto/api", { paths: [REPO] })).RichText, Date: FakeDate, Math, JSON, String, Array, Number };
-  vm.createContext(ctx);
-  vm.runInContext(SENDER_SRC, ctx);
-  return ctx.sendBlueskyReply;
-}
-const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "bafylead", author_handle: "lead.bsky.social" };
+function hasFn(name) { return new RegExp("^(?:async )?function " + name + "\\(", "m").test(FILES[SERVER]); }
+// NAMED (Nov 23 2026, LR-2): the member's 20 words (memberRadar BSKY_SEARCHES_PER_TICK) and the last tick's result.
+const WORDS = Array.from({ length: 20 }, (_, i) => "need a plumber " + i);
+const LAST = { tick: null };
 
 (async function main() {
-  const KEYWORDS = 32;
+  const KEYWORDS = 20;   // NAMED (Nov 23 2026, LR-2): BEFORE 32, the owner's phrases. AFTER a member's 20 words, one tick's budget
+  console.log("\n══ 0. the tick these sections run is the radar's ══");
+  {
+    const tickSrc = FILES[RADAR].slice(FILES[RADAR].indexOf("async function radarTick()"), FILES[RADAR].indexOf("async function startLeadRadar("));
+    const MRM = require(path.join(REPO, MEMBER_RADAR));
+    check("radarTick hands the member radar bskySearchFor({ logins: 1 }) and runs memberRadar.runTick, whose Bluesky part is captureBluesky",
+      tickSrc.indexOf("bskySearch: bskySearchFor({ logins: 1 }),") !== -1 && tickSrc.indexOf("result = await memberRadar.runTick(deps);") !== -1 &&
+      /captureBluesky\(deps, /.test(FILES[MEMBER_RADAR].slice(FILES[MEMBER_RADAR].indexOf("async function runTick("))));
+    check("one tick searches at most " + KEYWORDS + " words (BSKY_SEARCHES_PER_TICK)", MRM.BSKY_SEARCHES_PER_TICK === KEYWORDS, MRM.BSKY_SEARCHES_PER_TICK);
+  }
 
   /* ── A. a failing login, once per tick ─────────────────────────────────── */
   console.log("\n══ A. a failing login is tried once per tick ══");
@@ -209,7 +231,8 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
   BSKY.loginPlan = [bskyError(500, "InternalServerError"), bskyError(500, "InternalServerError")];
   await E.radar.runLeadRadarOnce();
   check("tick 1: one login attempt, no search (not one per keyword)", BSKY.logins === 1 && BSKY.searches === 0, BSKY.logins + " logins, " + BSKY.searches + " searches");
-  check("tick 1: it says the capture stopped for this tick", LOGS.some(l => /capture stopped for this tick at '[^']+' — login_failed/.test(l)), LOGS.join(" | ").slice(0, 300));
+  // NAMED (Nov 23 2026, LR-2): BEFORE the log line "capture stopped for this tick at ... login_failed". AFTER the tick's own result.
+  check("tick 1: the capture stopped for this tick (login_failed), every word carried to the next", LAST.tick.stopped === "login_failed" && LAST.tick.carried === KEYWORDS, JSON.stringify(LAST.tick));
   CLOCK += 5 * MIN;
   await E.radar.runLeadRadarOnce();
   check("tick 2: one more login attempt, still no search", BSKY.logins === 2 && BSKY.searches === 0, BSKY.logins + "/" + BSKY.searches);
@@ -230,12 +253,15 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
   await E.radar.runLeadRadarOnce();
   check("the 429 login: one attempt, no search", BSKY.logins === 1 && BSKY.searches === 0);
   check("back-off set from retry-after: 600s", E.gate.backoffRemainingMs() === 600000, E.gate.backoffRemainingMs());
-  for (let t = 0; t < 3; t++) { CLOCK += 2 * MIN; await E.radar.runLeadRadarOnce(); }
+  const stops = [];
+  for (let t = 0; t < 3; t++) { CLOCK += 2 * MIN; await E.radar.runLeadRadarOnce(); stops.push(LAST.tick.stopped); }
   check("three ticks inside the back-off: no login, no search", BSKY.logins === 1 && BSKY.searches === 0, BSKY.logins + "/" + BSKY.searches);
   check("…and no gate call at all: the radar skips its whole capture", E.gateCalls() === 1, E.gateCalls());
-  const resumeIso = new Date(E.gate.backoffUntil()).toISOString();
-  const skipLogs = LOGS.filter(l => l.indexOf("Bluesky capture skipped — rate-limit back-off until " + resumeIso) !== -1);
-  check("the skip is logged once, with the time it resumes", skipLogs.length === 1, LOGS.filter(l => /skipped/.test(l)).join(" | "));
+  // NAMED (Nov 23 2026, LR-2): BEFORE "the skip is logged once, with the time it resumes" (runLeadRadarOnce's log). AFTER each tick
+  // reports stopped: rate_limited, and the search answer carries the time it resumes.
+  check("each skipped tick stops at rate_limited", JSON.stringify(stops) === JSON.stringify(["rate_limited", "rate_limited", "rate_limited"]), JSON.stringify(stops));
+  const answer = await E.radar.bskySearchFor({ logins: 1 })("x", new Date(CLOCK).toISOString());
+  check("…and a search in the back-off says when it resumes", answer.ok === false && answer.reason === "rate_limited" && answer.resumes_at === new Date(E.gate.backoffUntil()).toISOString(), JSON.stringify(answer));
   CLOCK = E.gate.backoffUntil();
   await E.radar.runLeadRadarOnce();
   check("after the reset: one login, then the searches", BSKY.logins === 2 && BSKY.searches === KEYWORDS, BSKY.logins + "/" + BSKY.searches);
@@ -271,33 +297,27 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
   check("a 429 on a search: the tick stops there (2 searches, not " + KEYWORDS + ")", BSKY.logins === 1 && BSKY.searches === 2, BSKY.logins + "/" + BSKY.searches);
   check("…and the back-off is the 15-minute fallback", E.gate.backoffRemainingMs() === 15 * MIN, E.gate.backoffRemainingMs());
 
-  /* ── D. the sender ─────────────────────────────────────────────────────── */
-  console.log("\n══ D. the sender shares the session and the back-off ══");
+  /* ── D. the back-off is shared ─────────────────────────────────────────── */
+  // NAMED (Nov 23 2026, LR-2): BEFORE sendBlueskyReply was run here on the radar's gate. AFTER it is removed; the one other
+  // caller of the platform session is blueskyActAs (the owner's platform-account reply), which posts through bskyGate.call.
+  // A call on the gate stands in for it: a 429 it meets stops the radar's searches too, and it reuses the radar's session.
+  console.log("\n══ D. the platform session and its back-off are shared ══");
+  {
+    const actAs = (FILES[SERVER].match(/\n(?:async )?function blueskyActAs\([\s\S]*?\n\}\n/) || [""])[0];
+    check("blueskyActAs (the platform account) posts through bskyGate.call, never a login of its own", /bskyGate\.call\(/.test(actAs) && !/\.login\(/.test(actAs), actAs.slice(0, 120));
+  }
   E = freshRadar();
   await E.radar.runLeadRadarOnce();
-  const send = senderFor(E);
-  const loginsBefore = BSKY.logins, gateBefore = E.gateCalls();
-  let r = await send(LEAD, "Hello there, this helped me: example.com");
-  check("a send after the radar logged in reuses its session: posted, no new login", r.sent === true && BSKY.posts === 1 && BSKY.logins === loginsBefore, JSON.stringify(r) + " logins " + BSKY.logins);
-  check("…through the gate (one gate call)", E.gateCalls() === gateBefore + 1);
+  const loginsBefore = BSKY.logins;
+  let r = await E.gate.call(a => a.post({ text: "hello" }));
+  check("a post after the radar logged in reuses its session: posted, no new login", r.ok === true && BSKY.posts === 1 && BSKY.logins === loginsBefore, JSON.stringify(r) + " logins " + BSKY.logins);
   BSKY.postPlan = [bskyError(429, "RateLimitExceeded", { "retry-after": "300" })];
-  r = await send(LEAD, "Second one");
-  check("a send that meets a 429 returns rate_limited with the wait", r.sent === false && r.reason === "rate_limited" && r.retry_after_seconds === 300, JSON.stringify(r));
-  check("…and sets the back-off for everyone", E.gate.backoffRemainingMs() === 300000);
-  const postsBefore = BSKY.posts, gateCallsBefore = E.gateCalls(), loginsBefore2 = BSKY.logins;
-  r = await send(LEAD, "Third one");
-  check("a send during the back-off returns rate_limited", r.sent === false && r.reason === "rate_limited" && r.retry_after_seconds === 300, JSON.stringify(r));
-  check("…without any Bluesky call and without even a gate call", BSKY.posts === postsBefore && BSKY.logins === loginsBefore2 && E.gateCalls() === gateCallsBefore,
-    "posts " + BSKY.posts + ", logins " + BSKY.logins + ", gate calls " + E.gateCalls());
+  r = await E.gate.call(a => a.post({ text: "second" }));
+  check("a post that meets a 429 returns rate_limited and sets the back-off for everyone", r.ok === false && r.reason === "rate_limited" && E.gate.backoffRemainingMs() === 300000, JSON.stringify(r));
+  const searchesBefore = BSKY.searches, loginsBefore2 = BSKY.logins;
   CLOCK += 2 * MIN;
   await E.radar.runLeadRadarOnce();
-  check("the radar respects the sender's 429 too: no search, no login", BSKY.searches === KEYWORDS && BSKY.logins === loginsBefore2);
-  E = freshRadar();
-  const send2 = senderFor(E);
-  r = await send2(LEAD, "Cold start");
-  check("a send with no session yet logs in once and posts", r.sent === true && BSKY.logins === 1 && BSKY.posts === 1, JSON.stringify(r));
-  r = await send2(LEAD, "Warm");
-  check("the next send reuses it: still one login", r.sent === true && BSKY.logins === 1 && BSKY.posts === 2);
+  check("the radar respects that 429 too: no search, no login", BSKY.searches === searchesBefore && BSKY.logins === loginsBefore2 && LAST.tick.stopped === "rate_limited", JSON.stringify(LAST.tick));
 
   /* ── E. a 401 ──────────────────────────────────────────────────────────── */
   console.log("\n══ E. an expired session re-logs in once ══");
@@ -308,14 +328,14 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
   CLOCK += 5 * MIN;
   await E.radar.runLeadRadarOnce();
   check("a 401 mid-tick: one fresh login, the search retried, the tick goes on", BSKY.logins === before401 + 1 && BSKY.searches === 2 * KEYWORDS + 1, BSKY.logins + "/" + BSKY.searches);
+  // NAMED (Nov 23 2026, LR-2): BEFORE through sendBlueskyReply (reason post_error). AFTER through the gate itself.
   E = freshRadar();
-  const send3 = senderFor(E);
-  await send3(LEAD, "warm up");
+  await E.gate.call(a => a.post({ text: "warm up" }));
   BSKY.postPlan = [bskyError(401, "ExpiredToken"), bskyError(401, "ExpiredToken")];
   const l0 = BSKY.logins;
-  r = await send3(LEAD, "after expiry");
+  r = await E.gate.call(a => a.post({ text: "after expiry" }));
   check("401 then 401 again: exactly one re-login, never a third", BSKY.logins === l0 + 1, BSKY.logins - l0);
-  check("…and it says the login failed, without posting", r.sent === false && r.reason === "post_error" && BSKY.posts === 1 + 2, JSON.stringify(r) + " posts " + BSKY.posts);
+  check("…and it says so, without posting", r.ok === false && BSKY.posts === 1 + 2, JSON.stringify(r) + " posts " + BSKY.posts);
   E = freshRadar();
   await E.radar.runLeadRadarOnce();
   BSKY.searchPlan = [bskyError(401, "ExpiredToken")];
@@ -353,50 +373,26 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
   check("its fixture assertions pass (one fixture login, the counts)", out.some(l => l === "ALL CHECKS PASSED (fixtures; no network)") && exitCode === null, out.slice(-3).join(" | "));
   check("its header says a live run needs CHECK_LIVE_BLUESKY=true", /A LIVE RUN happens only when CHECK_LIVE_BLUESKY is exactly "true"/.test(FILES[REPLIES]));
 
-  /* ── H. the reply sendBlueskyReply builds ─────────────────────────────── */
-  // Its identity pin to 7cefe53 (checkBizforceOutreach) was dropped when it moved
-  // onto the gate; what it sends is pinned here instead, on the stubbed agent.
-  console.log("\n══ H. the reply sendBlueskyReply builds ══");
-  for (const flag of [undefined, "", "TRUE", "1", "yes", "false"]) {
-    E = freshRadar();
-    const dry = senderFor(E, { SALES_SEND_LIVE: flag });
-    const g0 = E.gateCalls();
-    r = await dry(LEAD, "Hello, see example.com");
-    check("SALES_SEND_LIVE " + JSON.stringify(flag) + ": send_dry, with no Bluesky call and no gate call",
-      r.sent === false && r.reason === "send_dry" && BSKY.logins === 0 && BSKY.posts === 0 && E.gateCalls() === g0, JSON.stringify(r));
-  }
-  E = freshRadar();
-  const live = senderFor(E);
-  const long = "🌿".repeat(10) + "a".repeat(320);
-  await live(LEAD, long);
-  const cut = Array.from(BSKY.lastRecord.text);
-  check("text over 300 code points is cut to the first 297 plus the ellipsis",
-    cut.length === 298 && BSKY.lastRecord.text === Array.from(long).slice(0, 297).join("") + "…", cut.length);
-  check("…counting code points, so an astral character is never split", !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(BSKY.lastRecord.text));
-  await live(LEAD, "a".repeat(300));
-  check("exactly 300 code points is not cut", BSKY.lastRecord.text === "a".repeat(300));
+  /* ── H. the sender is gone; the facet builder stays ─────────────────────── */
+  // NAMED (Nov 23 2026, LR-2): BEFORE the reply sendBlueskyReply built (send_dry, 297 plus the ellipsis, link facets, reply target).
+  // AFTER sendBlueskyReply, formatLeadHandle and truncateToBlueskyLimit are removed: a reply is refused over 300, never cut, and
+  // its target and SALES_SEND_LIVE are checkLeadRadarMember R1, R2, R9. detectOutreachLinkFacets still builds the facets.
+  console.log("\n══ H. sendBlueskyReply is gone; detectOutreachLinkFacets keeps only links, at byte offsets ══");
+  const code = FILES[SERVER].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  check("sendBlueskyReply, formatLeadHandle and truncateToBlueskyLimit are removed, and nothing calls them",
+    !hasFn("sendBlueskyReply") && !hasFn("formatLeadHandle") && !hasFn("truncateToBlueskyLimit") && !/sendBlueskyReply\(|formatLeadHandle\(|truncateToBlueskyLimit\(/.test(code));
+  check("the lead routes take their facets from detectOutreachLinkFacets", /linkFacets: detectOutreachLinkFacets,/.test(FILES[SERVER]));
+  const fctx = { console: { error() {} }, RichText: require(require.resolve("@atproto/api", { paths: [REPO] })).RichText, String };
+  vm.createContext(fctx);
+  vm.runInContext(fnSource("detectOutreachLinkFacets") + "\nthis.f = detectOutreachLinkFacets;", fctx);
   const enc = new TextEncoder();
   const url = "example.com/page";
   const msg = "Café — naïve ✓ see " + url + ", ask @someone.bsky.social #tag";
-  const sent = await live(LEAD, msg);
-  const rec = BSKY.lastRecord;
-  const start = enc.encode(rec.text.slice(0, rec.text.indexOf(url))).length;
-  check("only link facets are kept: no mention, no tag", Array.isArray(rec.facets) && rec.facets.length === 1 &&
-    rec.facets[0].features.every(f => f.$type === "app.bsky.richtext.facet#link"), JSON.stringify(rec.facets));
-  check("the link facet's offsets are UTF-8 byte offsets into the posted text",
-    rec.facets[0].index.byteStart === start && rec.facets[0].index.byteEnd === start + enc.encode(url).length, JSON.stringify(rec.facets[0].index) + " vs " + start);
-  check("reply.root and reply.parent both point at the lead's post",
-    JSON.stringify(rec.reply) === JSON.stringify({ root: { uri: LEAD.post_uri, cid: LEAD.post_cid }, parent: { uri: LEAD.post_uri, cid: LEAD.post_cid } }), JSON.stringify(rec.reply));
-  check("a successful post returns its uri", sent.sent === true && sent.uri === "at://did:plc:us/app.bsky.feed.post/" + BSKY.posts, JSON.stringify(sent));
-  await live(LEAD, "b".repeat(299) + " example.com");
-  check("offsets are computed after truncation: a link the cut removed gets no facet", BSKY.lastRecord.facets === undefined, JSON.stringify(BSKY.lastRecord.facets));
-  await live(LEAD, "c".repeat(280) + " example.com tail tail tail");
-  const nr = BSKY.lastRecord, nb = enc.encode(nr.text);
-  check("a link that survives the cut has a facet inside the posted bytes, over exactly the link",
-    nr.facets && nr.facets.length === 1 && nr.facets[0].index.byteEnd <= nb.length &&
-    new TextDecoder().decode(nb.slice(nr.facets[0].index.byteStart, nr.facets[0].index.byteEnd)) === "example.com", JSON.stringify(nr.facets));
-  await live(LEAD, "No links in this one.");
-  check("a reply with no link carries no facets key at all", !("facets" in BSKY.lastRecord));
+  const facets = fctx.f(msg);
+  const start = enc.encode(msg.slice(0, msg.indexOf(url))).length;
+  check("only link facets are kept: no mention, no tag", Array.isArray(facets) && facets.length === 1 && facets[0].features.every(f => f.$type === "app.bsky.richtext.facet#link"), JSON.stringify(facets));
+  check("the link facet's offsets are UTF-8 byte offsets into the text", facets[0].index.byteStart === start && facets[0].index.byteEnd === start + enc.encode(url).length, JSON.stringify(facets[0].index) + " vs " + start);
+  check("a text with no link gets no facets", JSON.stringify(fctx.f("No links in this one.")) === "[]");
 
   /* ── G. loading server.js never starts the radar ──────────────────────── */
   console.log("\n══ G. a check that loads server.js does not start the live radar ══");
@@ -407,7 +403,8 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
   check("startLeadRadar runs only when server.js is the program (require.main === module)",
     // NAMED (Nov 23 2026, LR-1): BEFORE under 60 characters; AFTER under 300, because the scorer's ledger hand-in
     // (setModelLedger) now sits between the guard and the start, inside the same guard (the guard's block does not close between them).
-    startSite > 0 && guard > 0 && startSite - guard < 300 && FILES[SERVER].slice(guard, startSite).indexOf("\n  }") === -1 &&
+    // NAMED (Nov 23 2026, LR-2): BEFORE under 300; AFTER under 600: the member radar hand-in (setMemberRadarDeps) and its note sit there now.
+    startSite > 0 && guard > 0 && startSite - guard < 600 && FILES[SERVER].slice(guard, startSite).indexOf("\n  }") === -1 &&
     (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1, startSite + " / " + guard);
 
   check("zero Bluesky calls left this process (every agent here is a stub)", true);

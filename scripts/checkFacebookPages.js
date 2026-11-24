@@ -1049,7 +1049,8 @@ function pageAnswers(over) {
     // NAMED (Nov 20 2026, P2-2): the safety retention and the counter-notice restore follow it (checkSafetyRetention in checkReports).
     safetyRetentionTick: async function () { orderRun.push("safetyretention"); }, copyrightRestoreTick: async function () { orderRun.push("copyrightrestore"); },
     // NAMED (Nov 20 2026, P2-3): the post retention follows the copyright restore
-    postRetentionTick: async function () { orderRun.push("postretention"); }
+    postRetentionTick: async function () { orderRun.push("postretention"); },
+    memberLeadsPurgeTick: async function () { orderRun.push("memberleadspurge"); }   // NAMED (Nov 23 2026, LR-2): the chain's new last step
   };
   vm.createContext(cctx);
   let cronOk = true;
@@ -1058,7 +1059,7 @@ function pageAnswers(over) {
   // NAMED (Nov 14 2026, L1): BEFORE "runs facebookChoosingPurgeTick last" and the order ended "facebook". AFTER it runs after Instagram's refresh and
   // before L1's two ticks, and the order ends "facebook", "youtubedata", "renewal".
   check("O23. the 04:45 UTC chain runs facebookChoosingPurgeTick after Instagram's refresh, then L1's YouTube data check and renewal emails", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
-    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder", "safetyretention", "copyrightrestore", "postretention"]), J(orderRun));   // NAMED (Nov 20 2026, P2-2): BEFORE it ended "shopifyreminder". NAMED (Nov 20 2026, P2-3): BEFORE it ended "copyrightrestore"
+    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder", "safetyretention", "copyrightrestore", "postretention", "memberleadspurge"]), J(orderRun));   // NAMED (Nov 20 2026, P2-2): BEFORE it ended "shopifyreminder". NAMED (Nov 20 2026, P2-3): BEFORE it ended "copyrightrestore"
   const ms0 = mountRoutes({ env: CONFIGURED });
   check("O24. the server's tick runs lib/facebookApi.js choosingPurgeTick on facebookDeps() and never rejects", typeof ms0.ctx.facebookChoosingPurgeTick === "function" &&
     /async function facebookChoosingPurgeTick\(\) \{\n  try \{\n    return await require\("\.\/lib\/facebookApi"\)\.choosingPurgeTick\(facebookDeps\(\)\);/.test(FB_SECTION) &&
@@ -1667,7 +1668,8 @@ function pageAnswers(over) {
   // NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21" (P3-1). AFTER "2026-11-21b", the Verified badge's version (made the same day, so it carries a letter); TERMS_UPDATED stays "Last updated November 21, 2026".
   // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
   // NAMED (Nov 21 2026, P3-1C): BEFORE "2026-11-21c" (P3-1B). AFTER "2026-11-21d": members start with 1,000 BizCash and free accounts hold none (the same day again, so the next letter).
-  check("G4. TERMS_VERSION is the latest change's, Nov 21 2026 (P3-1C; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-21d", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 24 2026, LR-2B): BEFORE "2026-11-21d" and "Last updated November 21, 2026" (P3-1C)
+  check("G4. TERMS_VERSION is the latest change's, Nov 24 2026 (LR-2B; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-24", LEGAL.TERMS_VERSION);
   const YD = compile(FILES.yourData, "lib/yourData.js", {});
   const ydOf = function (t) { return (YD.DATA || []).filter(function (e) { return e.table === t; })[0] || {}; };
   check("G5. yourData: the Page exported as its name and date only, the posts without ids (keyed by created_at); Facebook (Meta) a third party; the never-exported lines; the delete order; the sign-in states",
@@ -1731,12 +1733,13 @@ function pageAnswers(over) {
   // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
   // NAMED (Nov 21 2026, FX2, migration 200): 200_categories_and_intent.sql (the shared categories table, post category, intent, need_place and need_when, marketplace_listings.category_slug, and 200e's agents_card_view, search_visible and the SEO fields; applied by hand Nov 21 2026) is allowed above too, by name; "the highest" (200) is checkBuyListingDigital R1's.
   // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
-  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 203 /* NAMED (Nov 23 2026, LR-1): BEFORE 202 */ &&
+  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 204 /* NAMED (Nov 23 2026, LR-2): BEFORE 203 */ &&
     migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql" &&
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
     // NAMED (Nov 23 2026, P3-3, migration 202): 202_need_found_and_alerts.sql (posts.need_found_at, a Need marked Found, and user_preferences.need_alerts) is allowed too, by name.
     // NAMED (Nov 23 2026, LR-1, migration 203): 203_lr1_archived_and_sms_pending.sql (sales_lead_pipeline may be 'archived'; sms_subscribers.consent_status defaults to 'pending') is allowed too, by name.
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql,202_need_found_and_alerts.sql,203_lr1_archived_and_sms_pending.sql", highest);
+    // NAMED (Nov 23 2026, LR-2, migration 204): 204_lr2_member_lead_radar.sql (lead_fingerprints, member_leads, member_lead_replies, lead_search_cache, threads_connections) is allowed too, by name.
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql,202_need_found_and_alerts.sql,203_lr1_archived_and_sms_pending.sql,204_lr2_member_lead_radar.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

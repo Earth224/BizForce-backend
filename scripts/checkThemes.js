@@ -357,6 +357,9 @@ const THEMED = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
 /* NAMED BEFORE → AFTER (Nov 20 2026, P2-2). BEFORE: 63. AFTER: 65; moderation.html (the owner's queue) and copyright.html (the
    notice form) are new and wear the member's theme, held to the same rules. */
 // NAMED (Nov 20 2026, P2-3): compose.html, the composer page. BEFORE 65 pages and NEW_PAGES ending at copyright.html.
+/* NAMED (Nov 24 2026, LR-2B): a new public page built from another's head (UNTHEMED, no engine tag) is held to that page as
+   built: threads-deletion.html to verify-email.html (H3's theme lines, H8's "as it was through the theme work"). */
+const PUBLIC_BUILT_FROM = { "threads-deletion.html": "verify-email.html" };
 const NEW_PAGES = ["music-popout.html", "media.html", "mailbox.html", "shopify-requests.html", "home.html", "inbox.html", "moderation.html", "copyright.html", "compose.html"];
 const RULE = (() => { const m = /var RULE =\n([\s\S]*?);\n/.exec(FILES[THEME]); try { return m ? vm.runInNewContext(m[1]) : ""; } catch (e) { return ""; } })();
 check("A0. scripts/bf-theme.js carries the rule, with html::before and body::before", /html::before/.test(RULE) && /body::before/.test(RULE));
@@ -1367,7 +1370,12 @@ async function elements() {
   const themeLines = t => t.split("\n").filter(l => THEME_LINE.test(l)).join("\n");
   const drift = [];
   ALL_PAGES.concat([UI]).forEach(f => {
-    const done = NEW_PAGES.indexOf(f) !== -1 ? TAG : gitShow(THEMES_DONE, f);   // a new page: all its theme lines are added lines
+    /* NAMED (Nov 23 2026, LR-2): BEFORE agents/lead-radar.html was held to its theme lines as built (the backdrop comment,
+       the mark's gradient, the old buttons). AFTER it was rebuilt to the owner's boards (LeadsHome, LeadsReply,
+       LeadsFingerprint), so like a new page every theme line it has is an added line: each token a var() with a fallback,
+       and the engine tag still once (H1). Every other page keeps its lines as built. */
+    const REBUILT_PAGES = ["agents/lead-radar.html"];
+    const done = NEW_PAGES.indexOf(f) !== -1 || REBUILT_PAGES.indexOf(f) !== -1 ? TAG : gitShow(THEMES_DONE, PUBLIC_BUILT_FROM[f] || f);   // a new page: all its theme lines are added lines
     if (done === null) { if (THEME_LINE.test(FILES[f])) drift.push(f + ": not readable at " + THEMES_DONE); return; }
     /* NAMED BEFORE → AFTER (Block 4d, every gradient follows the theme). BEFORE: today's lines as they stand. AFTER:
        today's lines with the Block 4d token forms read as their fallbacks (scripts/_unthemed.js), so a converted
@@ -1601,8 +1609,9 @@ async function elements() {
     /animation: tmx-chat-glow-breathe 5s ease-in-out infinite;/.test(mc) && /animation: tmx-core-glow 5\.5s ease-in-out infinite;/.test(mc));
 
   // H8: public pages and cards
-  const pubChanged = LIBX.UNTHEMED.filter(k => { const f = ALL_PAGES.filter(x => keyOfFile(x) === k)[0]; return !f || gitShow(ELEMENTS_BEFORE, f) !== gitShow(THEMES_DONE, f) ||
-    themeLines(withoutScrollbarBlock(FILES[f])) !== themeLines(gitShow(THEMES_DONE, f)) || FILES[f].indexOf(TAG) !== -1; });   // NAMED (boombox-mixer): without the one scrollbar block
+  const pubChanged = LIBX.UNTHEMED.filter(k => { const f = ALL_PAGES.filter(x => keyOfFile(x) === k)[0]; const g = f && (PUBLIC_BUILT_FROM[f] || f);   // NAMED (Nov 24 2026, LR-2B): g
+    return !f || gitShow(ELEMENTS_BEFORE, g) !== gitShow(THEMES_DONE, g) ||
+    themeLines(withoutScrollbarBlock(FILES[f])) !== themeLines(gitShow(THEMES_DONE, g)) || FILES[f].indexOf(TAG) !== -1; });   // NAMED (boombox-mixer): without the one scrollbar block
   check("H8. every public page (" + LIBX.UNTHEMED.length + ") was exactly as it was through the theme work, keeps every theme-bearing line since, and loads no engine: their wordmarks and buttons keep the owner's look", pubChanged.length === 0, pubChanged.join(","));
   const dcWas = gitShow(ELEMENTS_BEFORE, "digital-cards.html") || "";
   check("H8. digital cards keep their own look: the card-theme swatches and the card's watermark are untouched",

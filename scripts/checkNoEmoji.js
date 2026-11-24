@@ -79,7 +79,9 @@ const LEARN = "be:lib/learningLoop.js", LEGAL = "be:lib/legalPages.js", YT = "be
 /* THE ALLOW-LIST. Each entry: a check script, why its emoji are there, and exactly how many. */
 const ALLOW = {
   "be:scripts/checkYoutubeFilter.js": { count: 23, why: "YouTube comments as their authors wrote them: the spam filter is proved on real comment text, emoji and all" },
-  "be:scripts/checkBskyGate.js": { count: 1, why: "a member's Bluesky post of emoji, to prove the gate counts graphemes, not UTF-16 units" },
+  // NAMED (Nov 23 2026, LR-2): BEFORE be:scripts/checkBskyGate.js, count 1 (the platform sender's emoji post, proving the
+  // gate counted graphemes). AFTER that sender is removed and its section with it; grapheme counting stays proved by the
+  // checkBlueskyConnect and checkSocialBlueskyPublish entries below.
   "be:scripts/checkBlueskyConnect.js": { count: 3, why: "a member's post holding one family emoji (three code points joined), to prove the 300-grapheme limit" },
   "be:scripts/checkSocialBlueskyPublish.js": { count: 3, why: "the same member's post with a family emoji, as the publisher counts it" },
   "be:scripts/checkSocialPublishPage.js": { count: 3, why: "the same member's post with a family emoji, as the page counts it" },

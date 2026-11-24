@@ -355,7 +355,16 @@ function withLr1MastodonRows(text) {
   if (text.split(at).length !== 2 || text.indexOf('row("Mastodon"') !== -1) return null;
   return text.replace(at, at + '      row("Mastodon", r.mastodon);\n      row("Bluesky + Mastodon", r.bluesky_and_mastodon);\n');
 }
-const profilePolish = withoutPolishWrap(withoutPh1(withLr1MastodonRows(FILES[PROFILE_JS])));
+/* NAMED (Nov 23 2026, LR-2): every member's radar figures now come by source, so the table gained an Inside BizForce row
+   before Bluesky and a Threads row after it (each with its comment line). They are taken out here, exactly once, so S2
+   means what it meant. */
+function withoutLr2Rows(text) {
+  if (text === null) return null;
+  const add = "      // NAMED (Nov 23 2026, LR-2): the member's own leads, so Inside BizForce and Threads rows join (when the server sends them).\n" +
+    "      if (r.bizforce) row(\"Inside BizForce\", r.bizforce);\n      row(\"Bluesky\", r.bluesky);\n      if (r.threads) row(\"Threads\", r.threads);\n";
+  return text.split(add).length === 2 ? text.replace(add, "      row(\"Bluesky\", r.bluesky);\n") : null;
+}
+const profilePolish = withoutPolishWrap(withoutPh1(withLr1MastodonRows(withoutLr2Rows(FILES[PROFILE_JS]))));
 const profileNow = profilePolish === null ? null : withoutStoreSource(withoutB8(withoutB5(withoutB2(withoutAgentTabs(profilePolish)))));
 check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions, the Stock source tile, the agent tabs and the polish's status-line wrap set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);

@@ -447,16 +447,42 @@ const ADDED = [
   ["post", "/api/posts/:id/found"],                         // login-only: the poster marks their Need Found (550 -> 551)
   ["delete", "/api/posts/:id/found"],                       // login-only: the poster reopens their Need (551 -> 552)
   // NAMED (Nov 23 2026, LR-1): BEFORE 552 routes; AFTER 553, the one send route (checkLeadRadarRepair, routeAccess M plus the owner check)
-  ["post", "/api/agents/sales/send-approved"]               // members, owner only: posts exactly the reply a person approved, for one Bluesky lead (552 -> 553)
+  ["post", "/api/agents/sales/send-approved"],              // members, owner only: posts exactly the reply a person approved, for one Bluesky lead (552 -> 553)
+  // NAMED (Nov 23 2026, LR-2, migration 204): BEFORE 553 routes; AFTER 559: seven owner-only Lead Radar routes removed (REMOVED below) and
+  // thirteen added: Lead Radar for every member (lib/leadRoutes.js, checkLeadRadarMember) and a member's Threads account
+  // (lib/threadsRoutes.js, checkThreadsConnect). GET /api/leads keeps its path, now the member's own leads.
+  ["get", "/api/leads/fingerprint"],                         // members: the member's Fingerprint (553 -> 554)
+  ["put", "/api/leads/fingerprint"],                         // members: edit it; edited fields are locked against rebuilds (554 -> 555)
+  ["post", "/api/leads/fingerprint/rebuild"],                // members: build it again from listings, Offer posts and profile (555 -> 556)
+  ["post", "/api/leads/fingerprint/suggest"],                // members: up to 6 search phrases, one model call on the member's allowance (556 -> 557)
+  ["get", "/api/leads/summary"],                             // members: the dashboard tile and the orbit count (557 -> 558)
+  ["post", "/api/leads/:id/status"],                         // members: Save, Not a fit, won or lost (558 -> 559)
+  ["post", "/api/leads/:id/draft"],                          // members: one drafted reply, on the member's allowance, nothing posted (559 -> 560)
+  ["post", "/api/leads/:id/send"],                           // members: posts exactly the approved text from the member's own account (560 -> 561)
+  ["get", "/api/leads/archive"],                             // owner only (in the handler): the old platform leads, read only (561 -> 562)
+  ["get", "/api/social/threads/connect"],                    // members: Meta's sign-in for the member's own Threads account (562 -> 563)
+  ["get", "/api/social/threads/callback"],                   // PUBLIC: Meta's redirect back, checked by its signed single-use state (563 -> 564)
+  ["get", "/api/social/threads/status"],                     // login-only: the connection's state (564 -> 565)
+  ["post", "/api/social/threads/disconnect"],                // login-only: delete the member's own connection (565 -> 566)
+  // NAMED (Nov 24 2026, LR-2B): BEFORE 559 routes; AFTER 563: the spare-word swap (checkLeadRadarMember) and Meta's two Threads
+  // callbacks plus the deletion page's lookup (checkThreadsConnect).
+  ["post", "/api/leads/fingerprint/spare/swap"],             // members: a spare word into the Fingerprint (559 -> 560)
+  ["post", "/api/social/threads/deauthorize"],               // PUBLIC: Meta's Uninstall Callback, refused without a valid signed_request (560 -> 561)
+  ["post", "/api/social/threads/data-deletion"],             // PUBLIC: Meta's Delete Callback, the same signature check (561 -> 562)
+  ["get", "/api/social/threads/deletion-status"]             // PUBLIC: what threads-deletion.html shows for a confirmation code (562 -> 563)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
   "post /api/seo/audit",           // never fetched the site, so every audit was invented (5d014de)
   "post /api/marketplace/listings/:id/checkout-usd",  // BizForce Market trades in BizCash only; USD sales between members switched off (total 323 -> 322)
-  "get /api/profile/:username"     // Launch hardening #1: it served select("*") of a profile, email and phone and plan included, to anyone, and no page called it (total 322 -> 321)
+  "get /api/profile/:username",    // Launch hardening #1: it served select("*") of a profile, email and phone and plan included, to anyone, and no page called it (total 322 -> 321)
+  // NAMED (Nov 23 2026, LR-2): the platform radar's owner-only routes, replaced by Lead Radar for every member (566 -> 559)
+  "post /api/leads/draft-reply", "get /api/agents/sales/leads", "post /api/agents/sales/convert", "post /api/agents/sales/lead-status",
+  "get /api/agents/sales/pipeline", "get /api/leads/youtube-signals", "post /api/agents/sales/send-approved"
 ]);
+// NAMED (Nov 23 2026, LR-2): BEFORE REMOVED filtered OLD_SRC's routes only. AFTER it also filters ADDED, since LR-2 removed routes a later change added.
 const EXPECTED = routeList(OLD_SRC).filter(function (k) { return !deletedKeys.has(k) && !REMOVED.has(k); })
-  .concat(ADDED.map(function (a) { return a[0] + " " + a[1]; }));
+  .concat(ADDED.map(function (a) { return a[0] + " " + a[1]; }).filter(function (k) { return !REMOVED.has(k); }));
 
 /* ── boot the real server, capturing the app ────────────────────────────── */
 const EXPRESS_PATH = require.resolve("express", { paths: [REPO] });
