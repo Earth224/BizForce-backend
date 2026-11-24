@@ -109,7 +109,9 @@ function defs(src, names, optional) {
 }
 
 /* ── the real convertSingleLead, stubbed at the model, database and senders ── */
-const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_DAILY_CAP", "OUTREACH_PRODUCT_FACTS",
+// NAMED (Nov 23 2026, LR-1): OUTREACH_DAILY_CAP is no longer lifted: it is a multi-line parse now, convertSingleLead does not read it,
+// and BASELINE read it in a log line only, so liftAll gives it as 5, its default.
+const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_PRODUCT_FACTS",
   "OUTREACH_HOME_URL", "OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BIZFORCE_DESTINATION", "OUTREACH_BOOK_DESTINATION",
   "OUTREACH_OWN_DOMAINS", "outreachDraftRejection", "OUTREACH_TRACKED_HOSTS", "outreachRefToken", "withOutreachTracking", "nowIso",
   "DRAFT_ATTEMPT_CEILING", "OUTREACH_EMOJI_PATTERN", "stripOutreachEmoji", "truncateOrchestratorPreview", "normalizeMemoryMetadata",
@@ -130,7 +132,7 @@ function fakeDb() {
 function liftAll(src) {
   const ctx = { supabase: fakeDb(), RichText: RichText, URL: URL, crypto: crypto, console: { log() {}, warn() {}, error() {} }, process: { env: {} } };
   vm.createContext(ctx);
-  vm.runInContext(defs(src, LIFTED, NEW_NAMES) + "\nthis.api = { convertSingleLead, detectOutreachLinkFacets, outreachRefToken: typeof outreachRefToken === 'function' ? outreachRefToken : null };", ctx);
+  vm.runInContext("var OUTREACH_DAILY_CAP = 5;\n" + defs(src, LIFTED, NEW_NAMES) + "\nthis.api = { convertSingleLead, detectOutreachLinkFacets, outreachRefToken: typeof outreachRefToken === 'function' ? outreachRefToken : null };", ctx);
   return ctx;
 }
 const LEAD = { id: "lead-1", post_uri: "at://did:plc:abcxyz123/app.bsky.feed.post/3kfixture", source: "bluesky", author_handle: "fixture-person.bsky.social",
@@ -144,7 +146,13 @@ async function draftRun(src, product, modelMessage, lead) {
   ctx.sendBlueskyReply = async (l, text) => { sends.push(text); return { sent: true, uri: "at://fake/post" }; };
   ctx.sendMastodonReply = async (l, text) => { sends.push(text); return { sent: true, uri: "https://fake/post" }; };
   const r = await ctx.api.convertSingleLead(SUBJECT_USER_ID, Object.assign({}, lead || LEAD, { suggested_product: product }), "SHARED SYSTEM PROMPT", false);
-  return { prompt: prompts[0] || null, sends: sends, sent: !!(r && r.sent), reason: r && r.send_reason };
+  /* NAMED (Nov 23 2026, LR-1): BEFORE convertSingleLead sent the reply, so what went out was the sender's text. AFTER it drafts only
+     (r.draft, offered for approval and posted by POST /api/agents/sales/send-approved), so "sends" is the draft
+     offered for the working copy and the sent text for BASELINE; "posted" is what a sender really received. */
+  const drafting = !!r && Object.prototype.hasOwnProperty.call(r, "draft");
+  const offered = drafting ? (r.draft ? [r.draft] : []) : sends;
+  return { prompt: prompts[0] || null, sends: offered, posted: sends, sent: drafting ? offered.length === 1 && sends.length === 0 : !!(r && r.sent),
+    reason: drafting && r.draft_rejection ? "draft_rejected" : (r && r.send_reason) };
 }
 
 /* ── the route, lifted with a database that records what it is asked to write ── */
@@ -182,8 +190,16 @@ async function post(h, body) {
 
   console.log("\n══ 2. rejection runs first ══");
   const csl = defs(SERVER, ["convertSingleLead"]);
-  const iReject = csl.indexOf("  var draftRejection = cleanMessage\n"), iTrack = csl.indexOf("withOutreachTracking(cleanMessage"), iSend = csl.indexOf("sendBlueskyReply(lead, cleanMessage)");
-  check("2. in convertSingleLead: the rejection, then the tracking, then the send", iReject > 0 && iTrack > iReject && iSend > iTrack, JSON.stringify([iReject, iTrack, iSend]));
+  /* NAMED (Nov 23 2026, LR-1): BEFORE "the rejection, then the tracking, then the send" in convertSingleLead. AFTER convertSingleLead
+     sends nothing: the rejection, then the tracking, then the draft it returns for approval; and the one send,
+     POST /api/agents/sales/send-approved, checks the approved text's links before sendBlueskyReply. */
+  const iReject = csl.indexOf("  var draftRejection = cleanMessage\n"), iTrack = csl.indexOf("withOutreachTracking(cleanMessage"), iSend = csl.indexOf("    draft:           cleanMessage,");
+  check("2. in convertSingleLead: the rejection, then the tracking, then the draft returned (no sender is called)",
+    iReject > 0 && iTrack > iReject && iSend > iTrack && !/sendBlueskyReply\(|sendMastodonReply\(/.test(csl), JSON.stringify([iReject, iTrack, iSend]));
+  const sa = SERVER.slice(SERVER.indexOf("app.post(\"/api/agents/sales/send-approved\""), SERVER.indexOf("// POST /api/agents/sales/lead-status"));
+  check("2. in send-approved: the approved text's link check, then the send",
+    // NAMED (Nov 23 2026, LR-1): the link check reads checkText (the approved text with this lead's own tracked link put back to the plain destination).
+    sa.length > 0 && sa.indexOf("outreachDraftRejection(checkText,") > 0 && sa.indexOf("sendBlueskyReply(lead, text)") > sa.indexOf("outreachDraftRejection(checkText,"));
   /* The destination as server.js holds it, so these follow it if it moves. */
   const DEST = (function () { const c = {}; vm.runInNewContext(defs(SERVER, ["OUTREACH_HOME_URL", "OUTREACH_PRODUCT_DESTINATIONS"]) + "\nthis.v = OUTREACH_PRODUCT_DESTINATIONS.BizForceAI;", c); return c.v; })();
   const DEST_BARE = DEST.replace(/^https:\/\//, "");
@@ -210,7 +226,8 @@ async function post(h, body) {
     const r = await draftRun(SERVER, "BizForceAI", "Owned channels can't be switched off by an ad network. We built BizForceAI for that: " + f);
     got.push(r.sent && r.sends.length === 1 && r.sends[0].split(tracked).length === 2 && !/bizforceai\.net/i.test(r.sends[0].split(tracked).join("")) ? "ok" : (r.sends[0] || r.reason));
   }
-  check("3. every form the model may write — " + forms.join(", ") + " — goes out as " + tracked, got.every(g => g === "ok"), JSON.stringify(got));
+  // NAMED (Nov 23 2026, LR-1): "goes out" is now "is offered for approval" (sends is the draft; see draftRun)
+  check("3. every form the model may write — " + forms.join(", ") + " — is offered for approval as " + tracked, got.every(g => g === "ok"), JSON.stringify(got));
   const sample = await draftRun(SERVER, "BizForceAI", "We built BizForceAI for exactly this: " + DEST);
   console.log("    sent: " + (sample.sends[0] || "(nothing)"));
 
@@ -230,7 +247,7 @@ async function post(h, body) {
     if (a.prompt === b.prompt && JSON.stringify(a.sends) === JSON.stringify(b.sends) && a.sent && b.sent) same++;
     if (a.sends.some(s => /[?&]ref=/.test(s))) anyRef = true;
   }
-  check("5. for all six supplement products and the book, prompt and reply sent are identical to " + BASELINE, same === SUPP.length + 1, same + " of " + (SUPP.length + 1));
+  check("5. for all six supplement products and the book, prompt and reply offered (NAMED (Nov 23 2026, LR-1): BEFORE sent) are identical to what " + BASELINE + " sent", same === SUPP.length + 1, same + " of " + (SUPP.length + 1));
   check("5. and no supplement or book reply carries a parameter", !anyRef);
 
   console.log("\n══ 6. the 300-character guard ══");
@@ -248,7 +265,7 @@ async function post(h, body) {
   /* What the parameter costs a reply, against the 300 a Bluesky post allows. */
   console.log("    characters: destination " + DEST.length + ", tracked " + tracked.length + " (the parameter adds " + (tracked.length - DEST.length) +
     "); the drafter writes to 280, so a full-length draft carrying the link reaches " + (280 + tracked.length - DEST.length) + " of 300");
-  check("6. it is sent without the parameter, its link whole, rather than truncated through the link",
+  check("6. it is offered (NAMED (Nov 23 2026, LR-1): BEFORE sent) without the parameter, its link whole, rather than truncated through the link",
     lr.sent && lr.sends.length === 1 && lr.sends[0] === long && !/\?ref=/.test(lr.sends[0]), lr.sends[0] ? Array.from(lr.sends[0]).length + " chars" : lr.reason);
 
   console.log("\n══ 7. POST /api/engine-visits ══");

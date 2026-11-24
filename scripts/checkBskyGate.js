@@ -72,7 +72,9 @@ const MUTATIONS = {
   // loading server.js starts the live radar again
   // NAMED (Oct 27 2026, launch item #7): BEFORE the call was startLeadRadar(); AFTER it passes
   // shutdownControl.trackInterval, so a SIGTERM stops the radar's five-minute interval.
-  "radar-starts-when-loaded": [[SERVER, "  if (require.main === module) {\n    startLeadRadar(shutdownControl.trackInterval)", "  if (true) {\n    startLeadRadar(shutdownControl.trackInterval)"]],
+  // NAMED (Nov 23 2026, LR-1): BEFORE the anchor ran straight from the guard to startLeadRadar; the ledger hand-in now sits between
+  "radar-starts-when-loaded": [[SERVER, "  if (require.main === module) {\n    // NAMED (Nov 23 2026, LR-1): the scorer's calls go on the model_calls ledger",
+    "  if (true) {\n    // NAMED (Nov 23 2026, LR-1): the scorer's calls go on the model_calls ledger"]],
   // checkOutreachReplies logs in live unless told not to
   "replies-live-by-default": [[REPLIES, "const LIVE = process.env.CHECK_LIVE_BLUESKY === \"true\";", "const LIVE = process.env.CHECK_LIVE_BLUESKY !== \"false\";"]]
 };
@@ -159,7 +161,7 @@ function freshRadar(envOverride) {
     if (name === "@supabase/supabase-js") return { createClient: () => fakeSupabase };
     if (name === "@atproto/api") return { BskyAgent: FakeBskyAgent };
     if (name === "@anthropic-ai/sdk") return function Anthropic() { throw new Error("no model in this check"); };
-    if (name === "./mastodonRadar") return { runMastodonRadarOnce: async () => {} };
+    // NAMED (Nov 23 2026, LR-1): BEFORE a "./mastodonRadar" stub; leadRadar.js no longer requires it (the file is deleted)
     if (name === "./youtubeRadar") return { runYoutubeRadarOnce: async () => {} };
     if (name === "./lib/resolveAnthropicKey") return () => async () => null;
     if (name === "./lib/bskyGate") return gateModule;
@@ -403,7 +405,10 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
   const startSite = FILES[SERVER].indexOf("    startLeadRadar(shutdownControl.trackInterval).catch(function (err) {");
   const guard = FILES[SERVER].lastIndexOf("  if (require.main === module) {\n", startSite);
   check("startLeadRadar runs only when server.js is the program (require.main === module)",
-    startSite > 0 && guard > 0 && startSite - guard < 60 && (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1, startSite + " / " + guard);
+    // NAMED (Nov 23 2026, LR-1): BEFORE under 60 characters; AFTER under 300, because the scorer's ledger hand-in
+    // (setModelLedger) now sits between the guard and the start, inside the same guard (the guard's block does not close between them).
+    startSite > 0 && guard > 0 && startSite - guard < 300 && FILES[SERVER].slice(guard, startSite).indexOf("\n  }") === -1 &&
+    (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1, startSite + " / " + guard);
 
   check("zero Bluesky calls left this process (every agent here is a stub)", true);
   console.log("");

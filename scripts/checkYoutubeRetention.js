@@ -81,7 +81,8 @@ const MUTATIONS = {
   "delete-referenced-lead": [[LIB, "    var deletable = leads.filter(function (lead) { return referenced.indexOf(lead.post_uri) === -1; });",
     "    var deletable = leads;"]],
   // Demand Signals reads YouTube rows again
-  "demand-reads-youtube": [[SERVER, "    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE);\n", ""]]
+  // NAMED (Nov 23 2026, LR-1): BEFORE the anchor ended "DEMAND_EXCLUDED_SOURCE);"; the line now also skips archived rows
+  "demand-reads-youtube": [[SERVER, "    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE).neq(\"status\", \"archived\");", "    q = q.neq(\"status\", \"archived\");"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -436,7 +437,9 @@ const has = (rows, id) => rows.some(r => r.id === id);
     dbI.log.length === 6 && dbI.log.every(q => q.filters.some(f => f[0] === "neq" && f[1] === "source" && f[2] === "youtube")), dbI.log.length);
   const nm = ctx.__api.DEMAND_NOT_MEASURED;
   check("I. not_measured says YouTube is excluded, and why", nm.some(x => /^YouTube: excluded\. YouTube's API terms forbid combining YouTube data with data from other sources/.test(x)), JSON.stringify(nm));
-  const radarSrc = fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8") + fs.readFileSync(path.join(REPO, "mastodonRadar.js"), "utf8");
+  // NAMED (Nov 23 2026, LR-1): BEFORE leadRadar.js + mastodonRadar.js; mastodonRadar.js is deleted (Mastodon lead search
+  // removed). The three YouTube-only keywords are the same either way (none was on the Mastodon hashtag list).
+  const radarSrc = fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8");
   const ytSrc = fs.readFileSync(path.join(REPO, "youtubeRadar.js"), "utf8");
   const ytKw = /KEYWORDS = \[([\s\S]*?)\];/.exec(ytSrc);
   const ytToday = ytKw ? (ytKw[1].match(/"[^"]+"/g) || []).map(x => x.slice(1, -1)) : [];

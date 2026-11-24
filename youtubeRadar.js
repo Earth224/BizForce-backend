@@ -107,10 +107,15 @@ async function fetchCommentThreads(videoId) {
   return response.json();
 }
 
+/* NAMED (Nov 23 2026, LR-1): returns what the pass did, for the radar_status row (source youtube) radarTick
+   writes: null when no pass ran (inside the 3-hour gap), else { outcome, searches,
+   matched, captured, capturedKnown, error }. outcome is one of the values migration 135
+   allows: captured, nothing_new, no_credentials or error. */
 async function runYoutubeRadarOnce() {
   // Silent on the skip path: the caller ticks every 5 minutes, so a log line
   // here would fire ~35 times per gap and drown everything else in the log.
-  if (Date.now() - lastRunStartedAt < MIN_RUN_INTERVAL_MS) return;
+  if (Date.now() - lastRunStartedAt < MIN_RUN_INTERVAL_MS) return null;
+  var pass = { searches: 0, matched: 0, captured: 0, capturedKnown: true, errors: [] };
 
   // Stamped at the start rather than at the end so an overlapping or slow run
   // cannot open a second window while the first is still going.
@@ -123,7 +128,7 @@ async function runYoutubeRadarOnce() {
   // valid" in the logs.
   if (!YOUTUBE_API_KEY) {
     console.error("[YoutubeRadar] YOUTUBE_API_KEY is not set — every request would send the literal string 'undefined' and fail. Skipping run.");
-    return;
+    return { outcome: "no_credentials", searches: 0, matched: 0, captured: 0, capturedKnown: true, error: "YOUTUBE_API_KEY is not set" };
   }
 
   /* FAIL CLOSED: an unusable cap means no YouTube call this pass. Logged once:
@@ -131,7 +136,7 @@ async function runYoutubeRadarOnce() {
   var caps = youtubeCaps(process.env);
   if (caps.error) {
     console.error("[YoutubeRadar] No YouTube call this pass: " + caps.error + ".");
-    return;
+    return { outcome: "error", searches: 0, matched: 0, captured: 0, capturedKnown: true, error: caps.error };
   }
 
   // Reserve a call's units BEFORE it is sent. false (logged once) ends the pass.
@@ -170,6 +175,7 @@ async function runYoutubeRadarOnce() {
         break;
       }
       if (!(await reserve("search.list"))) break;
+      pass.searches++;   // NAMED (Nov 23 2026, LR-1)
 
       try {
         var searchData = await fetchSearchResults(keyword);
@@ -249,16 +255,25 @@ async function runYoutubeRadarOnce() {
 
         if (!rows.length) continue;
 
-        var { error } = await supabase
+        /* NAMED (Nov 23 2026, LR-1): the select returns only the rows really inserted (ignoreDuplicates is
+           ON CONFLICT DO NOTHING), so the log says matched and new apart, as
+           leadRadar.js does. It used to print rows.length as "new leads". */
+        var { data: insertedRows, error } = await supabase
           .from("bsky_leads")
-          .upsert(rows, { onConflict: "post_uri", ignoreDuplicates: true });
+          .upsert(rows, { onConflict: "post_uri", ignoreDuplicates: true })
+          .select("post_uri");
 
         if (error) {
           console.error("[YoutubeRadar] Supabase upsert error for keyword '" + keyword + "':", error.message);
+          pass.errors.push("upsert for '" + keyword + "': " + error.message);
+          pass.capturedKnown = false;
           continue;
         }
 
-        console.log("[YoutubeRadar] " + keyword + " -> " + rows.length + " new leads");
+        var newCount = (insertedRows || []).length;
+        pass.matched += rows.length;
+        pass.captured += newCount;
+        console.log("[YoutubeRadar] " + keyword + ": " + rows.length + " matched, " + newCount + " new");
 
       } catch (kwErr) {
         console.error("[YoutubeRadar] Error processing keyword '" + keyword + "':", kwErr.message || kwErr);
@@ -266,7 +281,11 @@ async function runYoutubeRadarOnce() {
     }
   } catch (err) {
     console.error("[YoutubeRadar] runYoutubeRadarOnce error:", err.message || err);
+    pass.errors.push(String(err.message || err));
   }
+  pass.outcome = pass.errors.length && !pass.captured ? "error" : (pass.captured ? "captured" : "nothing_new");
+  pass.error = pass.errors.length ? pass.errors.join("; ").slice(0, 500) : null;
+  return pass;
 }
 
 module.exports = { runYoutubeRadarOnce, KEYWORDS };

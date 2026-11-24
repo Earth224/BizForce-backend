@@ -122,15 +122,17 @@ async function realPipeline() {
       { user_id: OWNER, lead_post_uri: "u2", status: "replied", last_draft: null, updated_at: TODAY },
       { user_id: OWNER, lead_post_uri: "u3", status: "replied", last_draft: null, updated_at: YESTERDAY },
       { user_id: OWNER, lead_post_uri: "u4", status: "converted", last_draft: null, updated_at: TODAY },
-      { user_id: OWNER, lead_post_uri: "u5", status: "contacted", last_draft: null, updated_at: TODAY }
+      { user_id: OWNER, lead_post_uri: "u5", status: "contacted", last_draft: null, updated_at: TODAY },
+      // NAMED (Nov 23 2026, LR-1): an archived row today; the route's .neq("status", "archived") keeps it out of every group.
+      { user_id: OWNER, lead_post_uri: "u6", status: "archived", last_draft: null, updated_at: TODAY }
     ],
     bsky_leads: []
   };
   const from = (table) => {
     const q = { filters: [] };
     const b = { select() { return b; } };
-    ["eq", "in", "order", "limit"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
-    b.then = (res, rej) => Promise.resolve({ data: (rows[table] || []).filter(r => q.filters.every(f => f[0] !== "eq" || r[f[1]] === f[2])), error: null }).then(res, rej);
+    ["eq", "neq", "in", "order", "limit"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
+    b.then = (res, rej) => Promise.resolve({ data: (rows[table] || []).filter(r => q.filters.every(f => (f[0] !== "eq" || r[f[1]] === f[2]) && (f[0] !== "neq" || r[f[1]] !== f[2]))), error: null }).then(res, rej);
     return b;
   };
   let handler = null;
@@ -197,7 +199,8 @@ const TASKS = [
   console.log("\n══ 1. the sales funnel ══");
   const pipe = await realPipeline();
   check("fixture: the real pipeline route answers 200 with replied and converted groups",
-    pipe.code === 200 && pipe.body.pipeline && pipe.body.pipeline.replied.length === 3 && pipe.body.pipeline.converted.length === 1, JSON.stringify(pipe.body).slice(0, 200));
+    pipe.code === 200 && pipe.body.pipeline && pipe.body.pipeline.replied.length === 3 && pipe.body.pipeline.converted.length === 1 &&
+    !JSON.stringify(pipe.body).includes('"u6"'), JSON.stringify(pipe.body).slice(0, 200));
   const ok = await runFunnel((p) => p === "/api/ai/tasks" ? { status: 200, body: { tasks: TASKS } }
     : p === "/api/agents/sales/pipeline" ? { status: 200, body: pipe.body } : { status: 200, body: {} });
   check("the page's ready handler ran", ok.ready);

@@ -8,8 +8,9 @@
    real low score, sorted and counted with the real ones.
 
    scoreNewLeads (leadRadar.js) and the five bsky_leads consumers in server.js —
-   GET /api/leads, GET /api/agents/sales/leads, GET /api/agents/sales/pipeline,
-   POST /api/agents/sales/convert and runSalesAutoConvert — are lifted and run
+   GET /api/leads, GET /api/agents/sales/leads, GET /api/agents/sales/pipeline
+   and POST /api/agents/sales/convert (NAMED (Nov 23 2026, LR-1): runSalesAutoConvert is retired,
+   so it is no longer lifted) — are lifted and run
    in a vm against a fake Supabase that applies the filters and Postgres's own
    ordering rule (a descending sort puts nulls FIRST unless told otherwise).
    Anthropic is a stub class; convertSingleLead is a spy that drafts nothing.
@@ -27,11 +28,12 @@
         score and orders it with nulls last.
      3. The pipeline keeps a failed lead's row but shows no number: intent_score
         null and score_label "scoring failed".
-     4. runSalesAutoConvert drafts only for real scores, even when the database
-        returns failed and null-score rows; its query excludes null scores and
-        orders nulls last.
-     5. POST /api/agents/sales/convert refuses a named failed lead (not_scored)
-        and its segment path drafts only real scores.
+     4. NAMED (Nov 23 2026, LR-1): BEFORE "runSalesAutoConvert drafts only for real scores". The
+        automatic loop is retired; section 4 now proves it is gone.
+     5. POST /api/agents/sales/convert refuses a named failed lead (not_scored).
+        NAMED (Nov 23 2026, LR-1): BEFORE "and its segment path drafts only real scores"; segment
+        mode is removed, so a segment request is refused (400) and drafts nothing.
+     1b. NAMED (Nov 23 2026, LR-1): every scoring call is enforced and recorded on the model ledger.
 
    MUTATE=<name> edits the lifted source (nothing on disk is touched).
    MUTATE=all runs each in its own process and passes only if every one fails
@@ -59,10 +61,11 @@ const MUTATIONS = {
   // GET /api/leads orders without nulls last
   "drop-nulls-last": [[SERVER, "      .order(\"intent_score\", { ascending: false, nullsFirst: false })\n      .limit(100);",
     "      .order(\"intent_score\", { ascending: false })\n      .limit(100);"]],
-  // auto-convert takes whatever rows the database returns
-  "auto-convert-takes-null-score": [[SERVER,
-    "          .filter(leadHasRealScore)\n          .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })\n          .slice(0, 5);",
-    "          .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })\n          .slice(0, 5);"]]
+  // NAMED (Nov 23 2026, LR-1): BEFORE "auto-convert-takes-null-score" (runSalesAutoConvert is retired). AFTER: convert drafts a failed lead
+  "convert-takes-failed-lead": [[SERVER, "      if (!leadHasRealScore(requestedLead)) {\n        refusals.push({\n          code:   \"not_scored\",",
+    "      if (false) {\n        refusals.push({\n          code:   \"not_scored\","]],
+  // NAMED (Nov 23 2026, LR-1): the scorer's call is not recorded on the ledger
+  "scorer-not-recorded": [[RADAR, "        await modelLedger.record({", "        if (false) await modelLedger.record({"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -95,7 +98,8 @@ function lifter(SRC, STUBS) {
     const r2 = new RegExp("^(?:var|const|let) " + name + "[ \t]*=[ \t]*", "gm");
     while ((d = r2.exec(SRC)) && SPANS.some(([x, y]) => d.index > x && d.index < y)) { /* a local */ }
     if (!d) return null;
-    const brk = /;\n/g; brk.lastIndex = d.index + d[0].length;
+    // NAMED (Nov 23 2026, LR-1): a constant may end ";   // note" (SCORABLE_SOURCES does); BEFORE /;\n/ ran on past it
+    const brk = /;[ \t]*(?:\/\/[^\n]*)?\n/g; brk.lastIndex = d.index + d[0].length;
     let b;
     while ((b = brk.exec(SRC))) {
       const next = SRC[b.index + b[0].length];
@@ -142,18 +146,20 @@ function constantText(SRC, name) {
   if (start < 0) throw new Error(name + " not found in server.js");
   const line = SRC.slice(start, SRC.indexOf("\n", start));
   if (/= \(function \(\) \{$/.test(line)) return SRC.slice(start, SRC.indexOf("\n})();", start) + 6);
-  if (!/;$/.test(line)) throw new Error(name + " is not a one-line or immediately-invoked constant");
-  return line;
+  // NAMED (Nov 23 2026, LR-1): a trailing // note after the semicolon is allowed (OUTREACH_SENDABLE_SOURCES carries one)
+  const code = line.replace(/;\s*\/\/.*$/, ";");
+  if (!/;$/.test(code)) throw new Error(name + " is not a one-line or immediately-invoked constant");
+  return code;
 }
 const OUTREACH_CONSTANTS = ["OUTREACH_MIN_INTENT", "OUTREACH_SENDABLE_SOURCES", "OUTREACH_MAX_POST_AGE_DAYS", "SALES_ENGAGED_STATUSES", "DRAFT_ATTEMPT_CEILING"];
 OUTREACH_CONSTANTS.forEach(n => SERVER_STUBS.add(n));
 const SERVER_LIFTED = OUTREACH_CONSTANTS.map(n => constantText(FILES[SERVER], n)).join("\n\n") + "\n\n" + serverClosure([
   routeText(FILES[SERVER], "get", "/api/leads"), routeText(FILES[SERVER], "get", "/api/agents/sales/leads"),
   routeText(FILES[SERVER], "get", "/api/agents/sales/pipeline"), routeText(FILES[SERVER], "post", "/api/agents/sales/convert")
-].join("\n\n") + "\n\nthis.api = { runSalesAutoConvert: runSalesAutoConvert, leadHasRealScore: leadHasRealScore };");
+].join("\n\n") + "\n\nthis.api = { leadHasRealScore: leadHasRealScore };");   // NAMED (Nov 23 2026, LR-1): BEFORE also runSalesAutoConvert (retired)
 
 const RADAR_STUBS = new Set(["supabase", "SCORING_ACCOUNT_ID", "console", "process", "require", "module", "Anthropic", "resolveAnthropicKey", "setTimeout", "Date"]);
-const RADAR_LIFTED = lifter(FILES[RADAR], RADAR_STUBS)("this.scoreNewLeads = scoreNewLeads;");
+const RADAR_LIFTED = lifter(FILES[RADAR], RADAR_STUBS)("this.scoreNewLeads = scoreNewLeads; this.setModelLedger = setModelLedger;");   // NAMED (Nov 23 2026, LR-1): + the ledger hand-in
 
 /* ── the fake database, with Postgres's ordering ───────────────────────── */
 function fakeDb(seed, raw) {
@@ -238,7 +244,7 @@ function server(seed, raw) {
   const ctx = {
     supabase: db.client, JSON, Math, Promise, Date, Number, Object, Array, String,
     nowIso: () => new Date().toISOString(),
-    process: { env: { SALES_AUTOLOOP_DRY_RUN: "true" } },
+    process: { env: {} },   // NAMED (Nov 23 2026, LR-1): BEFORE SALES_AUTOLOOP_DRY_RUN "true" (the variable is gone)
     console: { log() {}, error() {}, warn() {} },
     OUTREACH_CREDENTIAL_OWNER_ID: OWNER, OWNER_ACCOUNT_ID: OWNER, SALES_AGENT_BRAIN: "BRAIN",
     requireAuth: function requireAuth(req, res, next) { next(); },
@@ -288,7 +294,10 @@ const excludesNull = (q) => q.filters.some(f => f[0] === "not" && f[1] === "inte
       process: { env: { ANTHROPIC_API_KEY: "sk-ant-stub" } }, console: { log() {}, error() {}, warn() {} }, setTimeout: (fn) => { fn(); return 0; } };
     vm.createContext(ctx);
     vm.runInContext(RADAR_LIFTED, ctx);
-    return { db, writes, run: () => ctx.scoreNewLeads(), calls: () => modelCalls };
+    // NAMED (Nov 23 2026, LR-1): the scorer scores only with a ledger handed in; this one counts what it is given
+    const ledger = { enforced: 0, recorded: [] };
+    ctx.setModelLedger({ enforce: async () => { ledger.enforced++; return true; }, record: async (d) => { ledger.recorded.push(JSON.parse(JSON.stringify(d))); } });
+    return { db, writes, ledger, run: () => ctx.scoreNewLeads(), calls: () => modelCalls };
   }
   const newLead = lead("new1", { status: "new", score_attempts: 0, intent_score: null, intent_reason: null, outreach_safe: null, reply_invited: null, created_at: "2026-10-01T00:00:00Z" });
   const r = await radar([newLead], new Error("upstream timeout"));
@@ -314,6 +323,12 @@ const excludesNull = (q) => q.filters.some(f => f[0] === "not" && f[1] === "inte
   await ok.run();
   row = ok.db.tables.bsky_leads[0];
   check("a successful scoring is unchanged: score 72, status scored", row.status === "scored" && row.intent_score === 72 && row.intent_reason === "asks the room what helps", JSON.stringify(row));
+  // NAMED (Nov 23 2026, LR-1): the scorer is on the spend ledger
+  const rec = ok.ledger.recorded[0] || {};
+  check("1b. the scoring call was capped first and recorded once: lead_radar, scoreNewLeads, the model",
+    ok.ledger.enforced === 1 && ok.ledger.recorded.length === 1 && rec.agentType === "lead_radar" && rec.route === "scoreNewLeads" && rec.model === "claude-sonnet-4-6" && rec.userId === OWNER,
+    JSON.stringify(ok.ledger));
+  check("1b. the three failed calls were capped too (one enforce per call)", r.ledger.enforced === 3, r.ledger.enforced);
 
   /* ── 2. the owner's lists ─────────────────────────────────────────────── */
   console.log("\n══ 2. GET /api/leads and GET /api/agents/sales/leads ══");
@@ -347,20 +362,11 @@ const excludesNull = (q) => q.filters.some(f => f[0] === "not" && f[1] === "inte
       byUri[L.good80.post_uri] && byUri[L.good80.post_uri].intent_score === 80 && !("score_label" in byUri[L.good80.post_uri]), JSON.stringify(byUri[L.good80.post_uri]));
   }
 
-  /* ── 4. auto-convert ──────────────────────────────────────────────────── */
-  console.log("\n══ 4. runSalesAutoConvert ══");
-  {
-    const sv = server({ bsky_leads: ALL, sales_lead_pipeline: [], business_profiles: [{ user_id: OWNER }], agent_memory: [] });
-    await sv.api.runSalesAutoConvert();
-    const q = leadsQuery(sv.db)[0];
-    check("its query excludes a null score", q && excludesNull(q), q && JSON.stringify(q.filters));
-    check("its query orders by score with nulls last", q && ordersNullsLast(q), q && JSON.stringify(q.filters));
-    check("it drafts only real scores, highest first", JSON.stringify(sv.drafted) === JSON.stringify(["lead-good80", "lead-good65"]), JSON.stringify(sv.drafted));
-    const raw = server({ bsky_leads: [], sales_lead_pipeline: [], business_profiles: [{ user_id: OWNER }], agent_memory: [] },
-      { bsky_leads: [L.nullScored, L.failed, L.legacy, L.good80] });
-    await raw.api.runSalesAutoConvert();
-    check("even when the database returns null, failed and legacy rows, it drafts none of them", JSON.stringify(raw.drafted) === JSON.stringify(["lead-good80"]), JSON.stringify(raw.drafted));
-  }
+  /* ── 4. the automatic loop is retired ────────────────────────────────── */
+  // NAMED (Nov 23 2026, LR-1): BEFORE four checks that runSalesAutoConvert drafted only real scores. AFTER: it is gone.
+  console.log("\n══ 4. runSalesAutoConvert is retired ══");
+  check("runSalesAutoConvert and salesAutoConvertTick are not defined in server.js",
+    !/function runSalesAutoConvert\(|function salesAutoConvertTick\(/.test(FILES[SERVER]), "still defined");
 
   /* ── 5. convert ───────────────────────────────────────────────────────── */
   console.log("\n══ 5. POST /api/agents/sales/convert ══");
@@ -375,15 +381,11 @@ const excludesNull = (q) => q.filters.some(f => f[0] === "not" && f[1] === "inte
     const sv = server({ bsky_leads: ALL, sales_lead_pipeline: [], business_profiles: [], agent_memory: [] });
     const res = await sv.call("post /api/agents/sales/convert", { lead_post_uri: L.good80.post_uri });
     check("named, a real score: drafted", res.status === 200 && JSON.stringify(sv.drafted) === "[\"lead-good80\"]", res.status + " " + JSON.stringify(sv.drafted));
+    // NAMED (Nov 23 2026, LR-1): BEFORE three checks on segment mode drafting real scores only. AFTER: segment mode is removed.
     const seg = server({ bsky_leads: ALL, sales_lead_pipeline: [], business_profiles: [], agent_memory: [] });
-    await seg.call("post /api/agents/sales/convert", { segment: {} });
-    const q = leadsQuery(seg.db)[0];
-    check("segment: the query excludes a null score and orders nulls last", q && excludesNull(q) && ordersNullsLast(q), q && JSON.stringify(q.filters));
-    check("segment: only real scores are drafted", JSON.stringify(seg.drafted) === JSON.stringify(["lead-good80", "lead-good65"]), JSON.stringify(seg.drafted));
-    const raw = server({ bsky_leads: [], sales_lead_pipeline: [], business_profiles: [], agent_memory: [] }, { bsky_leads: ALL });
-    await raw.call("post /api/agents/sales/convert", { segment: {} });
-    check("segment: even when the database returns failed and null rows, only real scores are drafted",
-      raw.drafted.length === 2 && raw.drafted.indexOf("lead-legacy") === -1 && raw.drafted.indexOf("lead-failed") === -1 && raw.drafted.indexOf("lead-nullScored") === -1, JSON.stringify(raw.drafted));
+    const sres = await seg.call("post /api/agents/sales/convert", { segment: {} });
+    check("segment: refused 400, no lead read, nothing drafted", sres.status === 400 && seg.drafted.length === 0 && leadsQuery(seg.db).length === 0,
+      sres.status + " " + JSON.stringify(sres.body));
   }
 
   /* ── 6. Postgres's rule, and every ordering ───────────────────────────── */
@@ -395,8 +397,9 @@ const excludesNull = (q) => q.filters.some(f => f[0] === "not" && f[1] === "inte
     check("the fake follows Postgres: a plain descending sort puts the null first; nullsFirst false puts it last",
       plain.data[0].v === null && last.data[2].v === null, JSON.stringify([plain.data, last.data]));
     const orders = (FILES[SERVER].match(/\.order\("intent_score", \{[^}]*\}\)/g) || []);
+    // NAMED (Nov 23 2026, LR-1): BEFORE 4 orderings; the autoloop's and the segment's are gone, leaving GET /api/leads and GET /api/agents/sales/leads
     check("every ordering by intent_score in server.js says nullsFirst: false (" + orders.length + ")",
-      orders.length === 4 && orders.every(o => /ascending: false, nullsFirst: false/.test(o)), JSON.stringify(orders));
+      orders.length === 2 && orders.every(o => /ascending: false, nullsFirst: false/.test(o)), JSON.stringify(orders));
   }
 
   check("zero network", NETWORK.length === 0, JSON.stringify(NETWORK));

@@ -86,7 +86,10 @@ const MUTATIONS = {
   "wrong-price": [["suppressed.html", "under your own handle. $199/month.\">", "under your own handle. $149/month.\">"]],
   // a page in the sitemap with no file behind it
   "sitemap-orphan": [["sitemap-pages.xml", "  <url><loc>https://bizforceai.net/vitality</loc></url>\n",
-    "  <url><loc>https://bizforceai.net/vitality</loc></url>\n  <url><loc>https://bizforceai.net/no-such-page</loc></url>\n"]]
+    "  <url><loc>https://bizforceai.net/vitality</loc></url>\n  <url><loc>https://bizforceai.net/no-such-page</loc></url>\n"]],
+  // NAMED (Nov 23 2026, LR-1B): suppressed.html indexable again, and a sitemap page made noindex
+  "suppressed-indexable": [["suppressed.html", "<meta name=\"robots\" content=\"noindex, follow\">\n", ""]],
+  "sitemap-page-noindex": [["xxl-xtreme.html", "<title>", "<meta name=\"robots\" content=\"noindex\"><title>"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -160,6 +163,18 @@ function visibleText(html) {
     check("P1. " + loc + " is served from a file in the repo" + (file ? " (" + file + ")" : ""), u.host === "bizforceai.net" && !!file && read(file) !== null, file);
     if (file && read(file) !== null && pages.indexOf(file) === -1) pages.push(file);
   }
+  // NAMED (Nov 23 2026, LR-1): BEFORE suppressed.html came into the set from the sitemap. AFTER it is out of the sitemap
+  // (LR-1 PART D 12) but still served, the BizForceAI outreach destination, so it is added here by name and its title
+  // and description stay pinned; P1 also proves the sitemap no longer lists it.
+  check("P1. suppressed.html is not in the sitemap (LR-1) but is still a served page", !locs.some(l => /suppressed/.test(l)) && read("suppressed.html") !== null);
+  if (pages.indexOf("suppressed.html") === -1) pages.push("suppressed.html");
+  // NAMED (Nov 23 2026, LR-1B): BEFORE suppressed.html was indexable. AFTER it carries <meta name="robots" content="noindex, follow">
+  // exactly once, in the head (its title and description are unchanged and still pinned in P4); no page in the sitemap is noindex.
+  const ROBOTS_NOINDEX = '<meta name="robots" content="noindex, follow">';
+  const supHead = String(read("suppressed.html") || "").split("</head>")[0];
+  check("P1. suppressed.html is noindex, follow, once, in its head (LR-1B)", supHead.split(ROBOTS_NOINDEX).length === 2 && String(read("suppressed.html")).split(ROBOTS_NOINDEX).length === 2);
+  const noindexed = pages.filter(f => f !== "suppressed.html" && /<meta name="robots"[^>]*noindex/i.test(String(read(f) || "")));
+  check("P1. no page in the sitemap is noindex", noindexed.length === 0, noindexed.join(", "));
   check("P1. every page is pinned below, and every pinned page is in the set", JSON.stringify(pages.slice().sort()) === JSON.stringify(Object.keys(PINNED).sort()), pages.join(", "));
   check("P1. the audit's limits contain these ranges", SEO.LIMITS.titleMax >= TITLE_MAX && SEO.LIMITS.descMin <= DESC_MIN && SEO.LIMITS.descMax >= DESC_MAX, JSON.stringify(SEO.LIMITS));
 

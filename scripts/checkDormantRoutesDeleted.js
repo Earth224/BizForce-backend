@@ -445,7 +445,9 @@ const ADDED = [
   ["get", "/api/categories"],                                // PUBLIC: the one category list from the categories table (548 -> 549)
   ["get", "/api/posts/composer"],                           // login-only: the member's place and active listings and services, for the composer (549 -> 550)
   ["post", "/api/posts/:id/found"],                         // login-only: the poster marks their Need Found (550 -> 551)
-  ["delete", "/api/posts/:id/found"]                        // login-only: the poster reopens their Need (551 -> 552)
+  ["delete", "/api/posts/:id/found"],                       // login-only: the poster reopens their Need (551 -> 552)
+  // NAMED (Nov 23 2026, LR-1): BEFORE 552 routes; AFTER 553, the one send route (checkLeadRadarRepair, routeAccess M plus the owner check)
+  ["post", "/api/agents/sales/send-approved"]               // members, owner only: posts exactly the reply a person approved, for one Bluesky lead (552 -> 553)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

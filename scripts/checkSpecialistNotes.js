@@ -83,7 +83,11 @@ const ANALYTICS_ROSTER_NOW = "KPI and funnel review on figures you supply, repor
    NAMED BEFORE → AFTER (Oct 30 2026, no emojis). BEFORE: three swaps. AFTER: four; BRAIN_DIRECTIVES now ends with
    config/brain.js's NO_EMOJI_RULE, appended after OUTPUT CHARACTERS' last sentence. The fourth swap is that sentence
    for itself plus the rule, read from the module, so the rule's wording is pinned once (checkNoEmoji N6). */
+/* NAMED (Nov 23 2026, LR-1): BEFORE four swaps. AFTER five; the Lead Radar sentence no longer says Mastodon collection
+   exists (Mastodon lead search is removed) and says no reply is posted without a person approving the exact text. */
 const SYSTEM_SWAPS = [
+  ["Mastodon and YouTube collection exist behind switches that are off by default; Reddit is disabled.",
+   "YouTube collection exists behind a switch that is off by default. There is no Mastodon or Reddit lead search, and nothing is ever replied to without a person approving the exact text first."],
   ["Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all.",
    "Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all." + "\n\n" + require("../config/brain").NO_EMOJI_RULE],
   ["Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only; see Other systems.",

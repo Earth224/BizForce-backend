@@ -3,7 +3,7 @@ const { createClient } = require("@supabase/supabase-js");
 const { BskyAgent } = require("@atproto/api");
 const { createBskyGate } = require("./lib/bskyGate");
 const Anthropic = require("@anthropic-ai/sdk");
-const { runMastodonRadarOnce } = require("./mastodonRadar");
+// NAMED (Nov 23 2026, LR-1): mastodonRadar.js is removed. Mastodon lead search and replies are gone by the owner's rule (Threads replaces it in LR-2).
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
 
 const BLUESKY_IDENTIFIER  = process.env.BLUESKY_IDENTIFIER;
@@ -29,6 +29,29 @@ const resolveAnthropicKey = require("./lib/resolveAnthropicKey")(supabase);
 // When multi-tenancy lands this alias gets its own source and the shared
 // module goes.
 const SCORING_ACCOUNT_ID = require("./lib/ownerAccount").OWNER_ACCOUNT_ID;
+
+/* NAMED (Nov 23 2026, LR-1): THE SCORER IS ON THE SPEND LEDGER. Every scoring call is checked against
+   the scoring account's caps first (server.js enforceDailyModelCallLimit: the daily
+   call limit, the monthly spend limit and the platform daily ceiling) and recorded
+   after (recordModelCall: agent_type "lead_radar", route "scoreNewLeads", the model
+   and the token counts Anthropic returned), the same as every server.js call site.
+   server.js requires this file, so it cannot be required back: server.js hands the
+   two functions in through setModelLedger before the radar starts. With no ledger
+   set nothing is scored, because a paid call that cannot be counted is not made. */
+const SCORER_AGENT_TYPE = "lead_radar";
+const SCORER_LEDGER_ROUTE = "scoreNewLeads";
+var modelLedger = null;
+function setModelLedger(ledger) {
+  modelLedger = ledger && typeof ledger.record === "function" && typeof ledger.enforce === "function" ? ledger : null;
+  return !!modelLedger;
+}
+
+/* NAMED (Nov 23 2026, LR-1): the bsky_leads.status values in use. Migration 068's column comment says
+   only 'new' and 'scored'; it is applied and is not edited, so the full list lives
+   here: new (captured, waiting to be scored), scored, score_failed (three failed
+   attempts, no score), skipped, signal (YouTube rows, never scored) and archived
+   (stranded rows set aside by scripts/oneoff/lr1Archive.js; never shown as leads,
+   never scored, never sent to). */
 
 /* How far back a capture reaches, in days. This bounds what is FETCHED only —
    the outreach loop enforces its own window on post_created_at before it
@@ -56,7 +79,8 @@ const CAPTURE_WINDOW_DAYS = 7;
    signal worth having in the table. youtubeRadar writes its rows with status
    'signal', not 'new', so the scorer, which selects status 'new' from these
    sources, never picks them up and they never sit in its queue. */
-const SCORABLE_SOURCES = ["bluesky", "mastodon"];
+// NAMED (Nov 23 2026, LR-1): BEFORE ["bluesky", "mastodon"]; Mastodon lead search is removed
+const SCORABLE_SOURCES = ["bluesky"];
 
 /* Search phrases, not topics. This distinction is the whole list.
 
@@ -201,12 +225,13 @@ var radarBackoffLogged = 0;
 var RADAR_HEARTBEAT_SOURCE = "bluesky";
 var radarStarted = false;
 
-async function writeRadarHeartbeat(fields, when) {
+async function writeRadarHeartbeat(fields, when, source) {
   if (!radarStarted) return;
   try {
+    // NAMED (Nov 23 2026, LR-1): a source of its own for YouTube (radarTick); Bluesky stays the default
     var result = await supabase
       .from("radar_status")
-      .upsert(Object.assign({ source: RADAR_HEARTBEAT_SOURCE }, fields), { onConflict: "source" });
+      .upsert(Object.assign({ source: source || RADAR_HEARTBEAT_SOURCE }, fields), { onConflict: "source" });
     if (result && result.error) {
       console.error("[LeadRadar] heartbeat (" + when + ") not written: " + (result.error.message || result.error) + ". The radar carries on.");
     }
@@ -262,7 +287,7 @@ async function captureBlueskyTick(tick) {
   try {
     /* A back-off in force skips the BLUESKY CAPTURE this tick — every search,
        and any login — logged once per back-off with the time it resumes. Only
-       the Bluesky part: radarTick still runs Mastodon, YouTube and scoring,
+       the Bluesky part: radarTick still runs YouTube and scoring,
        which never touch Bluesky, because leads not collected are gone for
        good and a Bluesky rate limit is no reason to lose them. */
     if (bskyGate.backoffRemainingMs() > 0) {
@@ -408,7 +433,6 @@ async function captureBlueskyTick(tick) {
 
 var radarRunning = false;
 var scoringDisabledLogged = false;
-var mastodonDisabledLogged = false;
 // Logged once either way rather than only when disabled, because the point of
 // the line is that the state is visible — and "on" is the state worth being
 // able to confirm from a log when the rows it writes are read by nothing.
@@ -423,46 +447,12 @@ async function radarTick() {
   try {
     await runLeadRadarOnce();
 
-    /* Off unless ENABLE_MASTODON_RADAR is exactly "true", and off is the
-       default deliberately.
+    /* NAMED (Nov 23 2026, LR-1): Mastodon lead search is REMOVED, not switched off (the owner's rule):
+       mastodonRadar.js, ENABLE_MASTODON_RADAR and the platform Mastodon sender are
+       gone. Members' own Mastodon posting (lib/memberMastodon.js) is separate and stays. */
 
-       The endpoint is the problem, not the hashtag list. Every selector
-       /api/v1/timelines/tag/:hashtag offers is a tag, and tagging IS the
-       broadcast behaviour — you tag a post to be found, which is what sellers
-       and teachers do and what someone quietly asking their friends for help
-       never does. No narrowing of that list turns broadcasters into seekers,
-       because the only thing it can select on is the broadcast signal itself.
-       The scorer prompt already says as much and weights hashtag-sourced posts
-       down accordingly.
-
-       Measured, not assumed: 617 scored Mastodon rows produced 7 leads above
-       70, one buyer per 88, against Bluesky's one per 16. Capture itself is
-       free HTTP, so that ratio would be harmless — except these rows land in
-       the same bsky_leads queue that scoreNewLeads drains 20 at a time with a
-       paid Claude call each. The real cost is not the fetch, it is that 88
-       broadcasters crowd out Bluesky captures for a budget that only ever
-       scores 20 rows a tick.
-
-       Nothing is deleted. mastodonRadar.js, the hashtag list and
-       sendMastodonReply are untouched and still work; mastodon also remains in
-       OUTREACH_SENDABLE_SOURCES, so leads already captured stay eligible and
-       replies to them still send. Turning capture back on is one Railway
-       variable, and the way back to Mastodon worth taking is authenticated
-       /api/v2/search with the question-shaped phrases the Bluesky list now
-       uses — the MASTODON_ACCESS_TOKEN it needs already exists for sending. */
-    if (process.env.ENABLE_MASTODON_RADAR === "true") {
-      try {
-        await runMastodonRadarOnce();
-      } catch (mastodonErr) {
-        console.error("[LeadRadar] MastodonRadar cycle error:", mastodonErr.message || mastodonErr);
-      }
-    } else if (!mastodonDisabledLogged) {
-      mastodonDisabledLogged = true;
-      console.log("[LeadRadar] Mastodon radar disabled (ENABLE_MASTODON_RADAR not true) — hashtag timelines are publishing behaviour and scored at one buyer per 88 rows. Existing mastodon leads are unaffected and replies to them still send.");
-    }
-
-    /* Off unless ENABLE_YOUTUBE_RADAR is exactly "true", matching the Mastodon
-       gate above and the scoring gate below.
+    /* Off unless ENABLE_YOUTUBE_RADAR is exactly "true", matching the scoring
+       gate below.
 
        IT WAS THE ONLY UNGATED CALL IN THIS TICK. Every other thing radarTick
        does can be switched off from the environment; this one ran on every
@@ -471,8 +461,8 @@ async function radarTick() {
        What it produces is shown, never scored or sent to. youtubeRadar writes
        rows with status "signal" and source "youtube": the scorer selects
        status "new" and source in SCORABLE_SOURCES, so it never sees them, and
-       both outreach paths filter to OUTREACH_SENDABLE_SOURCES — bluesky and
-       mastodon — so neither can send to them. The one reader is GET
+       the one send route filters to OUTREACH_SENDABLE_SOURCES (bluesky only),
+       so it cannot send to them. The one reader is GET
        /api/leads/youtube-signals, Lead Radar's separate YouTube section, and
        the rows are deleted after 30 days (lib/youtubeRetention.js).
 
@@ -494,10 +484,22 @@ async function radarTick() {
         youtubeRadarStateLogged = true;
         console.log("[LeadRadar] YouTube radar ENABLED (ENABLE_YOUTUBE_RADAR=true) — capturing rows with status \"signal\", which nothing currently scores or sends to.");
       }
+      // NAMED (Nov 23 2026, LR-1): YouTube writes its own radar_status row (source youtube) when a pass ran
+      var ytStarted = new Date().toISOString();
       try {
-        await runYoutubeRadarOnce();
+        var yt = await runYoutubeRadarOnce();
+        if (yt) {
+          await writeRadarHeartbeat({
+            last_tick_started_at: ytStarted, last_tick_finished_at: new Date().toISOString(),
+            last_outcome: yt.outcome, searches: yt.searches == null ? null : yt.searches,
+            captured: yt.capturedKnown === false ? null : (yt.captured == null ? null : yt.captured),
+            last_error: yt.error ? String(yt.error).slice(0, 500) : null
+          }, "youtube pass", "youtube");
+        }
       } catch (youtubeErr) {
         console.error("[LeadRadar] YoutubeRadar cycle error:", youtubeErr.message || youtubeErr);
+        await writeRadarHeartbeat({ last_tick_started_at: ytStarted, last_tick_finished_at: new Date().toISOString(), last_outcome: "error",
+          searches: null, captured: null, last_error: String((youtubeErr && youtubeErr.message) || youtubeErr).slice(0, 500) }, "youtube pass", "youtube");
       }
     } else if (!youtubeRadarStateLogged) {
       youtubeRadarStateLogged = true;
@@ -527,7 +529,7 @@ async function startLeadRadar(track) {
   // into scoreNewLeads(), which calls the Claude API up to 20x per tick — that
   // spend is now gated separately by ENABLE_LEAD_SCORING inside radarTick, so
   // the reason no longer applies to the tick as a whole. What is left is
-  // capture (Bluesky, Mastodon, YouTube), which costs nothing and should
+  // capture (Bluesky, YouTube; NAMED (Nov 23 2026, LR-1): Mastodon removed), which costs nothing and should
   // always run: leads not collected are gone for good.
   radarStarted = true;
   await writeRadarHeartbeat({ process_started_at: new Date().toISOString() }, "process start");
@@ -679,6 +681,12 @@ async function scoreNewLeads() {
       return;
     }
 
+    // NAMED (Nov 23 2026, LR-1): no ledger, no scoring (see setModelLedger)
+    if (!modelLedger) {
+      console.error("[LeadRadar] NOT SCORING — no model ledger was handed in (setModelLedger), so these calls could not be counted or capped. " + leads.length + " lead(s) left as they are.");
+      return;
+    }
+
     /* The resolver hands back the environment key itself in most of its
        fallback paths, so an equality check is the only way to report the source
        honestly — otherwise a resolver fallback would be logged as BYOK. */
@@ -774,9 +782,8 @@ async function scoreNewLeads() {
         // call, no change to what gets captured.
         var source  = lead.source || "bluesky";
         var matched = lead.matched_keyword || "";
-        var discovery = source === "mastodon"
-          ? "pulled from the #" + matched + " hashtag timeline"
-          : "found by searching for the phrase " + JSON.stringify(matched);
+        // NAMED (Nov 23 2026, LR-1): only Bluesky is scored now, so the Mastodon hashtag wording is gone; the Bluesky text is unchanged
+        var discovery = "found by searching for the phrase " + JSON.stringify(matched);
 
         /* The lang column has been written on every capture since the start
            and has never once reached the classifier. That gap has a cost that
@@ -862,10 +869,28 @@ async function scoreNewLeads() {
         var bizforceLead = isBizforceLead(lead);
         if (bizforceLead) prompt = bizforceScoringPrompt(lang, source, discovery, lead);
 
+        // NAMED (Nov 23 2026, LR-1): the caps first; a refusal ends the batch with no attempt counted
+        try {
+          await modelLedger.enforce(SCORING_ACCOUNT_ID, SCORER_LEDGER_ROUTE);
+        } catch (capErr) {
+          if (capErr && typeof capErr === "object") capErr.__leadRadarCapRefused = true;
+          throw capErr;
+        }
+
         var response = await createScoringMessage({
           model:      "claude-sonnet-4-6",
           max_tokens: 300,
           messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
+        });
+
+        // NAMED (Nov 23 2026, LR-1): the call is on the ledger (recordModelCall never throws)
+        await modelLedger.record({
+          userId:    SCORING_ACCOUNT_ID,
+          agentType: SCORER_AGENT_TYPE,
+          route:     SCORER_LEDGER_ROUTE,
+          model:     (response && response.model) || "claude-sonnet-4-6",
+          usage:     response && response.usage,
+          fundedBy:  (usingEnvKey || authFallbackUsed) ? "platform" : "user"
         });
 
         var raw = (response.content && response.content[0] && response.content[0].text) || "";
@@ -877,9 +902,9 @@ async function scoreNewLeads() {
         // became the row — and both are read as though the prompt's contract
         // had been enforced somewhere. It never was.
         //
-        // intent_score is compared numerically in five places (>= 60 for the
-        // autoloop, >= 40 for the buyer segment, an operator-supplied
-        // min_score, and two order-bys). A string lands in an integer column
+        // intent_score is compared numerically (>= OUTREACH_MIN_INTENT before a
+        // reply can be drafted or sent, and the order-bys; NAMED (Nov 23 2026, LR-1): the autoloop and
+        // the segment filters are gone). A string lands in an integer column
         // and errors the write; a 150 quietly outranks every genuine lead in
         // the table and is drafted first, forever.
         //
@@ -988,6 +1013,11 @@ async function scoreNewLeads() {
 
            Left untouched instead, attempt counts unchanged, to be picked up on
            the next tick once a working key is in place. */
+        // NAMED (Nov 23 2026, LR-1): a cap refusal is not this lead's failure; the batch stops and nothing is counted
+        if (scoreErr && scoreErr.__leadRadarCapRefused) {
+          console.error("[LeadRadar] NOT SCORING — the scoring account's model caps refused the call (" + ((scoreErr && scoreErr.message) || scoreErr) + "). " + (leads.length - i) + " lead(s) left as they are, no attempt counted.");
+          break;
+        }
         if (scoreErr && scoreErr.__leadRadarAuthDead) {
           console.error("[LeadRadar] NO WORKING ANTHROPIC KEY — " + (authFallbackUsed ? "both the stored BYOK key and the platform environment key were rejected with 401" : "the only available key was rejected with 401") + ". Abandoning this scoring batch after " + scoredCount + " scored; the remaining " + (leads.length - i) + " lead(s) are left untouched with their attempt counts unchanged. No retry will fix this — replace the key.");
           break;
@@ -1061,4 +1091,4 @@ async function scoreNewLeads() {
 }
 
 module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, bskyGate, ensureBskyLogin, isBizforceLead, BIZFORCE_KEYWORDS,
-  LEAD_SCORE_FAILED_REASON };
+  LEAD_SCORE_FAILED_REASON, setModelLedger, SCORER_AGENT_TYPE, SCORER_LEDGER_ROUTE };   // NAMED (Nov 23 2026, LR-1): + the ledger hand-in

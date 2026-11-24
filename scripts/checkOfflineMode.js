@@ -386,7 +386,9 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
     // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b" (I7, I8, I10)
     // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
-    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-p33", names.length === 1 && names[0] === "bf-shell-abc1234-p33", names.join(","));
+    // NAMED (Nov 23 2026, LR-1): BEFORE -p33; AFTER -lr1
+    // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-lr1b", names.length === 1 && names[0] === "bf-shell-abc1234-lr1b", names.join(","));
     // NAMED (Nov 20 2026, P2-2): BEFORE at most 600 characters between BUILD and SHELL_REV; AFTER 800, for P2-2's one-line note.
     // NAMED (Nov 20 2026, P2-3): BEFORE 800; AFTER 1000, for P2-3 one-line note (861 today).
     // NAMED (Nov 20 2026, P3-1): BEFORE at most 1000 characters between BUILD and SHELL_REV; AFTER 1400, for P3-1's one-line note.
@@ -396,7 +398,9 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
       // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
       // NAMED (P3-1C): BEFORE a window of 1,800 characters between BUILD and SHELL_REV; AFTER 2,400, for the history notes above SHELL_REV.
-      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,2400}?var SHELL_REV = "p33";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
+      // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
+      // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,2400}?var SHELL_REV = "lr1b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -407,7 +411,8 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     await sw.dispatch("activate");
     // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
     // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-p33") && sw.caches.has("someone-else"),
+    // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-lr1b") /* NAMED (Nov 23 2026, LR-1): BEFORE -p33 */ && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle

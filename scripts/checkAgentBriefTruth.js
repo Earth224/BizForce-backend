@@ -548,12 +548,17 @@ function runTask(agentType, stopReason, opts) {
   console.log("    " + radar.slice(0, 110) + "…");
   check("6. code: the tick runs every 300,000 ms and Bluesky capture is not behind a switch",
     /setInterval\(radarTick, 300000\)/.test(start) && tick.indexOf("runLeadRadarOnce(") !== -1 && tick.indexOf("runLeadRadarOnce(") < tick.indexOf("process.env.ENABLE_"));
-  check("6. code: Mastodon and YouTube capture run only when their switch is exactly \"true\"",
-    tick.indexOf('process.env.ENABLE_MASTODON_RADAR === "true"') !== -1 && tick.indexOf('process.env.ENABLE_YOUTUBE_RADAR === "true"') !== -1);
+  // NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon and YouTube capture run only when their switch is exactly true". AFTER Mastodon lead search is removed:
+  // no mastodonRadar.js, no ENABLE_MASTODON_RADAR in the tick; YouTube stays behind its switch.
+  check("6. code: Mastodon lead search is removed, and YouTube capture runs only when its switch is exactly \"true\"",
+    !fs.existsSync(path.join(REPO, "mastodonRadar.js")) && tick.indexOf("process.env.ENABLE_MASTODON_RADAR") === -1 && tick.indexOf("runMastodonRadarOnce(") === -1 &&
+    tick.indexOf('process.env.ENABLE_YOUTUBE_RADAR === "true"') !== -1);
   check("6. code: Reddit is never started (every startRedditRadar call is commented out)",
     SERVER.split("\n").filter(l => l.indexOf("startRedditRadar(") !== -1).every(l => l.trim().startsWith("//")));
-  check("6. told: Bluesky every 5 minutes, Mastodon and YouTube off by default, Reddit disabled",
-    /every 5 minutes collects public Bluesky posts/.test(radar) && /Mastodon and YouTube collection exist behind switches that are off by default/.test(radar) && /Reddit is disabled/.test(radar), radar.slice(0, 80));
+  // NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon and YouTube collection exist behind switches that are off by default; Reddit is disabled". AFTER YouTube off by default, no Mastodon or Reddit lead search, no reply without approval.
+  check("6. told: Bluesky every 5 minutes, YouTube off by default, no Mastodon or Reddit lead search, no reply without approval",
+    /every 5 minutes collects public Bluesky posts/.test(radar) && /YouTube collection exists behind a switch that is off by default/.test(radar) && /There is no Mastodon or Reddit lead search/.test(radar) &&
+    /nothing is ever replied to without a person approving the exact text first/.test(radar) && !/Mastodon and YouTube collection exist/.test(radar), radar.slice(0, 80));
   const PROFILE_FIELDS = ["business_profiles", "industry", "competitor", "target_audience", "products_services", "business_name", "profile"];
   check("6. code: neither scoreNewLeads nor its prompt reads a business-profile field",
     scorerPromptStart !== -1 && PROFILE_FIELDS.every(f => scorer.indexOf(f) === -1), PROFILE_FIELDS.filter(f => scorer.indexOf(f) !== -1).join(","));
@@ -573,7 +578,9 @@ function runTask(agentType, stopReason, opts) {
   const sms = systemLine("SMS Marketing / Drip System");
   const enroll = routeBody('app.post("/api/sms/campaigns/:id/enroll"');
   console.log("    " + sms.slice(0, 110) + "…");
-  const smsSendsNothing = /^const SMS_DIRECT_SEND_ENABLED = false;$/m.test(SERVER) && def("runDripEngine").indexOf("var DRY_RUN = true;") !== -1;
+  // NAMED (Nov 23 2026, LR-1): BEFORE /^const SMS_DIRECT_SEND_ENABLED = false;$/ (deleted with the Twilio send code). AFTER POST /api/sms/send is only a 503.
+  const smsSendsNothing = /\napp\.post\("\/api\/sms\/send", requireAuth, function \(req, res\) \{\r?\n  return res\.status\(503\)\.json\(\{ error: "SMS sending is not offered\.", code: "sms_not_offered" \}\);\r?\n\}\);/.test(SERVER) &&
+    def("runDripEngine").indexOf("var DRY_RUN = true;") !== -1;
   check("7. code: direct sending is off and the drip engine is a hard-coded dry run", smsSendsNothing);
   check("7. told: sending is unavailable, and never that messages went out",
     /SENDING IS CURRENTLY UNAVAILABLE/.test(sms) && /Never tell a user their messages have gone out/.test(sms));

@@ -24,6 +24,8 @@
         is rejected: no sender is called, the ai_tasks row records the reason
         in error, agent_memory is not written, the pipeline's last_draft opens
         with the rejection, and the result says send_reason "draft_rejected".
+     NAMED (Nov 23 2026, LR-1): convertSingleLead now drafts only; POST /api/agents/sales/send-approved
+     posts the approved text. So 3 and 4 read "offered for approval" where they read "sent".
      4. A draft with the supplied URL is sent once, through the stub sender,
         unchanged — and so is a bare "MrEarthRose.com", which resolves to it.
         A book draft linking BlackSunCircle.com is sent; one linking another
@@ -85,7 +87,8 @@ if (MUTATE === "no-rejection") {
   csl = MUT.replaceRegexOnce(csl, REJECTION_CALL, "  var draftRejection = null;", "no-rejection");
   console.log("\n!! MUTATION: convertSingleLead runs with the rejection removed — every assertion in 3 must fail.");
 }
-const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_DAILY_CAP", "OUTREACH_PRODUCT_FACTS",
+// NAMED (Nov 23 2026, LR-1): OUTREACH_DAILY_CAP is a multi-line parse the lifter cannot cut out, and convertSingleLead no longer reads it.
+const LIFTED = "var OUTREACH_DAILY_CAP = 5;\n\n" + ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_PRODUCT_FACTS",
   "OUTREACH_HOME_URL", "OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BIZFORCE_DESTINATION", "OUTREACH_BOOK_DESTINATION", "OUTREACH_OWN_DOMAINS", "outreachDraftRejection",
   "nowIso", "DRAFT_ATTEMPT_CEILING", "OUTREACH_EMOJI_PATTERN", "stripOutreachEmoji", "truncateOrchestratorPreview", "normalizeMemoryMetadata",
   "detectOutreachLinkFacets"].map(def).join("\n\n");
@@ -180,13 +183,15 @@ const draft = msg => JSON.stringify({ outreach_message: msg, internal_analysis: 
     const pipe = h.writes.find(w => w.table === "sales_lead_pipeline" && (w.op === "upsert" || w.op === "update") && w.payload && w.payload.last_draft);
     console.log("    " + label + " → send_reason " + JSON.stringify(r && r.send_reason) + " | ai_tasks.error " + JSON.stringify(task && task.payload.error));
     check("3. " + label + ": never reaches a sender", h.sends.length === 0, h.sends.length + " send(s): " + JSON.stringify(h.sends));
-    check("3. " + label + ": result says draft_rejected, not sent", !!r && r.sent === false && r.send_reason === "draft_rejected", JSON.stringify(r && { sent: r.sent, send_reason: r.send_reason }));
+    // NAMED (Nov 23 2026, LR-1): BEFORE send_reason "draft_rejected". AFTER no draft is offered (draft null) and draft_rejection says why.
+    check("3. " + label + ": result offers no draft and says why, not sent", !!r && r.sent === false && r.draft === null && typeof r.draft_rejection === "string" && r.draft_rejection.length > 0,
+      JSON.stringify(r && { sent: r.sent, draft: r.draft, draft_rejection: r.draft_rejection }));
     check("3. " + label + ": ai_tasks.error records why", !!task && /^draft rejected, not sent: /.test(task.payload.error || ""), task && task.payload.error);
     check("3. " + label + ": not written to agent_memory", !mem, mem && "memory written");
     check("3. " + label + ": pipeline last_draft opens with the rejection", !!pipe && /^DRAFT REJECTED, NOT SENT: /.test(pipe.payload.last_draft), pipe && String(pipe.payload.last_draft).slice(0, 80));
   }
 
-  console.log("\n══ 4. LIVE runs: drafts that link only where they were sent are sent ══");
+  console.log("\n══ 4. LIVE runs: drafts that link only where they were sent are offered for approval ══");
   const good = [
     ["the supplied URL", "War Horse", "Worth exploring. " + HOME],
     ["a bare MrEarthRose.com (resolves to it)", "War Horse", "Worth exploring. MrEarthRose.com"],
@@ -197,13 +202,14 @@ const draft = msg => JSON.stringify({ outreach_message: msg, internal_analysis: 
     const h = harness(draft(msg));
     const r = await h.ctx.run(SUBJECT_USER_ID, lead(product), "SYSTEM", false);
     const task = h.writes.find(w => w.table === "ai_tasks" && w.op === "insert");
-    check("4. " + label + ": sent once, unchanged, no error recorded",
-      h.sends.length === 1 && h.sends[0].text === msg && !!r && r.sent === true && !!task && task.payload.error === null,
-      JSON.stringify({ sends: h.sends, sent: r && r.sent, reason: r && r.send_reason, error: task && task.payload.error }));
+    // NAMED (Nov 23 2026, LR-1): BEFORE "sent once, unchanged" through the stub sender. AFTER offered once for approval, unchanged; no sender is called.
+    check("4. " + label + ": offered for approval unchanged, no sender called, no error recorded",
+      h.sends.length === 0 && !!r && r.draft === msg && r.sent === false && !r.draft_rejection && !!task && task.payload.error === null,
+      JSON.stringify({ sends: h.sends, draft: r && r.draft, rejection: r && r.draft_rejection, error: task && task.payload.error }));
   }
   const bookOther = harness(draft("Here it is: https://blacksuncircle.com/join"));
   const rb = await bookOther.ctx.run(SUBJECT_USER_ID, lead("Quantum Jumping book"), "SYSTEM", false);
-  check("4. a book draft linking another BlackSunCircle.com path is held", bookOther.sends.length === 0 && rb.send_reason === "draft_rejected", JSON.stringify(rb && rb.send_reason));
+  check("4. a book draft linking another BlackSunCircle.com path is held", bookOther.sends.length === 0 && rb.draft === null && !!rb.draft_rejection, JSON.stringify(rb && rb.draft_rejection));   // NAMED (Nov 23 2026, LR-1)
 
   console.log("\n══ 5. the real link detector on the supplied URL ══");
   const det = harness("x");

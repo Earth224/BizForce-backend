@@ -2049,7 +2049,11 @@ async function stageChecks(c) {
     // (scripts/bf-marks.js): the dashboard's top bar mark is the Layered Stack, and the Agent Network mark opens the
     // headings of dashboard.html, ai-agents.html and oracle.html. Those are taken back out; no header moved.
     // NAMED (Nov 19 2026, LOGO2): the Agent Network mark is off every heading again; only the top bar mark is set aside.
-    const now = fs.existsSync(path.join(FRONTEND, f)) ? unLogo1(headerOf(frontText(f))) : "";
+    // NAMED (Nov 23 2026, LR-1): agents/lead-radar.html's subtitle no longer says Mastodon capture runs when switched on
+    // (Mastodon lead search is removed). That clause is put back, on that page only, exactly once; no header moved.
+    const LR1_FROM = "; intent scoring runs only when switched on.", LR1_TO = "; Mastodon capture and intent scoring run only when switched on.";
+    let now = fs.existsSync(path.join(FRONTEND, f)) ? unLogo1(headerOf(frontText(f))) : "";
+    if (f === "agents/lead-radar.html" && now.split(LR1_FROM).length === 2) now = now.replace(LR1_FROM, LR1_TO);
     if (now !== was) changedHeaders.push(f);
   }
   check("I1. no header or logo order changed on any page: the header markup of every page (" + withHeader.length + " with one) is identical to " + HEADER_BASE + "'s",

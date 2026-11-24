@@ -30,8 +30,8 @@
    THE FILE SET, all read from disk:
      frontend   every .html, .js, .css and .json (pages, page scripts,
                 stylesheets, the manifest; the built legal pages among them);
-     backend    server.js and the radars beside it (leadRadar, mastodonRadar,
-                redditRadar, youtubeRadar: the notifications they send), every
+     backend    server.js and the radars beside it (leadRadar and
+                youtubeRadar; LR-1 deleted mastodonRadar and redditRadar: the notifications they send), every
                 lib/ file (lib/legalPages.js, lib/appMap.json and the email
                 and notification text among them), config/brain.js and the
                 other config files, and every scripts/ file.
@@ -147,7 +147,8 @@ function walk(root, prefix, rel, exts, out) {
 }
 if (!fs.existsSync(FRONTEND)) { console.error("Frontend not found: " + FRONTEND + " (set BIZFORCE_FRONTEND_DIR)."); process.exit(2); }
 const FRONT = walk(FRONTEND, "fe:", "", [".html", ".js", ".css", ".json"], []);
-const BACK = ["be:server.js", "be:leadRadar.js", "be:mastodonRadar.js", "be:redditRadar.js", "be:youtubeRadar.js"]
+// NAMED (Nov 23 2026, LR-1): BEFORE also be:mastodonRadar.js and be:redditRadar.js; both files are deleted.
+const BACK = ["be:server.js", "be:leadRadar.js", "be:youtubeRadar.js"]
   .concat(walk(REPO, "be:", "lib", [".js", ".json"], []), walk(REPO, "be:", "config", [".js", ".json"], []), walk(REPO, "be:", "scripts", [".js"], []));
 const SET = FRONT.concat(BACK);
 const diskOf = k => k.startsWith("fe:") ? path.join(FRONTEND, k.slice(3)) : path.join(REPO, k.slice(3));

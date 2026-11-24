@@ -99,7 +99,8 @@ function definitionOf(name) {
   return null;
 }
 const STUBS = new Set(["supabase", "nowIso", "console", "process", "require", "module", "app", "Buffer", "setTimeout", "fetch",
-  "requireAuth", "requireActiveSubscription", "aiLimiter", "startToolRun", "callAnthropicText", "resolvePreferredLanguage", "Date", "stripe", "Stripe"]);
+  "requireAuth", "requireActiveSubscription", "aiLimiter", "startToolRun", "callAnthropicText", "resolvePreferredLanguage", "Date", "stripe", "Stripe",
+  "OWNER_ACCOUNT_ID"]);   // NAMED (Nov 23 2026, LR-1): the route tests the owner by id; stubbed as "owner"
 const uncommented = (code) => code.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
 function closure(root) {
   const have = new Map();
@@ -182,7 +183,7 @@ async function realResponse(opts) {
   opts = opts || {};
   const ctx = {
     supabase: fakeDb(rows()), JSON, Math, Promise, Number, Object, Array, String, Date,
-    nowIso: () => new Date().toISOString(), process: { env: {} }, console: { log() {}, error() {}, warn() {} },
+    nowIso: () => new Date().toISOString(), process: { env: {} }, console: { log() {}, error() {}, warn() {} }, OWNER_ACCOUNT_ID: "owner",
     requireAuth: function requireAuth() {}, requireActiveSubscription: function requireActiveSubscription() {}, aiLimiter: function aiLimiter() {},
     startToolRun: async () => ({ taskId: "task-page", complete: async () => true, fail: async () => {} }),
     resolvePreferredLanguage: async () => null,
@@ -193,7 +194,7 @@ async function realResponse(opts) {
   vm.createContext(ctx);
   vm.runInContext(LIFTED, ctx);
   const res = { code: 200, body: null, status(x) { this.code = x; return this; }, json(x) { this.body = JSON.parse(JSON.stringify(x)); return this; } };
-  await handler({ user: { id: "owner", role: opts.role || "admin" }, body: opts.body || { theme: "manifestation" } }, res, () => { res.code = 500; });
+  await handler({ user: { id: opts.id || "owner", role: opts.role || "admin" }, body: opts.body || { theme: "manifestation" } }, res, () => { res.code = 500; });   // NAMED (Nov 23 2026, LR-1): + id
   return { status: res.code, body: res.body, publicUser: ctx.api.publicUser };
 }
 
@@ -333,7 +334,8 @@ const meAs = (role, publicUser) => () => ({ status: 200, body: { user: publicUse
     await flush();
     return { msg: pg.els.get(pg.ap.toolDomId("demand-signals", "msg")), result: pg.els.get(pg.ap.toolDomId("demand-signals", "result")).innerHTML, posted: pg.posted };
   }
-  const refused = await realResponse({ role: "user" });
+  // NAMED (Nov 23 2026, LR-1): BEFORE { role: "user" } on the owner's id; the route now refuses by id, so the refused caller is another account.
+  const refused = await realResponse({ role: "user", id: "member-1" });
   const r403 = await run((m, p) => p === ROUTE ? refused : { status: 404, body: {} });
   check("a 403 shows the server's message and no result", refused.status === 403 && r403.msg.textContent === refused.body.error && r403.result === "", r403.msg.textContent);
   const r500 = await run((m, p) => p === ROUTE ? { status: 500, body: { error: "database unavailable" } } : { status: 404, body: {} });

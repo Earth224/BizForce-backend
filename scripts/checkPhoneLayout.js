@@ -114,7 +114,9 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"p33\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+  // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
+  // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"lr1b\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
     "var SHELL_REV = \"\";"]],
   // bf-phone.css is not cached for offline (S)
   "sw-without-phone-css": [[SW, "  \"/css/bf-phone.css\",", ""]],
@@ -295,7 +297,9 @@ const W = FILES[SW] || "";
 // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
 // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
 // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
-check("S1. the shell's cache version is bumped: SHELL_REV \"p33\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3 and FX1) in the cache's name", has(W, "var SHELL_REV = \"p33\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+// NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
+// NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
+check("S1. the shell's cache version is bumped: SHELL_REV \"lr1b\" (PH1's \"ph1\", bumped by HQ1, P2-1, P2-2, P2-3, FX1 and LR-1) in the cache's name", /var SHELL_REV = "lr1b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(W));
 check("S2. css/bf-phone.css is cached with the shell, for a page opened offline", /\n  "\/css\/bf-phone\.css",/.test(W));
 
 /* ── N. no emoji ── */

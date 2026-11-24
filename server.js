@@ -47,8 +47,8 @@ const { DateTime } = require("luxon");
 const { buildAgentSystemPrompt, useBillingPlans, NO_EMOJI_RULE } = require("./config/brain");
 const { RichText } = require("@atproto/api");
 const { startLeadRadar, bskyGate } = require("./leadRadar");
-const { runMastodonRadarOnce } = require("./mastodonRadar");
-const { startRedditRadar } = require("./redditRadar");
+// NAMED (Nov 23 2026, LR-1): mastodonRadar.js (Mastodon lead search, removed by the owner's rule) and redditRadar.js (never started:
+// Reddit blocks Railway's addresses) are deleted. The reddit_leads table stays, empty and unread.
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 // Only the platform spend ceiling asks this (platformSpendTestAccounts); no gate does.
@@ -11849,13 +11849,14 @@ async function agentSignatureReads(type, userId, now, read, agent) {
           .from("sales_lead_pipeline")
           .select("id, status", { count: "exact" })
           .eq("user_id", userId)
+          .neq("status", "archived")   // NAMED (Nov 23 2026, LR-1): archived rows are not leads
           .order("id", { ascending: true });
       }, "your pipeline");
     });
     // bsky_leads has no user_id: every row is the credential owner's, so no one else's answer reads it.
     if (OUTREACH_CREDENTIAL_OWNER_ID === userId) {
       r.radar = {};
-      var sources = ["bluesky", "mastodon", "youtube"];
+      var sources = ["bluesky", "youtube"];   // NAMED (Nov 23 2026, LR-1): Mastodon lead search is removed
       for (var s = 0; s < sources.length; s++) {
         for (var d = 0; d < 2; d++) {
           var days = d === 0 ? 7 : 30, src = sources[s];
@@ -16644,8 +16645,8 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
 
    THE DEFAULT IS 250 and it is derived rather than picked. The other ceilings in
    this file are AGENT_SCHEDULE_MAX_PER_TICK at 25 per hourly tick,
-   SELF_REVIEW_MAX_PER_TICK at 10, and SALES_AUTOLOOP_DAILY_DRAFT_CAP at 50 per
-   day. A user doing genuinely heavy legitimate work — every one of the 31 agent
+   SELF_REVIEW_MAX_PER_TICK at 10, and the (now retired) automatic sales loop's
+   50 drafts per day. A user doing genuinely heavy legitimate work — every one of the 31 agent
    tool routes twice, plus a full 25-schedule tick, plus a self-review — is
    around 90 calls. 250 leaves real headroom above that while still sitting well
    below an unbounded chain: fan-out 3 reaches 363 calls by depth 5, so a
@@ -34120,8 +34121,8 @@ async function executeReplyBlueskyMention(proposal) {
    POST /api/social/mastodon/propose-post  files a drafted Mastodon post for approval
 
    THERE IS NO PLATFORM FALLBACK. A post goes out only from the member's own
-   connection. The platform's MASTODON_ACCESS_TOKEN (sendMastodonReply, outreach
-   replies) is never read on any of these paths, and anyone without a
+   connection. NAMED (Nov 23 2026, LR-1): the platform's own Mastodon sender is removed, and no
+   platform Mastodon token is read on any of these paths, and anyone without a
    connection, the owner included, is told to connect first.
 
    THE TOKEN is encrypted with lib/apiKeyCrypto.js BEFORE the server is
@@ -38922,7 +38923,7 @@ function demandSignalsPrompt(measured, sample, keywordsInScope) {
 var DEMAND_PAGE = 1000;
 async function loadDemandRows(theme, windowStart) {
   function scoped(q) {
-    q = q.neq("source", DEMAND_EXCLUDED_SOURCE);
+    q = q.neq("source", DEMAND_EXCLUDED_SOURCE).neq("status", "archived");   // NAMED (Nov 23 2026, LR-1): archived rows are not demand
     return theme === "all" ? q : q.in("matched_keyword", DEMAND_THEME_KEYWORDS[theme]);
   }
   var rows = [];
@@ -38965,7 +38966,8 @@ app.post("/api/agents/rd/demand-signals", requireAuth, requireActiveSubscription
     try {
       var userId = req.user.id;
 
-      if (req.user.role !== "admin") {
+      // NAMED (Nov 23 2026, LR-1): the owner by id (OWNER_ACCOUNT_ID), not any admin by role: these are the owner's leads
+      if (userId !== OWNER_ACCOUNT_ID) {
         return res.status(403).json({ error: DEMAND_OWNER_ONLY });
       }
       /* B6/B7: these runs read the Sales agent's Lead Radar posts, the
@@ -42791,8 +42793,8 @@ var TOOL_INPUT_SPECS = {
     toolField("compliance_profile", "string", false, "Must be a key of COMPLIANCE_PROFILES when given; an unknown name is a 422.")
   ],
   "sales/convert": [
-    toolField("lead_post_uri", "string", false, "A specific lead's post URI to convert; unknown URI is a 404."),
-    toolField("segment", "object", false, "Segment filter object; when absent the route selects leads itself.")
+    // NAMED (Nov 23 2026, LR-1): BEFORE lead_post_uri optional plus a segment object; the route now drafts one lead and never posts
+    toolField("lead_post_uri", "string", true, "The lead's post URI; one lead is drafted at a time, nothing is posted. Missing is a 400, unknown a 404.")
   ],
   "sales/lead-status": [
     toolField("lead_post_uri", "string", true, "The lead's post URI, up to 500 characters."),
@@ -50617,7 +50619,7 @@ app.get("/api/sitemap/posts.xml", postPageLimiter, async function (req, res) {
 
 /* bizforceai.net/campaign/<share_id>, proxied here by Netlify so the page is
    served with the campaign's own title, image and preview tags. A malformed
-   or unknown id, or an owner whose plan is not active, is "No campaign found"
+   or unknown id, or an owner whose page is not public (NAMED (Nov 23 2026, LR-1): not a plan test since Nov 20), is "No campaign found"
    with a 404; a campaign not being shared is "off" with a 200. */
 app.get("/campaign/:shareId", campaignPageLimiter, async function (req, res) {
   res.set("Content-Type", "text/html; charset=utf-8");
@@ -53775,7 +53777,9 @@ async function noticeCardLead(ownerId, nowMs) {
 }
 
 /* The owner's leads for one card, newest first, 50 a page; ?before=<created_at>
-   for the next page. Open without a subscription: it is the member's own data. */
+   for the next page. Open without a subscription: it is the member's own data.
+   NAMED (Nov 23 2026, LR-1): in group F now (lib/routeAccess.js), which is what makes that sentence true;
+   it was in M, so a lapsed member could delete their leads but not read them. */
 app.get("/api/digital-cards/:id/leads", requireAuth, async function (req, res, next) {
   try {
     const leadsCardId = String(req.params.id || "");
@@ -55521,201 +55525,13 @@ async function smsConsentFromLedger(phone) {
   return latest ? latest.action : null;
 }
 
-/* DIRECT SMS IS SHUT UNTIL IT IS SAFE TO OPEN. This route sent any message,
-   up to 1600 characters, to any number, through the company's Twilio number,
-   for any signed-in account: requireAuth was its only gate — no subscription,
-   no route limiter, no verified email — and the consent check below refuses
-   only numbers ALREADY recorded as opted out. An unknown number logged "NO
-   CONSENT RECORD" and was sent to anyway. It wrote nothing to the database, so
-   a send left no trace here; Twilio's message log is the only record. No page
-   calls it.
-
-   Reopening needs, at least: requireActiveSubscription and a per-account
-   limiter; consent REQUIRED rather than merely not-revoked, i.e. a granted
-   sms_subscribers row or consent event for the destination; and a row in
-   sms_send_log for every send, so what went out is visible in our own data.
-   The code behind the gate is kept for that. The drip engine,
-   POST /api/sms/inbound and the other /api/sms routes are separate and
-   unaffected. scripts/checkOpenSurfaceClosed.js holds this shut. */
-const SMS_DIRECT_SEND_ENABLED = false;
-
-app.post("/api/sms/send", requireAuth, async function (req, res, next) {
-  try {
-    if (!SMS_DIRECT_SEND_ENABLED) {
-      return res.status(503).json({ error: "Direct SMS sending is unavailable." });
-    }
-
-    var accountSid  = (process.env.TWILIO_ACCOUNT_SID   || "").trim();
-    var authToken   = (process.env.TWILIO_AUTH_TOKEN     || "").trim();
-    var fromNumber  = (process.env.TWILIO_PHONE_NUMBER   || "").trim();
-
-    if (!accountSid || !authToken || !fromNumber) {
-      var missing = [
-        !accountSid  && "TWILIO_ACCOUNT_SID",
-        !authToken   && "TWILIO_AUTH_TOKEN",
-        !fromNumber  && "TWILIO_PHONE_NUMBER"
-      ].filter(Boolean).join(", ");
-      console.error("[sms/send] Missing env vars:", missing);
-      return res.status(503).json({
-        error: "SMS unavailable — missing Twilio configuration: " + missing
-      });
-    }
-
-    var to      = safeText(req.body.to,      20)  || "";
-    var message = safeText(req.body.message, 1600) || "";
-
-    if (!to || !message) {
-      return res.status(400).json({ error: "Both 'to' and 'message' are required" });
-    }
-
-    /* Consent gate. This is the only route in this file that actually reaches
-       Twilio — runDripEngine is hardcoded DRY_RUN and sends nothing — and until
-       now it took the destination straight from the request body and never
-       looked it up, so it could text someone who had replied STOP. That is the
-       violation the inbound opt-out handler exists to prevent, reached through
-       a different door.
-
-       Scoped to req.user.id: requireAuth guarantees req.user, and
-       sms_subscribers is unique on (user_id, phone_number), so this matches at
-       most one row and asks only about the caller's own subscribers rather than
-       about someone else's opt-out.
-
-       The destination is canonicalized before the lookup so that a request for
-       "(917) 325-2291" finds a row stored as 19173252291 — the request side of
-       the formatting gap is closed. canonicalPhone returning null (an
-       international destination, say) keeps the old exact-string lookup rather
-       than skipping the gate: a weaker match still beats no match, and this is
-       the route that puts a message on a real phone.
-
-       What is still NOT closed, precisely: only the incoming number is
-       canonicalized. The equality runs against the string sitting in the row,
-       and nothing rewrites that at query time, so a subscriber stored as
-       "917 325 2291" is still not found by this gate — if they opted out, this
-       route will still send to them. That is not a residual edge case, it is
-       every row not already in canonical form, and only the backfill removes
-       it. Until that runs, read this gate as catching opt-outs whose stored
-       format is canonical, not as catching all of them. */
-    var toCanonical = canonicalPhone(to);
-
-    var consentLookup = await supabase
-      .from("sms_subscribers")
-      .select("id, consent_status")
-      .eq("user_id", req.user.id)
-      .eq("phone_number", toCanonical || to)
-      .maybeSingle();
-
-    /* Fail closed. An unverifiable consent state is not a verified opt-in, and
-       this is the one route where being wrong about that puts a real message on
-       a real phone. */
-    if (consentLookup.error) {
-      console.error("[sms/send] Consent lookup FAILED for " + to + " — " + consentLookup.error.message +
-        ". Refusing the send: consent could not be verified.");
-      return res.status(500).json({
-        error: "Could not verify consent for this number — the subscriber lookup failed, so the message was not sent."
-      });
-    }
-
-    var subscriber = consentLookup.data;
-
-    /* 1. The ledger, read before any decision is made on the flag. It throws on
-          a failed read rather than returning null, so an unreadable consent
-          state lands in this catch and fails closed exactly as the failed
-          subscriber lookup above does — same status, same shape of message. A
-          consent check that could not run is not a consent check that passed. */
-    var ledgerConsent = null;
-    try {
-      ledgerConsent = await smsConsentFromLedger(toCanonical || to);
-    } catch (ledgerError) {
-      console.error("[sms/send] Consent LEDGER lookup FAILED for " + to + " — " +
-        ((ledgerError && ledgerError.message) || ledgerError) +
-        ". Refusing the send: consent could not be verified.");
-      return res.status(500).json({
-        error: "Could not verify consent for this number — the consent ledger lookup failed, so the message was not sent."
-      });
-    }
-
-    /* 2. A revocation in the ledger blocks, whatever the flag says. This is the
-          exact population the ledger was added to cover: a STOP whose
-          sms_subscribers update matched no rows still wrote a revoked event
-          here, and left consent_status reading opted_in. Before this check that
-          number got texted.
-
-          Both readings go in the log, and the disagreement is called out by
-          name. A flag saying opted_in while the ledger says revoked is not
-          noise around the block — it IS the reason this check exists, and the
-          log is the only place it is ever visible. */
-    if (ledgerConsent === "revoked") {
-      console.error("[sms/send] BLOCKED BY LEDGER — user " + req.user.id + " attempted to message " + to +
-        ", whose most recent consent_events row on the sms channel is 'revoked'. sms_subscribers says: " +
-        (subscriber ? subscriber.consent_status : "no row") + "." +
-        (subscriber && subscriber.consent_status !== "opted_out"
-          ? " THE FLAG AND THE LEDGER DISAGREE — the flag alone would have let this send through, which is" +
-            " the STOP-missed-the-subscriber-row case this check was added for."
-          : ""));
-      return res.status(403).json({
-        error: "This number has opted out and cannot be messaged."
-      });
-    }
-
-    /* 3. An opted_out flag blocks as it always has, whatever the ledger says.
-          The two sources are checked independently and either one refusing is
-          enough; neither can override the other into a send. */
-    if (subscriber && subscriber.consent_status === "opted_out") {
-      console.error("[sms/send] BLOCKED — user " + req.user.id + " attempted to message " + to +
-        ", which has opted out. An application trying to message an opted-out number is a defect in that application.");
-      return res.status(403).json({
-        error: "This number has opted out and cannot be messaged."
-      });
-    }
-
-    /* 4. The ledger grants and nothing has refused, so this proceeds — and says
-          so, because a send standing on a recorded grant is a different thing
-          from a send standing on nothing, and the warning below is not about
-          it. */
-    if (ledgerConsent === "granted") {
-      console.log("[sms/send] Consent verified in the ledger for " + to +
-        " — most recent consent_events row on the sms channel is 'granted'.");
-    }
-
-    /* 5. The ledger said nothing at all. Fall back to exactly what this gate did
-          before it existed: block only on an opted_out flag, warn when there is
-          no subscriber row.
-
-          A null MUST NOT refuse. Most subscribers predate consent_events
-          entirely — they arrived through POST /api/sms/subscribers or the bulk
-          import, neither of which writes a ledger row — so silence here is the
-          normal case, not a suspicious one, and treating it as a refusal would
-          block nearly every legitimate send this route makes. That is the
-          opposite of sendEmail, which may treat absence as no consent because
-          every contact it mails came through a capture that wrote a granted
-          row.
-
-          Not a refusal either way: this route predates the subscriber table and
-          has uses that do not go through it, so refusing would break them. The
-          warning is how we find out how it is actually being used. */
-    if (!subscriber && ledgerConsent === null) {
-      console.warn("[sms/send] NO CONSENT RECORD — user " + req.user.id + " is sending to " + to +
-        ", which has no row in sms_subscribers and nothing in consent_events. Sent without a consent record on file.");
-    }
-
-    console.log("[sms/send] User " + req.user.id + " → sending SMS to " + to);
-
-    var client = twilio(accountSid, authToken);
-    var sent   = await client.messages.create({
-      from: fromNumber,
-      to:   to,
-      body: message
-    });
-
-    console.log("[sms/send] Delivered — SID:", sent.sid, "status:", sent.status);
-    return res.json({ ok: true, sid: sent.sid, status: sent.status });
-
-  } catch (error) {
-    console.error("[sms/send] Error:", error.message || error);
-    next(error);
-  }
+/* NAMED (Nov 23 2026, LR-1): SMS SENDING IS NOT OFFERED. This route used to send any message to any number
+   through the company's Twilio number; it was shut behind SMS_DIRECT_SEND_ENABLED and
+   the Twilio code behind that gate is now deleted. It answers 503 and does nothing
+   else. The drip engine stays a dry run (runDripEngine). */
+app.post("/api/sms/send", requireAuth, function (req, res) {
+  return res.status(503).json({ error: "SMS sending is not offered.", code: "sms_not_offered" });
 });
-
 
 app.get("/api/sms/subscribers", requireAuth, async function (req, res, next) {
   try {
@@ -55740,11 +55556,51 @@ app.get("/api/sms/subscribers", requireAuth, async function (req, res, next) {
   }
 });
 
+/* NAMED (Nov 23 2026, LR-1): SMS CONSENT MUST BE RECORDED. A number is stored as opted in only when the
+   request carries explicit consent (consent === true) with where it came from
+   (consent_source, up to 200 characters) and when it was given (consent_at, a date
+   not in the future), AND a consent_events row (channel sms, action granted, that
+   source and time) is written for it. Without all of that the number is stored as
+   pending (consent === false: opted_out), and the drip engine only ever reads opted_in. */
+function smsConsentProof(body) {
+  var b = body || {};
+  if (b.consent === false) return { state: "refused" };
+  if (b.consent !== true) return { state: "none" };
+  var source = typeof b.consent_source === "string" ? b.consent_source.trim().slice(0, 200) : "";
+  var atMs = typeof b.consent_at === "string" ? Date.parse(b.consent_at) : NaN;
+  if (!source || !Number.isFinite(atMs) || atMs > Date.now() + 5 * 60 * 1000) return { state: "none" };
+  return { state: "given", source: source, at: new Date(atMs).toISOString() };
+}
+
+async function smsConsentStatusFor(ownerId, phone, name, proof, req) {
+  if (!proof || proof.state === "refused") return "opted_out";
+  if (proof.state !== "given") return "pending";
+  try {
+    var contactId = await findOrCreateContactByPhone(ownerId, phone, null, name || null, "sms_manual", "bizforce");
+    if (!contactId) return "pending";
+    var ev = await supabase.from("consent_events").insert({
+      contact_id:  contactId,
+      channel:     "sms",
+      action:      "granted",
+      source:      proof.source,
+      occurred_at: proof.at,
+      ip_address:  null,
+      user_agent:  null,
+      note:        "Recorded by the member when adding the number (" + (req && req.path ? req.path : "sms") + ")."
+    });
+    if (ev.error) { console.error("[sms/consent] consent not recorded, number stored as pending:", ev.error.message); return "pending"; }
+    return "opted_in";
+  } catch (consentErr) {
+    console.error("[sms/consent] consent not recorded, number stored as pending:", (consentErr && consentErr.message) || consentErr);
+    return "pending";
+  }
+}
+
 app.post("/api/sms/subscribers", requireAuth, async function (req, res, next) {
   try {
     var phoneRaw = ((req.body.phone   || "") + "").trim();
     var name    = safeText(req.body.name,    120) || null;
-    var consent = req.body.consent !== undefined ? !!req.body.consent : false;
+    var consentProof = smsConsentProof(req.body);   // NAMED (Nov 23 2026, LR-1): consent must be recorded, with its source and time
 
     if (!phoneRaw) {
       return res.status(400).json({ error: "Phone is required" });
@@ -55763,13 +55619,15 @@ app.post("/api/sms/subscribers", requireAuth, async function (req, res, next) {
 
     console.log("[sms/subscribers/add] User " + req.user.id + " → adding " + phone);
 
+    var consentStatus = await smsConsentStatusFor(req.user.id, phone, name, consentProof, req);
     var { data, error } = await supabase
       .from("sms_subscribers")
       .insert({
-        user_id:          req.user.id,
-        phone_number:     phone,
-        customer_name:    name,
-        consent_status:   consent ? "opted_in" : "opted_out"
+        user_id:           req.user.id,
+        phone_number:      phone,
+        customer_name:     name,
+        consent_status:    consentStatus,
+        consent_timestamp: consentStatus === "opted_in" ? consentProof.at : null
       })
       .select()
       .single();
@@ -55830,12 +55688,11 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
         return;
       }
       var name    = safeText(entry.name, 120) || null;
-      var consent = entry.consent !== undefined ? !!entry.consent : false;
       rows.push({
         user_id:        req.user.id,
         phone_number:   phone,
         customer_name:  name,
-        consent_status: consent ? "opted_in" : "opted_out"
+        proof:          smsConsentProof(entry)   // NAMED (Nov 23 2026, LR-1): resolved below, one recorded consent per number
       });
     });
 
@@ -55843,6 +55700,13 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
 
     if (rows.length === 0) {
       return res.status(400).json({ inserted: 0, skipped: skipped, rejected: rejected });
+    }
+
+    for (var r = 0; r < rows.length; r++) {
+      var proof = rows[r].proof;
+      delete rows[r].proof;
+      rows[r].consent_status = await smsConsentStatusFor(req.user.id, rows[r].phone_number, rows[r].customer_name, proof, req);
+      rows[r].consent_timestamp = rows[r].consent_status === "opted_in" ? proof.at : null;
     }
 
     var { error } = await supabase
@@ -57058,6 +56922,8 @@ app.post("/api/content-library/:id/external-published", requireAuth, async funct
    they never call this route. */
 app.post("/api/leads/draft-reply", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
+    // NAMED (Nov 23 2026, LR-1): owner only for now: the prompt is about the owner's own book (LR-2 makes it per member)
+    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
     var postText        = String(req.body.post_text        || "").trim();
     var suggestedProduct = String(req.body.suggested_product || "").trim();
 
@@ -57121,6 +56987,8 @@ app.post("/api/leads/draft-reply", requireAuth, requireActiveSubscription, async
 // converted progress in the separate sales_lead_pipeline table, scoped
 // strictly by user_id, so Lead Radar's own capture/scoring status is never
 // touched.
+/* NAMED (Nov 23 2026, LR-1): 'archived' (migration 203) is set only by scripts/oneoff/lr1Archive.js and is
+   deliberately NOT in this list: a member cannot set it, and every read above skips it. */
 var SALES_LEAD_STATUSES = ["new", "drafted", "contacted", "replied", "converted"];
 
 // The subset of the above meaning "this person has already been engaged" —
@@ -57144,7 +57012,8 @@ async function annotateLeadsWithSalesPipeline(userId, leads) {
   var pipelineResult = await supabase
     .from("sales_lead_pipeline")
     .select("lead_post_uri, status, last_draft, updated_at")
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .neq("status", "archived");   // NAMED (Nov 23 2026, LR-1): an archived pipeline row reads as a lead not yet touched
 
   var pipelineByUri = {};
   (pipelineResult.error ? [] : (pipelineResult.data || [])).forEach(function (row) {
@@ -57295,20 +57164,13 @@ function detectOutreachLinkFacets(text) {
    belongs to and it is not a tenant key — bsky_leads has no owner column at
    all. It says one thing: whose social accounts the send path posts from.
 
-   There is exactly one Bluesky login and exactly one Mastodon token in this
-   process. sendBlueskyReply posts through the module-level BskyAgent exported
-   by leadRadar.js, authenticated once from BLUESKY_IDENTIFIER and
-   BLUESKY_APP_PASSWORD; sendMastodonReply posts with the single
-   MASTODON_ACCESS_TOKEN. Neither takes a user. Nothing anywhere stores a
-   per-user credential for either network.
-
-   runSalesAutoConvert, however, iterates every user holding a business
-   profile, and writes outreach_sends.user_id from that loop variable. So for
-   any user who is not the account holder, the two halves disagree: the reply
-   is drafted from THEIR business profile and posted from THIS account, while
-   the ledger records it as theirs. The recipient sees this account; the books
-   say someone else. The daily cap is counted per user, so with N users the one
-   real account posts up to N x OUTREACH_DAILY_CAP and no counter shows it.
+   There is exactly one Bluesky login in this process. sendBlueskyReply posts
+   through the module-level BskyAgent exported by leadRadar.js, authenticated
+   once from BLUESKY_IDENTIFIER and BLUESKY_APP_PASSWORD. It takes no user, and
+   nothing stores a per-user Bluesky credential, so a reply sent for anyone but
+   this account would post from THIS account while the ledger recorded it as
+   theirs. NAMED (Nov 23 2026, LR-1): the platform Mastodon sender and the automatic sales loop are
+   gone; the one send route (POST /api/agents/sales/send-approved) is owner only.
 
    Same UUID as CAPTURE_OWNER_ID above and SCORING_ACCOUNT_ID in leadRadar.js,
    named separately because it means a third thing: that pair is who a capture
@@ -57321,15 +57183,16 @@ function detectOutreachLinkFacets(text) {
    IT ALSO GATES READING. bsky_leads has no owner column, so every row in it
    is the owner's — captured by the owner's keyword list, scored against the
    owner's products, paid for with the owner's key. GET /api/leads,
-   GET /api/agents/sales/leads, POST /api/agents/sales/lead-status and
-   GET /api/agents/sales/pipeline therefore refuse every other account with
+   GET /api/leads/youtube-signals, GET /api/agents/sales/leads,
+   POST /api/agents/sales/lead-status and GET /api/agents/sales/pipeline (five;
+   NAMED (Nov 23 2026, LR-1): this used to say four) therefore refuse every other account with
    the same comparison, code "lead_radar_unavailable", before they read
    anything. Until there is a column to scope on, "not the owner" and "has
    no leads" are the same statement, and a page full of somebody else's
    leads is not an acceptable way to say it. */
 const OUTREACH_CREDENTIAL_OWNER_ID = OWNER_ACCOUNT_ID;
 
-/* The refusal the four lead-reading routes send. One string, because a
+/* The refusal the five lead-reading routes send (NAMED (Nov 23 2026, LR-1): and POST /api/leads/draft-reply). One string, because a
    customer will read it on two pages and they must agree. A statement of
    what is, with no timeline attached: this product has shipped interfaces
    that promised what nothing delivered, and a refusal that says "yet" is
@@ -57358,10 +57221,10 @@ const OUTREACH_UNAVAILABLE = {
    Deliberately low, and env-overridable so it can be raised knowingly rather
    than by editing code. The ceiling on how wrong a single day can go is the
    only thing standing between a working channel and a suspended account, and
-   the send path had no ceiling of any kind: SALES_SEND_LIVE is a switch, not
-   a bound, and runSalesAutoConvert reaches this code every five minutes with
-   no human involved. Setting one environment variable was enough to start
-   unbounded automated public replies.
+   the send path once had no ceiling of any kind: SALES_SEND_LIVE is a switch,
+   not a bound. NAMED (Nov 23 2026, LR-1): the automatic loop that reached it every five minutes is
+   retired; the cap now guards POST /api/agents/sales/send-approved alone, and is
+   checked at the send itself (reserveOutreachSend).
 
    The account at stake is not just the outreach account. It is the SAME
    Bluesky login leadRadar.js authenticates with to run searchPosts — one
@@ -57369,7 +57232,16 @@ const OUTREACH_UNAVAILABLE = {
    suspension costs the capture engine as well as the outreach, and capture
    is what everything downstream is built on. A low cap is cheap; that is
    not. */
-const OUTREACH_DAILY_CAP = Number(process.env.OUTREACH_DAILY_CAP || 5);
+/* NAMED (Nov 23 2026, LR-1): parsed the careful way OUTREACH_ACCOUNT_DAILY_CEILING is. It used to be
+   Number(env || 5): a typo gave NaN, and count >= NaN is false, so the per-user
+   cap silently stopped applying. Absent, blank, unparseable or below 1 now mean 5. */
+const OUTREACH_DAILY_CAP = (function () {
+  var raw = process.env.OUTREACH_DAILY_CAP;
+  if (raw == null || String(raw).trim() === "") return 5;
+  var parsed = Math.floor(Number(raw));
+  if (!Number.isFinite(parsed) || parsed < 1) return 5;
+  return parsed;
+})();
 
 /* ── Account-wide daily ceiling ─────────────────────────────────────────
    THE WHOLE SHARED SOCIAL ACCOUNT, NOT ONE USER. Second gate, and the only
@@ -57379,8 +57251,8 @@ const OUTREACH_DAILY_CAP = Number(process.env.OUTREACH_DAILY_CAP || 5);
    .eq("user_id", userId); the uniqueness index is (user_id, lead_post_uri);
    the slices bound one pass for one user. But there is one Bluesky login and
    one Mastodon token in this process, so with N operators that one account
-   can post N x OUTREACH_DAILY_CAP in a day and NOTHING COUNTS IT — no query
-   in this codebase reads outreach_sends without a user_id filter, and the
+   can post N x OUTREACH_DAILY_CAP in a day and NOTHING COUNTED IT — no query
+   in this codebase read outreach_sends without a user_id filter, and the
    schema has no column naming which social account a row was posted from,
    because there has only ever been one. Two users can also both reply to the
    same lead: the unique index permits it, the pair differs by user_id, and
@@ -57566,17 +57438,18 @@ async function canSendOutreach(userId, lead) {
 }
 
 /* The only sources a reply can actually be posted to, and therefore the only
-   ones worth drafting for. sendBlueskyReply and sendMastodonReply are the
-   entire set of senders; convertSingleLead's source dispatch answers anything
-   else with { sent: false, reason: "unsupported_source" } — but not before
-   paying for a generation to reach that line. bsky_leads holds youtube rows
+   ones worth drafting for. sendBlueskyReply is the only sender (NAMED (Nov 23 2026, LR-1):
+   sendMastodonReply is removed). The convert route refuses a lead from any
+   other source before drafting, so no generation is paid for a lead that
+   could never be replied to. bsky_leads holds youtube rows
    today (youtubeRadar writes them) and the column has no CHECK constraint, so
    a future radar adds a fourth value without touching this file.
 
    Kept next to the senders deliberately: adding a sender and forgetting to
    widen this list makes that sender unreachable, and the two are only
    findable together if they sit together. */
-const OUTREACH_SENDABLE_SOURCES = ["bluesky", "mastodon"];
+// NAMED (Nov 23 2026, LR-1): BEFORE ["bluesky", "mastodon"]; Mastodon replies are removed
+const OUTREACH_SENDABLE_SOURCES = ["bluesky"];
 
 /* Which offer a lead gets drafted against, keyed on the scorer's
    suggested_product. The six Mr. Earth Rose products share one instruction
@@ -57792,9 +57665,7 @@ const OUTREACH_MAX_POST_AGE_DAYS = 7;
 /* Rate-limit detection and the wait a 429 asks for live in lib/bskyGate.js now,
    with the one session both the radar and this sender use. */
 
-// Bluesky reply-send. Gated behind SALES_SEND_LIVE — a NEW flag, entirely
-// separate from SALES_AUTOLOOP_DRY_RUN (which only controls AI drafting/
-// pipeline bookkeeping). Defaults OFF: unset or any value other than the
+// Bluesky reply-send. Gated behind SALES_SEND_LIVE, the master switch. Defaults OFF: unset or any value other than the
 // exact string "true" means dry-run — this logs what would have been sent
 // and never calls the Bluesky API. Reuses the single authenticated
 // BskyAgent exported by leadRadar.js; never creates a second login/session.
@@ -57824,6 +57695,8 @@ function formatLeadHandle(rawHandle) {
   return "@" + String(rawHandle).replace(/^@+/, "");
 }
 
+/* NAMED (Nov 23 2026, LR-1): reached from ONE place, POST /api/agents/sales/send-approved, with the exact
+   text a person approved. checkLeadRadarRepair holds that. */
 async function sendBlueskyReply(lead, replyText) {
   var sendLive = process.env.SALES_SEND_LIVE === "true";
   var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
@@ -57895,167 +57768,10 @@ async function sendBlueskyReply(lead, replyText) {
   }
 }
 
-// Truncates to Mastodon's default 500-character post limit.
-function truncateToMastodonLimit(text) {
-  var str = String(text || "");
-  var chars = Array.from(str);
-  if (chars.length <= 500) return str;
-  return chars.slice(0, 497).join("") + "…";
-}
-
-/* The Mastodon equivalent of requestedWaitMs in lib/bskyGate.js, and separate from it
-   for one reason that matters: THE RESET HEADER IS A DIFFERENT FORMAT.
-   Bluesky sends `ratelimit-reset` as a UNIX epoch second; Mastodon sends
-   `X-RateLimit-Reset` as an ISO 8601 datetime string. Number() on the ISO
-   form is NaN, so pointing the Bluesky reader at a Mastodon response would
-   not misreport the wait — it would silently return null and lose it. The
-   arithmetic below is identical (reset minus now, clamped at 0, never
-   negative); only the parse differs, which is exactly why it is written out
-   rather than shared.
-
-   Takes the Response, not an error, because Mastodon rate limits arrive as a
-   non-ok response rather than a throw — fetch only rejects on transport
-   failure. Headers is a web Headers object here, so .get() is the accessor
-   and casing is handled for us.
-
-   Both spellings of the reset header are read. X-RateLimit-Reset is the one
-   Mastodon documents; a bare `ratelimit-reset` is what a proxy in front of
-   an instance may add, and it is epoch seconds when it appears, so it is
-   parsed as such. Null when the response carries nothing usable, which is a
-   normal answer — a guessed wait would be worse than an absent one. */
-function mastodonRetryAfterSeconds(response) {
-  var headers = response && response.headers;
-  if (!headers || typeof headers.get !== "function") return null;
-
-  /* Present-then-parse, for the reason requestedWaitMs (lib/bskyGate.js) spells out:
-     Headers.get() answers null for an absent header and Number(null) is 0,
-     so parsing first would turn "no retry-after header" into "retry after 0
-     seconds" — a confident wrong answer where null is the honest one. */
-  function headerNumber(name) {
-    var raw = headers.get(name);
-    if (raw == null || String(raw).trim() === "") return null;
-
-    var parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  // A duration already, in seconds. Standard, and preferred when present.
-  var retryAfter = headerNumber("retry-after");
-  if (retryAfter != null && retryAfter >= 0) {
-    return Math.round(retryAfter);
-  }
-
-  // ISO 8601, e.g. "2026-09-02T14:00:00.000000Z". Date.parse gives
-  // milliseconds; the wait is that minus now.
-  var resetIso = headers.get("x-ratelimit-reset");
-  if (resetIso) {
-    var resetMs = Date.parse(resetIso);
-    if (Number.isFinite(resetMs)) {
-      return Math.max(0, Math.round((resetMs - Date.now()) / 1000));
-    }
-
-    // Not ISO after all. Some proxies put epoch seconds in this header
-    // instead, so it is tried that way before being given up on.
-    var resetEpoch = headerNumber("x-ratelimit-reset");
-    if (resetEpoch != null && resetEpoch > 0) {
-      return Math.max(0, Math.round(resetEpoch - Date.now() / 1000));
-    }
-  }
-
-  var proxyReset = headerNumber("ratelimit-reset");
-  if (proxyReset != null && proxyReset > 0) {
-    return Math.max(0, Math.round(proxyReset - Date.now() / 1000));
-  }
-
-  return null;
-}
-
-// Mastodon reply-send. Gated behind the SAME SALES_SEND_LIVE flag as
-// Bluesky — defaults OFF. Reads (MastodonRadar) stay unauthenticated and
-// untouched; posting requires a separate MASTODON_ACCESS_TOKEN. Never
-// posts without a captured post_id — older leads captured before that
-// field existed won't have one.
-async function sendMastodonReply(lead, replyText) {
-  var sendLive = process.env.SALES_SEND_LIVE === "true";
-  var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
-  var text = truncateToMastodonLimit(replyText);
-
-  if (!sendLive) {
-    console.log("[SEND DRY][mastodon] Would reply to " + handle + ": " + text);
-    return { sent: false, reason: "send_dry" };
-  }
-
-  if (!lead.post_id) {
-    console.warn("[SendMastodon] Missing post_id, cannot reply to " + handle);
-    return { sent: false, reason: "missing_post_id" };
-  }
-
-  try {
-    var instanceHost = String(process.env.MASTODON_INSTANCE || "")
-      .replace(/^https?:\/\//i, "")
-      .replace(/\/+$/, "");
-    var base = "https://" + instanceHost;
-
-    var response = await fetch(base + "/api/v1/statuses", {
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + process.env.MASTODON_ACCESS_TOKEN,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        status: text,
-        in_reply_to_id: lead.post_id,
-        visibility: "public"
-      })
-    });
-
-    var responseData = await response.json().catch(function () { return null; });
-
-    /* A rate limit is not a failed post, it is the account being told to
-       stop, and the two must not return the same thing — the same
-       distinction sendBlueskyReply draws, for the same reason. Checked
-       ahead of the generic !response.ok branch below, which would otherwise
-       flatten a 429 into "post_error" and let the pass continue into it.
-
-       STATUS CODE ONLY. The body is not consulted and the message text is
-       not pattern-matched: a body containing "rate limit" is not evidence,
-       and this check changes behaviour, so a false positive would stop a
-       pass that had no reason to stop.
-
-       NO RETRY, no sleep, no backoff, by design. Retrying into a rate limit
-       is how a limit becomes a suspension, and there is one Mastodon token
-       in this process shared by everyone. The wait is returned for the
-       caller to log and act on, not to await. */
-    if (response.status === 429) {
-      var mastodonRetryAfter = mastodonRetryAfterSeconds(response);
-
-      console.error("[SendMastodon] RATE LIMITED by " + base + " posting to " + handle +
-        (mastodonRetryAfter == null
-          ? " — the response carried no retry-after or x-ratelimit-reset, so how long is unknown."
-          : " — retry after roughly " + mastodonRetryAfter + "s.") +
-        " Not retrying and not backing off: there is one Mastodon token in this" +
-        " process and retrying into a limit is how it gets suspended." +
-        " Nothing was posted and nothing was recorded.");
-
-      return {
-        sent: false,
-        reason: "rate_limited",
-        retry_after_seconds: mastodonRetryAfter,
-        error: "HTTP 429"
-      };
-    }
-
-    if (!response.ok) {
-      console.error("[SendMastodon] Failed to post reply to " + handle + ": HTTP " + response.status, responseData);
-      return { sent: false, reason: "post_error", error: "HTTP " + response.status };
-    }
-
-    return { sent: true, uri: (responseData && (responseData.url || responseData.uri)) || null };
-  } catch (err) {
-    console.error("[SendMastodon] Failed to post reply to " + handle + ":", err.message || err);
-    return { sent: false, reason: "post_error", error: err.message || String(err) };
-  }
-}
+/* NAMED (Nov 23 2026, LR-1): truncateToMastodonLimit, mastodonRetryAfterSeconds and sendMastodonReply are
+   removed with Mastodon lead search; MASTODON_INSTANCE and MASTODON_ACCESS_TOKEN are no
+   longer read anywhere for outreach. Members' own Mastodon posting (lib/memberMastodon.js)
+   uses each member's own connection and is unchanged. */
 
 /* ── Outreach emoji strip ───────────────────────────────────────────────────
    The last line of defense, and the only one that is not advice. Three prompt
@@ -58072,8 +57788,8 @@ async function sendMastodonReply(lead, replyText) {
    and U+20E3 cover the variation selector, the ZWJ that joins sequences, and
    the keycap combiner, so a stripped sequence leaves no orphaned joiner.
 
-   Deliberately NOT stripped: U+2026, the ellipsis truncateToBlueskyLimit and
-   truncateToMastodonLimit append. It is punctuation, not a pictograph, and it
+   Deliberately NOT stripped: U+2026, the ellipsis truncateToBlueskyLimit
+   appends. It is punctuation, not a pictograph, and it
    is outside every property above — but it is also appended downstream of
    this function, so it never passes through here in the first place.
 
@@ -58094,21 +57810,13 @@ function stripOutreachEmoji(text) {
   return stripped || null;
 }
 
-// POST /api/agents/sales/convert — generates a ready-to-send conversion
-// package (outreach message, offer, CTA) for one lead (lead_post_uri) or a
-// filtered segment (segment: { min_score, high_intent, buyer }, capped to
-// 10 leads per call). Inherits platform knowledge + the Sales Agent role +
-// this user's business_profile (top_competitors, top_keywords, website) via
-// buildAgentSystemPrompt, same as every other agent route. The competitor list
-// genuinely arrives now: this comment used to say "competitors", which was the
-// name 014 declares and not the column the live table has, so that half of the
-// context reached the model as "Not provided" while the claim stood here.
-// Runs the Sales Agent's conversion pass for exactly one lead: builds the
-// per-lead prompt, calls the model, and logs the result. When dryRun is
-// true, the ai_tasks/agent_memory rows are still written (clearly tagged
-// "[DRY RUN]" / status "dry_run") but sales_lead_pipeline is left
-// completely untouched, so the same lead can be safely re-run later.
-async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
+/* NAMED (Nov 23 2026, LR-1): DRAFT ONLY. Runs the Sales Agent's drafting pass for one lead: builds the
+   per-lead prompt, calls the model, records the draft (ai_tasks, the pipeline's
+   last_draft, agent_memory) and returns the public reply text for a person to read
+   and edit. It never posts. Posting is POST /api/agents/sales/send-approved, with
+   the exact text the person approved. Inherits platform knowledge, the Sales Agent
+   role and the user's business_profile through buildAgentSystemPrompt. */
+async function convertSingleLead(userId, lead, sharedSystemPrompt) {
   var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
 
   /* ── Which offer, if any ─────────────────────────────────────────────────
@@ -58118,9 +57826,6 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
      matter what the cap says, so spending two indexed reads to discover that
      would be work done in the wrong order.
 
-     Runs on dry runs too. A dry run skips the send, not the invoice — the
-     generation is billed identically — and a "none" lead has nothing to
-     generate in either mode.
 
      Before the attempt counter for the same reason the cap refusal is: the
      ceiling exists to bound paid attempts, and no attempt was made. This is
@@ -58143,42 +57848,8 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     };
   }
 
-  /* ── The send gate, consulted BEFORE the paid call ───────────────────────
-     This check used to sit immediately above the send, which is the right
-     place to be correct and the wrong place to be cheap: callAnthropicText
-     had already run and already billed by the time anything asked whether
-     this lead was allowed to be contacted at all. A user at their daily cap
-     paid for a full generation per lead per tick to produce drafts the gate
-     was always going to refuse — and "already_contacted" leads did the same
-     thing forever, since a lead in the ledger never leaves it.
-
-     Asking first costs at most two cheap indexed reads and skips the
-     expensive call entirely. A refusal returns here, which is also why
-     draft_attempts is not stamped: the ceiling exists to bound paid attempts,
-     and no attempt was made. Counting one would burn a lead's retry budget
-     for a decision that had nothing to do with the model.
-
-     Only when a send is actually possible. A dry run never sends, so gating
-     it would defeat what a dry run is for — generating drafts to read — and
-     that path is left exactly as it was. */
-  if (!dryRun) {
-    var outreachGate = await canSendOutreach(userId, lead);
-    /* G23 passed to get here: every caller hands over only leads whose
-       outreach_safe is true (the manual route refuses the rest, the pools filter). */
-    recordGateDecision(userId, "outreach_send", "lead", { G23: { result: "pass" }, G22: outreachGate.allowed ? { result: "pass" } : { result: "fail", code: outreachGate.reason } },
-      { facts: { agent: "sales" } });
-
-    if (!outreachGate.allowed) {
-      console.log("[sales/convert] Skipped " + handle + " before drafting — " + outreachGate.reason + " (cap " + OUTREACH_DAILY_CAP + "/day). No model call billed, no attempt counted.");
-      return {
-        conversion:  null,
-        sent:        false,
-        send_reason: outreachGate.reason,
-        skipped:     true
-      };
-    }
-  }
-
+  /* NAMED (Nov 23 2026, LR-1): no send gate here: this function drafts and never posts. The caps are
+     checked at the send, in POST /api/agents/sales/send-approved (reserveOutreachSend). */
   var leadBlock =
     "CAPTURED LEAD (from Lead Radar):\n" +
     "Handle: " + handle + "\n" +
@@ -58210,8 +57881,7 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
      failure mode is a reply that reads as recruitment.
 
      The one line both share and neither can lose is the character budget: 280,
-     under both truncateToBlueskyLimit's 300 and truncateToMastodonLimit's 500,
-     so no draft is ever cut mid-sentence by the sender. */
+     under truncateToBlueskyLimit's 300, so no draft is ever cut mid-sentence. */
   var supplementDestination = OUTREACH_PRODUCT_DESTINATIONS[suggestedProduct] || OUTREACH_HOME_URL;
   var supplementInstruction =
     "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
@@ -58266,26 +57936,15 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
     "\n\nUSER REQUEST:\nConvert this Lead Radar capture into the JSON conversion package described above.";
 
-  // Attempt accounting, deliberately BEFORE the model call and deliberately
-  // OUTSIDE the `if (!dryRun)` block further down that owns every other write
-  // to this table.
-  //
-  // Before, because callAnthropicText is billed the moment it is made and can
-  // throw — a timeout, a rate limit, an exhausted key. Counting the attempt
-  // after the call would mean exactly the calls that fail are the ones never
-  // counted, so the lead comes back on the next tick unchanged and bills
-  // again, forever. Counting first means a throw still leaves the attempt on
-  // the record.
-  //
-  // Outside the dry-run gate, because a dry run is billed identically to a
-  // live one. Dry runs skip the send and skip the status write — they do not
-  // skip the invoice, and it was the untouched table under SALES_AUTOLOOP_DRY_RUN
-  // that let every eligible lead be re-drafted on every 5-minute tick.
+  // Attempt accounting, deliberately BEFORE the model call, because
+  // callAnthropicText is billed the moment it is made and can throw — a
+  // timeout, a rate limit, an exhausted key. Counting the attempt after the
+  // call would mean exactly the calls that fail are the ones never counted.
+  // NAMED (Nov 23 2026, LR-1): the dry-run paragraph that stood here went with the automatic loop.
   //
   // Not atomic: the client has no in-place increment, so this reads then
   // writes. A lost update under concurrency undercounts, which retries a lead
-  // once more than the ceiling of DRAFT_ATTEMPT_CEILING intends — bounded and
-  // in the cheap direction, unlike the unbounded loop it replaces.
+  // once more than the ceiling of DRAFT_ATTEMPT_CEILING intends.
   var attemptTimestamp = nowIso();
   try {
     var attemptRead = await supabase
@@ -58369,8 +58028,8 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   /* NULL HERE IS THE DECISION, NOT AN OVERSIGHT. Every other call site moved
      onto the user own key; this one did not.
 
-     What this drafts is a reply sent from the platform OWN Bluesky and
-     Mastodon accounts, to a stranger, to find customers for this product. The
+     What this drafts is a reply that may be sent (after a person approves it)
+     from the platform OWN Bluesky account, to a stranger, to find customers for this product. The
      user_id below is whose lead pipeline the row belongs to — not who asked
      for the work and not who should pay for it. Billing a user own Anthropic
      key for the platform marketing would be worse than the bug this commit
@@ -58405,9 +58064,9 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
 
     // The emoji strip, at the boundary and nowhere else. cleanMessage is the
     // single value that becomes a public post, so stripping it here covers
-    // every downstream consumer at once — sendBlueskyReply, sendMastodonReply,
-    // and the richDraft written to sales_lead_pipeline.last_draft — with no
-    // send-path change and no second place to keep in sync.
+    // the draft returned for approval and the richDraft written to
+    // sales_lead_pipeline.last_draft. The send route strips again, on the
+    // approved text, because a person may have edited it.
     //
     // Applied to the public reply ONLY. `analysis` is operator-only and never
     // posted, and `output` stays verbatim so the ai_tasks and agent_memory
@@ -58432,9 +58091,8 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     analysis = null;
   }
 
-  /* A draft that links anywhere but the destination it was given is held, not
-     sent. Held the way an unparseable draft is: cleanMessage becomes null, and
-     the send block below already refuses a null message — no sender is touched.
+  /* A draft that links anywhere but the destination it was given is held: no
+     draft text is offered for approval (cleanMessage becomes null).
      The reason is recorded on the ai_tasks row (error) and at the top of the
      pipeline's last_draft, and the draft is kept out of agent_memory, which the
      next prompt is told to build on. */
@@ -58453,111 +58111,18 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     cleanMessage = withOutreachTracking(cleanMessage, OUTREACH_BIZFORCE_DESTINATION, lead);
   }
 
-  // Attempt the real send (if applicable) BEFORE recording any status
-  // below, so the recorded status reflects what actually happened instead
-  // of assuming success the moment a draft is generated. Dry runs never
-  // attempt a send. Dispatches by lead.source; sources with no sender yet
-  // (youtube, etc.) are draft-only and never reach a sender function.
-  var sendResult = null;
-  if (!dryRun) {
-    // No gate call here any more. It ran before the model call above, and a
-    // refusal returned from the function outright — so reaching this point on
-    // a live run already means the cap allowed this lead. What is left is the
-    // message check and the source dispatch.
-    //
-    // The tradeoff that buys: the gate is now checked before a generation
-    // rather than immediately before the send, so the window between deciding
-    // and sending is one model call wider than it was. Within a single pass
-    // that changes nothing — runSalesAutoConvert awaits each lead in turn —
-    // but two overlapping passes, or a manual convert racing the autoloop,
-    // can now both pass a cap check that only had room for one. The ledger's
-    // unique index still makes a duplicate send of the SAME lead impossible;
-    // what is no longer tightly bounded is the daily total across different
-    // leads, which can overshoot OUTREACH_DAILY_CAP by the number of runs
-    // racing. Re-checking here would close that at the cost of a second pair
-    // of queries per lead.
-    if (!cleanMessage) {
-      console.warn("[sales/convert] Skipping send for " + handle + " — no clean message available.");
-      sendResult = { sent: false, reason: "send_dry" };
-    } else if (lead.source === "bluesky") {
-      try {
-        sendResult = await sendBlueskyReply(lead, cleanMessage);
-      } catch (sendErr) {
-        console.error("[sales/convert] sendBlueskyReply error:", sendErr.message || sendErr);
-        sendResult = { sent: false, reason: "post_error", error: sendErr.message || String(sendErr) };
-      }
-    } else if (lead.source === "mastodon") {
-      try {
-        sendResult = await sendMastodonReply(lead, cleanMessage);
-      } catch (sendErr) {
-        console.error("[sales/convert] sendMastodonReply error:", sendErr.message || sendErr);
-        sendResult = { sent: false, reason: "post_error", error: sendErr.message || String(sendErr) };
-      }
-    } else {
-      sendResult = { sent: false, reason: "unsupported_source" };
-    }
-  }
+  // NAMED (Nov 23 2026, LR-1): the send block that stood here is gone; nothing in this function posts.
 
-  // The ledger write, and the only thing that makes the cap above mean
-  // anything: an uncounted send is an unbounded one.
-  //
-  // Never throws. The reply is already public at this point, and failing the
-  // request would not unpost it — it would only lose the record of a post
-  // that happened, which is the one outcome worse than a noisy log line.
-  if (sendResult && sendResult.sent) {
-    try {
-      // No sent_at. The column is timestamptz not null default now(), so
-      // Postgres stamps it. This table's whole job is counting sends within a
-      // UTC day, and outreachSendsToday compares against a boundary computed
-      // in the application — if the two clocks disagree, the cap window
-      // silently shifts. The database is the one authority both the write and
-      // the count can share, so the write does not supply its own.
-      var sendRecord = await supabase
-        .from("outreach_sends")
-        .insert({
-          user_id:       userId,
-          lead_post_uri: lead.post_uri,
-          source:        lead.source || null,
-          platform_uri:  sendResult.uri || null
-        });
-
-      if (sendRecord.error) {
-        // 23505 on the unique index means a concurrent send for this
-        // (user, lead) already recorded itself. The row exists and the cap
-        // still counts it once, so this is a race resolving correctly, not
-        // a failure to record.
-        if (sendRecord.error.code === "23505") {
-          console.log("[outreach] Send for " + handle + " already recorded by a concurrent run — leaving the existing row.");
-        } else {
-          console.error("[outreach] SEND NOT RECORDED for " + handle + " (" + lead.post_uri + ") — the reply is public and does not count against the cap:", sendRecord.error.message);
-        }
-      }
-    } catch (recordErr) {
-      console.error("[outreach] SEND NOT RECORDED for " + handle + " (" + lead.post_uri + ") — the reply is public and does not count against the cap:", recordErr.message || recordErr);
-    }
-  }
-
-  // ai_tasks.status is what the Live Activity feed reads for its badge —
-  // it must tell the truth: "sent" only when a real post succeeded,
-  // "send_failed" when a real attempt errored, "drafted" for dry runs,
-  // no-clean-message holds, and any source with no sender (unsupported_source).
-  var conversionStatus;
-  if (dryRun) {
-    conversionStatus = "dry_run";
-  } else if (sendResult && sendResult.sent) {
-    conversionStatus = "sent";
-  } else if (sendResult && sendResult.reason === "post_error") {
-    conversionStatus = "send_failed";
-  } else {
-    conversionStatus = "drafted";
-  }
+  // ai_tasks.status, which the Live Activity feed reads for its badge. NAMED (Nov 23 2026, LR-1): always
+  // "drafted" now; a send is recorded by send-approved, never here.
+  var conversionStatus = "drafted";
 
   var taskInsert = await supabase
     .from("ai_tasks")
     .insert({
       user_id: userId,
       agent_type: "sales",
-      prompt: (dryRun ? "[DRY RUN] " : "") + "Sales convert: " + handle,
+      prompt: "Sales draft: " + handle,
       result: output,
       status: conversionStatus,
       error: draftRejection ? "draft rejected, not sent: " + draftRejection : null
@@ -58569,30 +58134,9 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     console.error("[sales/convert] ai_tasks insert failed:", taskInsert.error.message);
   }
 
-  /* NO DURABLE MEMORY FOR A REHEARSAL. Joins the send above and the
-     sales_lead_pipeline write below in the set of things a dry run does not do.
-     The ai_tasks row written just above is deliberately NOT in that set — it is
-     the record that the dry run happened, and it stays.
-
-     A dry run is a rehearsal. agent_memory is the agent's account of what it
-     actually did for this business, and a draft nobody sent is not that.
-
-     THE COMPOUNDING PART, which is why this is not merely tidy. Each pass reads
-     the five most recent sales memories into the shared system prompt
-     (line 23937, ordered by created_at desc, limit 5). A dry run writing memory
-     therefore fed its own drafts back into the next prompt, and with a pass
-     drafting up to five leads every five minutes those five slots were filled
-     by rehearsal output almost immediately. Two costs, both real: every
-     subsequent prompt carried up to five extra blocks of up to 2000 characters
-     of text describing sends that never happened, and the agent's business
-     memory — the thing meant to hold what worked with real people — was
-     displaced by drafts nobody received.
-
-     Note that the flag which cleanly identifies these rows, metadata.dry_run,
-     is not in the columns that read selects, so it could not have filtered them
-     out. Not writing them is the fix that does not depend on every future
-     reader remembering to exclude them. */
-  if (!dryRun && !draftRejection) {
+  /* NAMED (Nov 23 2026, LR-1): a draft (not a rejected one) is the agent's memory of what it proposed;
+     the dry-run rule that stood here went with the automatic loop. */
+  if (!draftRejection) {
     try {
       var memTimestamp = nowIso();
       var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
@@ -58608,7 +58152,7 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
           memory_type: "insight",
           title: "Converted lead: " + handle,
           content: memContent,
-          metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri, dry_run: dryRun }),
+          metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri }),
           created_at: memTimestamp,
           updated_at: memTimestamp
         });
@@ -58621,7 +58165,7 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     }
   }
 
-  if (!dryRun) {
+  {
     // Bump this user's pipeline status new -> drafted (never downgrade a
     // lead that's already further along, e.g. already contacted).
     try {
@@ -58664,433 +58208,36 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
         }
       }
 
-      // Only bump to "contacted" (this schema's real-send status) when the
-      // send above actually succeeded, for any source — never on dry-run
-      // or error.
-      if (sendResult && sendResult.sent) {
-        var contactedTimestamp = nowIso();
-        var contactedUpdate = await supabase
-          .from("sales_lead_pipeline")
-          .update({ status: "contacted", updated_at: contactedTimestamp })
-          .eq("user_id", userId)
-          .eq("lead_post_uri", lead.post_uri);
-
-        if (contactedUpdate.error) {
-          console.error("[sales/convert] Failed to mark lead contacted:", contactedUpdate.error.message);
-        }
-      }
+      // NAMED (Nov 23 2026, LR-1): "contacted" is written by send-approved after a real post, never here.
     } catch (pipelineErr) {
       console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
     }
   }
 
-  // A count of results is not a count of posts, and the client had no way to
-  // tell them apart: sendResult knows exactly whether a public reply went out,
-  // and that fact stopped here. It now rides back with the conversion text so
-  // the UI can report what actually went out rather than how many leads were
-  // run — which also makes it visible at a glance whether SALES_SEND_LIVE is
-  // having any effect, since every result reads send_dry while it is unset.
-  var didSend = !!(sendResult && sendResult.sent === true);
-
   return {
-    conversion:  output,
-    sent:        didSend,
-    send_reason: didSend ? null : (draftRejection ? "draft_rejected" : ((sendResult && sendResult.reason) || null)),
+    conversion:      output,
+    draft:           cleanMessage,      // the public reply offered for approval; null when none is usable
+    analysis:        analysis,
     draft_rejection: draftRejection,
-
-    // Only ever set alongside send_reason "rate_limited", and null whenever
-    // the response carried no wait. Rides back so the auto-loop can say how
-    // long the pass is stopped for without re-reading the error.
-    retry_after_seconds: (sendResult && sendResult.retry_after_seconds != null)
-      ? sendResult.retry_after_seconds
-      : null
+    sent:            false              // NAMED (Nov 23 2026, LR-1): this function never posts
   };
 }
 
-// Automatic Sales Agent conversion pass — for every user with a business
-// profile, computes their context once, finds their freshest high-intent
-// leads (excluding anyone already contacted/replied/converted), and runs
-// convertSingleLead() on up to 5 of them. NOT wired into any interval yet.
-// Controlled by SALES_AUTOLOOP_DRY_RUN — defaults to dry-run ON unless the
-// env var is exactly the string "false".
-async function runSalesAutoConvert() {
-  var dryRun = process.env.SALES_AUTOLOOP_DRY_RUN !== "false";
+/* NAMED (Nov 23 2026, LR-1): runSalesAutoConvert (the automatic sales loop) is RETIRED by the owner's rule:
+   nothing is posted, replied or sent to anyone outside BizForce unless a person
+   approved that exact text first. Its timer, salesAutoConvertTick, and the
+   ENABLE_SALES_AUTOLOOP, SALES_AUTOLOOP_DRY_RUN and SALES_AUTOLOOP_DAILY_DRAFT_CAP
+   variables are gone with it. */
 
-  /* Counted so a skip is a reported number rather than an absence. Returned
-     below and printed in the pass's own closing line. */
-  var usersSeen = 0;
-  var skippedNotCredentialOwner = 0;
-  var skippedNotEntitled = 0;
-  var processed = 0;
-  var failed = 0;
-  var firstFailure = null;
-
-  function notePassFailure(userId, detail) {
-    failed += 1;
-    if (!firstFailure) firstFailure = "user " + userId + ": " + detail;
-  }
-
-  var passEntitlement = createPassEntitlementCache();
-
-  try {
-    var profilesResult = await supabase.from("business_profiles").select("user_id");
-    if (profilesResult.error) {
-      console.error("[SalesAutoConvert] Failed to load business profiles:", profilesResult.error.message);
-      return {
-        users: 0, skippedNotCredentialOwner: 0, skippedNotEntitled: 0, processed: 0,
-        failed: 1, firstFailure: "business_profiles read failed: " + profilesResult.error.message
-      };
-    }
-
-    var userIds = (profilesResult.data || [])
-      .map(function (row) { return row.user_id; })
-      .filter(Boolean);
-
-    console.log("[SalesAutoConvert] Starting pass — " + (dryRun ? "DRY RUN" : "LIVE") + " — " + userIds.length + " user(s) with a business profile.");
-
-    usersSeen = userIds.length;
-
-    for (var u = 0; u < userIds.length; u++) {
-      var userId = userIds[u];
-
-      /* The send path has one global credential pair, so this pass may only
-         act for the account those credentials belong to. Skipping here rather
-         than at the send means no model call is spent drafting a reply that
-         must not be posted, and no ledger row is written attributing this
-         account's post to someone else.
-
-         continue, not throw and not return: a second user is an ordinary state
-         of the system, not an error, and the remaining users — including the
-         credential owner, who may sort after them — still get their pass. */
-      if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
-        skippedNotCredentialOwner += 1;
-        console.warn("[SalesAutoConvert] SKIPPING user " + userId +
-          " — outreach is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-          " until per-user credentials exist. There is one Bluesky login and one" +
-          " Mastodon token in this process, so sending for this user would post" +
-          " from the owner's accounts while outreach_sends recorded the send as" +
-          " theirs. No draft was generated and nothing was sent.");
-        continue;
-      }
-
-      /* ── ENTITLEMENT ────────────────────────────────────────────────────
-         AFTER the credential-owner skip, so a user this pass was never going
-         to act for costs no plan lookup, and BEFORE the profile read and every
-         model call below, so a lapsed account spends nothing at all.
-
-         FAIL CLOSED. A plan that could not be read is not a plan that
-         entitles; drafting on a guess would spend money for an account nobody
-         could confirm is paying. Counted as a failure as well as a skip, so a
-         broken entitlement read is visible in the pass summary rather than
-         looking like a quiet day.
-
-         WORTH BEING HONEST ABOUT WHAT THIS DOES AND DOES NOT BUY TODAY. The
-         only account that reaches this line is OUTREACH_CREDENTIAL_OWNER_ID,
-         which is an admin and therefore exempt — so this changes nothing about
-         what runs right now. It is here for the day the credential restriction
-         is lifted or the owner id changes, because that day this loop becomes
-         a per-user model-spend loop and the gate has to already be in it. What
-         bounds the spend today is the daily draft cap, not this. */
-      var salesEntitlement = await passEntitlement(userId);
-
-      if (salesEntitlement.error || !salesEntitlement.plan) {
-        skippedNotEntitled += 1;
-        notePassFailure(userId, "entitlement could not be determined, so nothing was drafted: " +
-          (salesEntitlement.error
-            ? ((salesEntitlement.error && salesEntitlement.error.message) || String(salesEntitlement.error))
-            : "getUserPlan returned no result"));
-        continue;
-      }
-
-      if (salesEntitlement.plan.active !== true) {
-        skippedNotEntitled += 1;
-        console.log("[SalesAutoConvert] SKIPPING user " + userId + " — no active subscription " +
-          "(inactive_reason " + JSON.stringify(salesEntitlement.plan.inactive_reason || null) + "). " +
-          "No lead was drafted, no model call was made and no ai_tasks row was written.");
-        continue;
-      }
-
-      processed += 1;
-
-      var convertedCount = 0;
-      var skippedCount = 0;
-
-      try {
-        var profileResult = await supabase
-          .from("business_profiles")
-          .select("*")
-          .eq("user_id", userId)
-          .single();
-        var businessProfile = profileResult.data || {};
-
-        var liveStats = {};
-        try {
-          liveStats = await getLiveStats(userId);
-        } catch (statsErr) {
-          console.error("[SalesAutoConvert] getLiveStats failed for user " + userId + ":", statsErr.message || statsErr);
-        }
-
-        var agentMemoryResult = await supabase
-          .from("agent_memory")
-          .select("agent_type, memory_type, title, content, created_at")
-          .eq("user_id", userId)
-          .eq("agent_type", "sales")
-          .order("created_at", { ascending: false })
-          .limit(5);
-
-        var memoriesForBrain = (agentMemoryResult.error ? [] : (agentMemoryResult.data || [])).map(function (row) {
-          return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
-        });
-
-        var sharedSystemPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, businessProfile, liveStats, memoriesForBrain);
-
-        // Two exclusions, one read. A lead is ineligible when it has already
-        // been engaged (contacted/replied/converted), and ALSO when it has
-        // burned DRAFT_ATTEMPT_CEILING (3) draft attempts at any status —
-        // including "drafted" and "new", the two this query used to let
-        // through. Every one of those attempts is a paid Anthropic call, and
-        // a lead that cannot be drafted (unparseable model output, a blocked
-        // send, a source with no sender) was otherwise re-picked and re-billed
-        // on every 5-minute tick indefinitely, producing nothing.
-        //
-        // The attempts condition cannot be expressed in the same .in() as the
-        // status condition, so the whole per-user set is read once and both
-        // filters applied here rather than spending a second round trip.
-        var excludedUris = [];
-        try {
-          var excludedResult = await supabase
-            .from("sales_lead_pipeline")
-            .select("lead_post_uri, status, draft_attempts")
-            .eq("user_id", userId);
-
-          if (!excludedResult.error) {
-            excludedUris = (excludedResult.data || [])
-              .filter(function (row) {
-                return SALES_ENGAGED_STATUSES.indexOf(row.status) !== -1 ||
-                       (row.draft_attempts || 0) >= DRAFT_ATTEMPT_CEILING;
-              })
-              .map(function (row) { return row.lead_post_uri; });
-          } else {
-            console.error("[SalesAutoConvert] Failed to load ineligible leads for user " + userId + ":", excludedResult.error.message);
-          }
-        } catch (excludeErr) {
-          console.error("[SalesAutoConvert] Failed to load ineligible leads for user " + userId + ":", excludeErr.message || excludeErr);
-        }
-
-        /* Both filters now run in the database, before the limit rather than
-           after it.
-
-           The limit used to be applied to the unfiltered top 20 by score and
-           the exclusions subtracted from that page in application code, which
-           made the limit a cap on rows CONSIDERED rather than rows ELIGIBLE.
-           A user whose 20 highest-scoring leads were all already contacted got
-           an empty list and did no work — while their 21st lead, eligible and
-           waiting, was never read. The higher a user's engagement, the more
-           complete that starvation became: every lead they successfully
-           contacted permanently occupied one of the 20 slots the next pass
-           looked at.
-
-           The source filter belongs here for a different reason. It costs a
-           full generation to discover that a youtube lead has no sender, and
-           the answer is knowable from the row. Filtering it in the query means
-           those rows never occupy a slot and never reach convertSingleLead.
-
-           Excluded URIs are embedded in the query only while the list is small
-           enough to be safe in a URL — PostgREST takes them as a literal
-           not.in.(...) list, and a few hundred AT-URIs at ~70 characters each
-           will exceed the proxy's request-line limit and fail the whole query
-           with a 414. Past that threshold the exclusion falls back to where it
-           has always been, in application code, with a much larger page to
-           subtract from so the starvation above still cannot recur. */
-        var EXCLUSION_INLINE_MAX = 200;
-        var inlineExclusion = excludedUris.length > 0 && excludedUris.length <= EXCLUSION_INLINE_MAX;
-
-        /* Recomputed on every pass rather than derived once at startup: this
-           process stays up for weeks, and a cutoff frozen at boot would widen
-           the window by a day every day it kept running. */
-        var freshnessCutoff = new Date(Date.now() - OUTREACH_MAX_POST_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
-
-        var leadsQuery = supabase
-          .from("bsky_leads")
-          .select("*")
-          .eq("status", "scored")
-          .not("intent_score", "is", null)
-          .gte("intent_score", OUTREACH_MIN_INTENT)
-          .in("source", OUTREACH_SENDABLE_SOURCES)
-          /* Unknown age is not fresh. The gte alone would already exclude
-             nulls — a comparison against NULL is NULL, never true — but the
-             5361 rows captured before this column existed all carry null and
-             none of them may ever be contacted. A requirement that size should
-             not rest on the reader knowing three-valued logic, so it is stated
-             rather than implied; the two predicates agree and the extra one is
-             free against the same index. */
-          .not("post_created_at", "is", null)
-          .gte("post_created_at", freshnessCutoff)
-          /* The suitability screen, and the only filter here that is about the
-             person rather than the lead. Intent says they want something;
-             this says a public product reply from a stranger is a decent thing
-             to send them, which stays false for someone in a crisis, under a
-             doctor's care, or writing about medication no matter how well the
-             post matches a keyword.
-
-             Null is not a quiet maybe — it means no model ever screened this
-             row, which covers every lead captured before the column existed
-             and every lead that reached "scored" by exhausting its retries.
-             Same shape as the freshness pair above: the eq alone already drops
-             nulls, and the explicit predicate is here so that guarantee is
-             visible to whoever edits this query next rather than resting on
-             three-valued logic they have to remember. */
-          .not("outreach_safe", "is", null)
-          .eq("outreach_safe", true)
-          /* The invitation screen. Separate from suitability because the two
-             refuse different people: suitability asks whether a reply would
-             harm someone, this asks whether they asked at all. A post narrating
-             a low-energy day and a post asking the room what helps are the same
-             lead to an intent scorer and opposites here, and only this column
-             tells them apart.
-
-             Null ineligible on the same terms as the columns above, and by the
-             same explicit pair — the eq already drops nulls, and the predicate
-             is stated so nobody has to remember that. */
-          .not("reply_invited", "is", null)
-          .eq("reply_invited", true);
-
-        if (inlineExclusion) {
-          // Each value double-quoted so a delimiter inside a URI cannot end the
-          // list early. post_uri is an AT-URI for Bluesky and an instance URL
-          // for Mastodon; neither is authored here, so the quotes and the
-          // escaping are not optional.
-          var exclusionList = excludedUris
-            .map(function (uri) {
-              return "\"" + String(uri).replace(/\\/g, "\\\\").replace(/"/g, "\\\"") + "\"";
-            })
-            .join(",");
-
-          leadsQuery = leadsQuery.not("post_uri", "in", "(" + exclusionList + ")");
-        } else if (excludedUris.length > EXCLUSION_INLINE_MAX) {
-          console.log("[SalesAutoConvert] user " + userId + ": " + excludedUris.length + " excluded leads exceeds the inline limit of " + EXCLUSION_INLINE_MAX + " — filtering in application code against a wider page instead.");
-        }
-
-        // 50 is ample when the database has already removed the ineligible
-        // rows: the pass only ever works 5. The fallback page is far wider
-        // because the exclusions still have to come out of it here.
-        var leadsResult = await leadsQuery
-          .order("intent_score", { ascending: false, nullsFirst: false })
-          .limit(inlineExclusion || excludedUris.length === 0 ? 50 : 500);
-
-        if (leadsResult.error) {
-          console.error("[SalesAutoConvert] Failed to load leads for user " + userId + ":", leadsResult.error.message);
-          continue;
-        }
-
-        // Retained unconditionally. It is the actual filter on the fallback
-        // path, and on the inline path it is a cheap no-op that keeps the two
-        // paths returning the same thing.
-        // leadHasRealScore as well as the query's filters: a lead is never
-        // drafted for on a score no model gave.
-        var freshLeads = (leadsResult.data || [])
-          .filter(leadHasRealScore)
-          .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })
-          .slice(0, 5);
-
-        for (var i = 0; i < freshLeads.length; i++) {
-          try {
-            // Counted apart from converted, because a lead the gate refused
-            // before drafting had no generation run for it. Adding the two
-            // together would report a busy pass while every lead in it was
-            // being turned away at the cap — the one condition this number
-            // exists to make visible.
-            var conversionResult = await convertSingleLead(userId, freshLeads[i], sharedSystemPrompt, dryRun);
-            if (conversionResult && conversionResult.skipped) {
-              skippedCount++;
-            } else {
-              convertedCount++;
-            }
-
-            /* The network told this account to stop, so stop — the remaining
-               leads in this pass would post to the same account through the
-               same session and meet the same limit. Continuing would spend a
-               model call per lead to be refused by the network each time.
-
-               Source-agnostic on purpose. Both senders return this reason:
-               sendBlueskyReply on a 429 or RateLimitExceeded from the XRPC
-               client, sendMastodonReply on a 429 from the statuses endpoint.
-               A pass can hold leads from both, and a limit on either one is
-               equally a reason to stop spending generations — so the break
-               keys on the reason and names the source in the log rather than
-               branching on it.
-
-               break, not throw and not return: this user’s pass is over, the
-               loop below still logs their counts, and the next user is still
-               attempted. That is deliberate even though every user shares the
-               one rate-limited account — the guard above already restricts
-               this loop to a single user, so there is no second user to
-               protect today, and a limit that has lifted by the time the next
-               user is reached should not be assumed to still hold.
-
-               Nothing is marked. The lead was not contacted, so it stays
-               exactly as eligible as it was: no outreach_sends row (the
-               ledger write is gated on sent: true and this returned false),
-               no pipeline bump to contacted, and ai_tasks recorded whatever
-               it already records for a send that did not happen. */
-            if (conversionResult && conversionResult.send_reason === "rate_limited") {
-              console.warn("[SalesAutoConvert] PASS STOPPED BY RATE LIMIT for user " + userId +
-                " — " + (freshLeads[i].source || "the network") +
-                " refused the post at lead " + (i + 1) + " of " + freshLeads.length +
-                (conversionResult.retry_after_seconds == null
-                  ? " and gave no retry-after, so how long is unknown."
-                  : " and asked for roughly " + conversionResult.retry_after_seconds + "s.") +
-                " Abandoning the remaining " + (freshLeads.length - i - 1) + " lead(s) rather" +
-                " than spending a generation each to be refused again. Nothing was posted," +
-                " nothing was recorded, and every remaining lead stays eligible.");
-              break;
-            }
-          } catch (leadErr) {
-            console.error("[SalesAutoConvert] Failed to convert lead " + freshLeads[i].post_uri + " for user " + userId + ":", leadErr.message || leadErr);
-          }
-        }
-
-        console.log("[SalesAutoConvert] user " + userId + ": converted " + convertedCount + " lead(s), skipped " + skippedCount + " before drafting — " + (dryRun ? "DRY RUN" : "LIVE"));
-      } catch (userErr) {
-        console.error("[SalesAutoConvert] Error processing user " + userId + ":", userErr.message || userErr);
-      }
-    }
-
-    console.log("[SalesAutoConvert] Pass complete — " + usersSeen + " user(s) with a business profile, " +
-      processed + " processed, " + skippedNotCredentialOwner + " skipped as not the credential owner, " +
-      skippedNotEntitled + " skipped for no active subscription, " + failed + " failed.");
-
-    return {
-      users: usersSeen,
-      skippedNotCredentialOwner: skippedNotCredentialOwner,
-      skippedNotEntitled: skippedNotEntitled,
-      processed: processed,
-      failed: failed,
-      firstFailure: firstFailure
-    };
-  } catch (err) {
-    console.error("[SalesAutoConvert] runSalesAutoConvert error:", err.message || err);
-    return {
-      users: usersSeen,
-      skippedNotCredentialOwner: skippedNotCredentialOwner,
-      skippedNotEntitled: skippedNotEntitled,
-      processed: processed,
-      failed: failed + 1,
-      firstFailure: firstFailure || ((err && err.message) || String(err))
-    };
-  }
-}
-
+/* NAMED (Nov 23 2026, LR-1): DRAFT ONLY. Drafts the public reply for ONE lead and returns it for a person
+   to read and edit; it never posts (convertSingleLead has no send). Segment mode
+   (up to 10 leads a click) is removed. Posting is POST /api/agents/sales/send-approved. */
 app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     var userId = req.user.id;
 
-    /* The same restriction runSalesAutoConvert applies in its per-user loop,
-       enforced here because this route reaches convertSingleLead directly and
-       never passes through that loop. Without it the guard covers the
-       background job and leaves the button beside it open — the same send, the
-       same one global Bluesky login and Mastodon token, through a different
-       door.
+    /* Owner only: there is one Bluesky login in this process, and the leads are
+       the owner's (bsky_leads has no owner column).
 
        A refusal rather than a skip, because this call has someone waiting on
        it. The loop is choosing work nobody asked for by name and can drop a
@@ -59108,18 +58255,13 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
        comparison and nothing else. */
     if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
       console.warn("[sales/convert] REFUSING user " + userId +
-        " — outreach is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        ". There is one Bluesky login and one" +
-        " Mastodon token in this process, so sending for this user would post" +
-        " from the owner's accounts while outreach_sends recorded the send as" +
-        " theirs. No lead was read, no draft was generated and nothing was sent.");
+        " — drafting replies is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+        ". No lead was read and no draft was generated.");
 
       return res.status(403).json(OUTREACH_UNAVAILABLE);
     }
 
     var leadPostUri = safeText(req.body.lead_post_uri, 500);
-    var segment = (req.body.segment && typeof req.body.segment === "object" && !Array.isArray(req.body.segment))
-      ? req.body.segment : null;
 
     var targetLeads = [];
 
@@ -59130,8 +58272,8 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
 
     if (leadPostUri) {
       /* Deliberately NOT filtered in the query, which is the one place this
-         route diverges from runSalesAutoConvert in mechanism while matching it
-         exactly in outcome.
+         route diverged from the retired runSalesAutoConvert (NAMED (Nov 23 2026, LR-1))
+         in mechanism while matching it exactly in outcome.
 
          The auto-loop is picking leads out of a pool, so a lead that fails a
          filter should simply not be picked — silence is the correct answer to
@@ -59158,6 +58300,14 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       var refusals = [];
 
       // A lead whose scoring failed has no score, so nothing has judged it.
+      // NAMED (Nov 23 2026, LR-1): only a source the send route can post to is worth drafting for
+      if (OUTREACH_SENDABLE_SOURCES.indexOf(requestedLead.source) === -1) {
+        refusals.push({ code: "unsupported_source", detail: "A reply can only be posted to a Bluesky lead." });
+      }
+      if (requestedLead.status === "archived") {
+        refusals.push({ code: "archived", detail: "This lead is archived." });
+      }
+
       if (!leadHasRealScore(requestedLead)) {
         refusals.push({
           code:   "not_scored",
@@ -59234,97 +58384,9 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       }
 
       targetLeads = [requestedLead];
-    } else if (segment) {
-      // Same two exclusions as the auto-loop, read the same way and for the
-      // same reason: already-engaged leads, plus any lead that has burned
-      // DRAFT_ATTEMPT_CEILING (3) draft attempts at any status, because every
-      // attempt is a paid Anthropic call. A segment request is operator-driven
-      // rather than on a timer, but it drafts up to 10 leads a click and would
-      // otherwise keep paying to redraft the same undraftable ones.
-      //
-      // One read: the attempts condition cannot share the status .in().
-      var excludedUris = [];
-      try {
-        var excludedResult = await supabase
-          .from("sales_lead_pipeline")
-          .select("lead_post_uri, status, draft_attempts")
-          .eq("user_id", userId);
-
-        if (!excludedResult.error) {
-          excludedUris = (excludedResult.data || [])
-            .filter(function (row) {
-              return SALES_ENGAGED_STATUSES.indexOf(row.status) !== -1 ||
-                     (row.draft_attempts || 0) >= DRAFT_ATTEMPT_CEILING;
-            })
-            .map(function (row) { return row.lead_post_uri; });
-        } else {
-          console.error("[sales/convert] Failed to load ineligible leads:", excludedResult.error.message);
-        }
-      } catch (excludeErr) {
-        console.error("[sales/convert] Failed to load ineligible leads:", excludeErr.message || excludeErr);
-      }
-
-      /* The same eligibility filters the auto-loop applies — freshness,
-         suitability and invitation — in the query and ahead of the limit for
-         the same reason the exclusions are: a limit applied before a filter
-         caps rows CONSIDERED rather than rows eligible, and a segment whose top
-         40 are all stale, unscreened or uninvited would come back empty while
-         eligible leads sat unread behind them.
-
-         Written as .not(...).eq(...) / .not(...).gte(...) rather than the
-         shorter form for each, matching runSalesAutoConvert line for line —
-         the null exclusion is redundant against SQL's three-valued logic and
-         deliberately stated anyway, and the two sites are only checkable
-         against each other if they read the same. */
-      var segQuery = supabase
-        .from("bsky_leads")
-        .select("*")
-        .eq("status", "scored")
-        /* Sendable sources only, matching runSalesAutoConvert's own
-           `.in("source", OUTREACH_SENDABLE_SOURCES)`. This path had every other
-           filter that one has and not this one.
-
-           It matters more here than there, because this path always runs LIVE —
-           it calls convertSingleLead with dryRun hardcoded false. A lead from a
-           source with no sender would therefore be drafted at full cost, one
-           billed generation each, and then fail at the send with
-           "unsupported_source": the money is spent before anything checks
-           whether the reply could be delivered, and the answer was knowable from
-           the row all along.
-
-           OUTREACH_SENDABLE_SOURCES is ["bluesky", "mastodon"] — the two with
-           sender functions. YouTube leads are captured as signal only
-           (youtubeRadar.js writes status "signal", and youtube is not in
-           leadRadar.js's SCORABLE_SOURCES, so they are never scored), which
-           makes them unreachable through the status filter above today. The
-           source filter is what keeps that true if either of those facts
-           changes. */
-        .in("source", OUTREACH_SENDABLE_SOURCES)
-        .not("post_created_at", "is", null)
-        .gte("post_created_at", freshnessCutoff)
-        .not("outreach_safe", "is", null)
-        .eq("outreach_safe", true)
-        .not("reply_invited", "is", null)
-        .eq("reply_invited", true)
-        .not("intent_score", "is", null)
-        .order("intent_score", { ascending: false, nullsFirst: false })
-        .limit(40);
-
-      var segMinScore = Number(segment.min_score);
-      if (Number.isFinite(segMinScore)) segQuery = segQuery.gte("intent_score", segMinScore);
-      if (segment.high_intent) segQuery = segQuery.gte("intent_score", OUTREACH_MIN_INTENT);
-      if (segment.buyer) segQuery = segQuery.neq("suggested_product", "none").gte("intent_score", 40);
-
-      var segResult = await segQuery;
-      if (segResult.error) {
-        throw segResult.error;
-      }
-      targetLeads = (segResult.data || [])
-        .filter(leadHasRealScore)
-        .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })
-        .slice(0, 10);
     } else {
-      return res.status(400).json({ error: "Provide lead_post_uri or a segment filter." });
+      // NAMED (Nov 23 2026, LR-1): BEFORE a segment filter drafted up to 10 leads a click; removed
+      return res.status(400).json({ error: "Provide lead_post_uri: one lead is drafted at a time." });
     }
 
     if (!targetLeads.length) {
@@ -59363,20 +58425,158 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
     for (var i = 0; i < targetLeads.length; i++) {
       var lead = targetLeads[i];
       var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
-      var converted = await convertSingleLead(userId, lead, sharedSystemPrompt, false);
+      var converted = await convertSingleLead(userId, lead, sharedSystemPrompt);
 
       results.push({
-        lead_post_uri: lead.post_uri,
-        handle: handle,
-        conversion: converted.conversion,
-        sent: converted.sent,
-        send_reason: converted.send_reason
+        lead_post_uri:   lead.post_uri,
+        handle:          handle,
+        conversion:      converted.conversion,
+        draft:           converted.draft,
+        draft_rejection: converted.draft_rejection,
+        sent:            false
       });
     }
 
     return res.json({ success: true, results: results });
   } catch (error) {
     console.error("[sales/convert] Error:", error);
+    next(error);
+  }
+});
+
+/* NAMED (Nov 23 2026, LR-1): THE ONE SEND. Posts exactly the text a person approved, for one Bluesky lead,
+   through sendBlueskyReply. Owner only for now (group M plus the owner check).
+
+   Refuses unless: SALES_SEND_LIVE is exactly "true" (the master switch); the text is
+   present, at most 300 characters after the emoji strip, and links nowhere but the
+   lead's own destination (outreachDraftRejection); the lead is a Bluesky lead,
+   scored, not archived, posted within OUTREACH_MAX_POST_AGE_DAYS, outreach_safe = true
+   and reply_invited = true; nobody has replied to that post yet; and the caps allow it.
+
+   THE CAPS ARE CHECKED AT THE SEND, inside one guarded step (reserveOutreachSend): the
+   send is first RESERVED as an outreach_sends row (the unique index on user and post
+   makes a second reservation for the same post fail), then today's sends are counted
+   WITH the reservation in them. Over OUTREACH_DAILY_CAP or OUTREACH_ACCOUNT_DAILY_CEILING
+   the reservation is removed and nothing is posted. Two racing requests both see each
+   other's reservation, so neither can take the last slot twice: at worst both refuse.
+   A send that does not go out removes its reservation; one that does fills in its uri. */
+var outreachSendQueue = Promise.resolve();
+function outreachSerial(fn) {
+  var run = outreachSendQueue.then(fn, fn);
+  outreachSendQueue = run.then(function () {}, function () {});
+  return run;
+}
+
+async function reserveOutreachSend(userId, lead) {
+  var anyReply = await supabase.from("outreach_sends").select("id").eq("lead_post_uri", lead.post_uri).limit(1);
+  if (anyReply.error) return { ok: false, reason: "check_failed" };
+  if ((anyReply.data || []).length) return { ok: false, reason: "already_contacted" };
+
+  var reserved = await supabase.from("outreach_sends")
+    .insert({ user_id: userId, lead_post_uri: lead.post_uri, source: lead.source || "bluesky", platform_uri: null })
+    .select("id").single();
+  if (reserved.error) {
+    return { ok: false, reason: reserved.error.code === "23505" ? "already_contacted" : "check_failed" };
+  }
+  var id = reserved.data.id;
+  async function release() { await supabase.from("outreach_sends").delete().eq("id", id); }
+  try {
+    var mine = await outreachSendsToday(userId);
+    if (mine > OUTREACH_DAILY_CAP) { await release(); return { ok: false, reason: "daily_cap_reached" }; }
+    var all = await outreachSendsAccountToday();
+    if (all > OUTREACH_ACCOUNT_DAILY_CEILING) { await release(); return { ok: false, reason: "account_ceiling_reached" }; }
+  } catch (countErr) {
+    await release();
+    console.error("[outreach] Cap check failed at the send — refusing:", (countErr && countErr.message) || countErr);
+    return { ok: false, reason: "check_failed" };
+  }
+  return { ok: true, id: id, release: release };
+}
+
+const SEND_APPROVED_MAX_CHARS = 300;
+
+app.post("/api/agents/sales/send-approved", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) return res.status(403).json(OUTREACH_UNAVAILABLE);
+
+    if (process.env.SALES_SEND_LIVE !== "true") {
+      return res.status(409).json({ error: "Posting replies is switched off (SALES_SEND_LIVE). Nothing was posted.", code: "send_off" });
+    }
+
+    var leadPostUri = safeText(req.body && req.body.lead_post_uri, 500);
+    if (!leadPostUri) return res.status(400).json({ error: "Provide lead_post_uri." });
+
+    var rawText = typeof (req.body && req.body.text) === "string" ? req.body.text : "";
+    var text = stripOutreachEmoji(rawText);
+    if (!text) return res.status(400).json({ error: "Write the reply you approve first.", field: "text" });
+    if (Array.from(text).length > SEND_APPROVED_MAX_CHARS) {
+      return res.status(400).json({ error: "A reply can be at most " + SEND_APPROVED_MAX_CHARS + " characters.", field: "text" });
+    }
+
+    var leadRead = await supabase.from("bsky_leads").select("*").eq("post_uri", leadPostUri).maybeSingle();
+    if (leadRead.error) throw leadRead.error;
+    var lead = leadRead.data;
+    if (!lead) return res.status(404).json({ error: "Lead not found." });
+
+    var refusals = [];
+    if (OUTREACH_SENDABLE_SOURCES.indexOf(lead.source) === -1) refusals.push("unsupported_source");
+    if (lead.status !== "scored" || !leadHasRealScore(lead)) refusals.push("not_scored");
+    if (lead.outreach_safe !== true) refusals.push("not_outreach_safe");
+    if (lead.reply_invited !== true) refusals.push("reply_not_invited");
+    var postMs = lead.post_created_at ? Date.parse(lead.post_created_at) : NaN;
+    if (!Number.isFinite(postMs) || postMs < Date.now() - OUTREACH_MAX_POST_AGE_DAYS * 24 * 60 * 60 * 1000) refusals.push("post_too_old");
+    if (refusals.length) {
+      return res.status(422).json({ error: "This lead cannot be replied to.", reasons: refusals });
+    }
+
+    var offerDestination = lead.suggested_product === OUTREACH_BOOK_PRODUCT ? OUTREACH_BOOK_DESTINATION : OUTREACH_PRODUCT_DESTINATIONS[lead.suggested_product];
+    /* The draft carries this lead's own arrival link (withOutreachTracking adds ?ref=<token> to a
+       BizForce destination after the draft's link check). That one exact form reads as the
+       destination here; any other query, token or page is still refused. */
+    var checkText = text;
+    if (offerDestination) {
+      try {
+        var destUrl = new URL(offerDestination);
+        checkText = text.split(destUrl.origin + destUrl.pathname + "?ref=" + outreachRefToken(lead)).join(offerDestination);
+      } catch (destErr) { checkText = text; }
+    }
+    var linkRejection = outreachDraftRejection(checkText, offerDestination);
+    if (linkRejection) return res.status(400).json({ error: "This reply can't be posted: " + linkRejection + ".", field: "text" });
+
+    var outcome = await outreachSerial(async function () {
+      var slot = await reserveOutreachSend(userId, lead);
+      recordGateDecision(userId, "outreach_send", "lead", { G23: { result: "pass" }, G22: slot.ok ? { result: "pass" } : { result: "fail", code: slot.reason } },
+        { facts: { agent: "sales" } });
+      if (!slot.ok) return { sent: false, reason: slot.reason };
+      var result;
+      try {
+        result = await sendBlueskyReply(lead, text);
+      } catch (sendErr) {
+        result = { sent: false, reason: "post_error", error: (sendErr && sendErr.message) || String(sendErr) };
+      }
+      if (!result || !result.sent) { await slot.release(); return result || { sent: false, reason: "post_error" }; }
+      var filled = await supabase.from("outreach_sends").update({ platform_uri: result.uri || null }).eq("id", slot.id);
+      if (filled.error) console.error("[outreach] reply posted but its uri was not recorded:", filled.error.message);
+      return result;
+    });
+
+    if (!outcome.sent) {
+      var status = outcome.reason === "rate_limited" ? 429 : (outcome.reason === "post_error" ? 502 : 409);
+      return res.status(status).json({ error: "Nothing was posted.", reason: outcome.reason, retry_after_seconds: outcome.retry_after_seconds || null });
+    }
+
+    var at = nowIso();
+    var pipe = await supabase.from("sales_lead_pipeline").upsert({ user_id: userId, lead_post_uri: lead.post_uri, status: "contacted", last_draft: text, updated_at: at },
+      { onConflict: "user_id,lead_post_uri" });
+    if (pipe.error) console.error("[sales/send-approved] pipeline update failed:", pipe.error.message);
+    var task = await supabase.from("ai_tasks").insert({ user_id: userId, agent_type: "sales", prompt: "Sales reply posted (approved): " + formatLeadHandle(lead.author_handle || "unknown"),
+      result: text, status: "sent", error: null });
+    if (task.error) console.error("[sales/send-approved] ai_tasks insert failed:", task.error.message);
+
+    return res.json({ sent: true, uri: outcome.uri || null, text: text });
+  } catch (error) {
+    console.error("[sales/send-approved] Error:", error);
     next(error);
   }
 });
@@ -59491,6 +58691,7 @@ app.get("/api/agents/sales/pipeline", requireAuth, async function (req, res, nex
       .from("sales_lead_pipeline")
       .select("*")
       .eq("user_id", userId)
+      .neq("status", "archived")   // NAMED (Nov 23 2026, LR-1): archived rows never appear as leads
       .order("updated_at", { ascending: false });
 
     if (pipelineResult.error) {
@@ -59913,8 +59114,8 @@ async function dripTick() {
 }
 
 // Drip scheduler. Gated on ENABLE_DRIP_SCHEDULER, in the same style as the other
-// background-job gates in this file (ENABLE_SALES_AUTOLOOP,
-// ENABLE_STORE_PROPOSAL_JOB, ENABLE_NIGHTLY_BACKUP) and as ENABLE_AUTO_JOBS was
+// background-job gates in this file (ENABLE_STORE_PROPOSAL_JOB,
+// ENABLE_NIGHTLY_BACKUP) and as ENABLE_AUTO_JOBS was
 // before them: the same lowercase `=== "true"` comparison, so absent, blank,
 // "TRUE" and "1" all mean off. Default OFF.
 //
@@ -59927,7 +59128,8 @@ async function dripTick() {
 //
 // Manual runs through POST /api/sms/run-engine are unaffected — they call
 // runDripEngine directly and never look at this flag.
-if (process.env.ENABLE_DRIP_SCHEDULER === "true") {
+// NAMED (Nov 23 2026, LR-1): and only when server.js is the program, like the other jobs (a check that loads this file starts nothing)
+if (require.main === module && process.env.ENABLE_DRIP_SCHEDULER === "true") {
   shutdownControl.trackInterval("dripTick", setInterval(dripTick, 300000));
   dripTick();
   console.log("[startup] dripTick scheduled — every 5 minutes (ENABLE_DRIP_SCHEDULER=true)");
@@ -60035,144 +59237,9 @@ if (require.main === module) {
   console.log("[startup] reminder scheduler not started: server.js was loaded by another script (a check), not run as the program.");
 }
 
-// Sales Agent auto-conversion timer — Option A: wired directly here in
-// server.js, completely independent of leadRadar.js's radarTick/5-minute
-// cycle (not touching that file at all). Reentrancy guard mirrors
-// leadRadar.js's own radarRunning pattern.
-//
-// SALES_AUTOLOOP_DRY_RUN is not set in .env yet, so runSalesAutoConvert()'s
-// own dryRun check (`process.env.SALES_AUTOLOOP_DRY_RUN !== "false"`)
-// defaults to true — this timer will run in DRY RUN mode (outreach is
-// generated and ai_tasks/agent_memory rows are written, clearly tagged
-// "[DRY RUN]" / status "dry_run", but sales_lead_pipeline is left
-// untouched) until SALES_AUTOLOOP_DRY_RUN=false is explicitly added to
-// the environment.
-var salesAutoConvertRunning = false;
+// NAMED (Nov 23 2026, LR-1): salesAutoConvertTick, the automatic sales loop's timer, is retired.
 
-async function salesAutoConvertTick() {
-  if (salesAutoConvertRunning) {
-    console.log("[SalesAutoConvert] Tick skipped — previous run still in progress");
-    return;
-  }
-
-  /* ── DAILY DRAFTING CAP ───────────────────────────────────────────────────
-     A ceiling on DRAFTS, not on sends, and it applies in dry-run mode exactly
-     as it applies live.
-
-     WHY THIS EXISTS. OUTREACH_DAILY_CAP was the only ceiling this path had, and
-     it is consulted inside the `if (!dryRun)` branch of convertSingleLead. So
-     it limited how many replies could be POSTED and never limited how many
-     model calls could be BILLED — and in dry-run mode, the mode this loop
-     defaults to, it was not consulted at all. The result was a pass drafting up
-     to five leads every five minutes, around the clock, with nothing counting
-     the spend: roughly 1,440 drafts a day, which is what happened across two
-     episodes in July and August.
-
-     A dry run is billed identically to a live one. It skips the send, not the
-     invoice. So the gate that bounds spend has to be a gate on drafting, and it
-     has to apply in both modes — which is why this sits here rather than beside
-     the send. */
-
-  /* The cap, from SALES_AUTOLOOP_DAILY_DRAFT_CAP, defaulting to 50.
-
-     Parsed defensively because Number("") is 0 in JavaScript, not NaN. A blank
-     or whitespace-only variable would otherwise parse as a deliberate cap of
-     zero and silently disable the loop entirely, which is a different decision
-     from not having configured it. Missing, blank, non-numeric, zero and
-     negative all fall back to the default; only a finite positive number is
-     honoured as a deliberate setting. */
-  var SALES_AUTOLOOP_DEFAULT_DRAFT_CAP = 50;
-  var rawDraftCap = process.env.SALES_AUTOLOOP_DAILY_DRAFT_CAP;
-  var parsedDraftCap = Number(rawDraftCap);
-  var dailyDraftCap =
-    (rawDraftCap != null && String(rawDraftCap).trim() !== "" &&
-     Number.isFinite(parsedDraftCap) && parsedDraftCap > 0)
-      ? parsedDraftCap
-      : SALES_AUTOLOOP_DEFAULT_DRAFT_CAP;
-
-  /* The four statuses convertSingleLead writes to ai_tasks, all of them after
-     the model call has been made and billed: "dry_run" for a rehearsal, "sent"
-     for a posted reply, "send_failed" for one that errored on the way out, and
-     "drafted" for a live run that produced text but sent nothing. Every one of
-     them cost a generation, which is why every one of them counts here.
-
-     Its two early returns — an unsupported product and a cap refusal — return
-     before any ai_tasks row is written, and neither spends. They are absent
-     from this list because they are absent from the table. */
-  var SALES_DRAFTING_STATUSES = ["dry_run", "sent", "send_failed", "drafted"];
-
-  /* The count deliberately includes conversions a person started by hand
-     through POST /api/agents/sales/convert. Both paths call convertSingleLead
-     and both bill the same generation, so a budget that ignored one of them
-     would not be a budget.
-
-     What it does NOT do is block that path. The cap gates this background tick
-     and nothing else: a user asking for a conversion still gets one after the
-     loop has stopped for the day. The asymmetry is deliberate — an unattended
-     timer spending in a loop is the thing worth stopping, and a person waiting
-     on a request they just made is not. */
-  var capNow = new Date();
-  var utcDayStart = new Date(Date.UTC(
-    capNow.getUTCFullYear(),
-    capNow.getUTCMonth(),
-    capNow.getUTCDate()
-  ));
-  var utcDayLabel = utcDayStart.toISOString().slice(0, 10);
-
-  var draftedTodayResult;
-  try {
-    // head: true asks PostgREST for the count and no rows at all.
-    draftedTodayResult = await supabase
-      .from("ai_tasks")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", OUTREACH_CREDENTIAL_OWNER_ID)
-      .eq("agent_type", "sales")
-      .in("status", SALES_DRAFTING_STATUSES)
-      .gte("created_at", utcDayStart.toISOString());
-  } catch (capErr) {
-    draftedTodayResult = { error: capErr };
-  }
-
-  /* FAIL CLOSED. An unreadable count is not a low count. If this read fails the
-     tick stops, exactly as if the cap had been reached, because the alternative
-     is a spend gate that opens precisely when it has lost the ability to see
-     what it is guarding — and the failure mode there is unbounded billing
-     during a database problem, which is the worst possible moment for it. A
-     gate that cannot read itself is not a gate. Skipping one pass costs five
-     drafts; opening on error costs whatever the outage lasts. */
-  if (draftedTodayResult && draftedTodayResult.error) {
-    console.error("[SalesAutoConvert] Tick ABORTED — could not read today's draft count for user " +
-      OUTREACH_CREDENTIAL_OWNER_ID + " (UTC day " + utcDayLabel + "): " +
-      (draftedTodayResult.error.message || draftedTodayResult.error) +
-      (draftedTodayResult.error.code ? " (" + draftedTodayResult.error.code + ")" : "") +
-      ". Failing closed and drafting nothing this pass rather than spending against a cap that cannot be checked.");
-    return;
-  }
-
-  var draftedToday = draftedTodayResult.count || 0;
-
-  if (draftedToday >= dailyDraftCap) {
-    console.log("[SalesAutoConvert] Tick skipped — " + draftedToday + " draft(s) already made for user " +
-      OUTREACH_CREDENTIAL_OWNER_ID + " on UTC day " + utcDayLabel + ", at or above the daily cap of " +
-      dailyDraftCap + " (SALES_AUTOLOOP_DAILY_DRAFT_CAP). No leads selected and no model calls made. " +
-      "This cap applies to dry runs as well as live runs, because both are billed.");
-    return;
-  }
-
-  salesAutoConvertRunning = true;
-  console.log("[SalesAutoConvert] Tick starting...");
-  try {
-    await runSalesAutoConvert();
-  } catch (err) {
-    console.error("[SalesAutoConvert] Tick error:", err.message || err);
-  } finally {
-    salesAutoConvertRunning = false;
-    console.log("[SalesAutoConvert] Tick finished.");
-  }
-}
-
-// Store Agent daily proposal pass. No longer the salesAutoConvertTick pattern
-// the comment here used to describe: that pattern is a boot-relative
+// Store Agent daily proposal pass. Not a boot-relative interval: that pattern is a boot-relative
 // setInterval, and this job is now a wall-clock cron schedule with a durable
 // per-day claim in public.job_runs, because a boot-relative daily timer on
 // Railway follows deploys instead of the clock. The in-process reentrancy guard
@@ -60586,8 +59653,8 @@ function selfReviewClaimDay() {
 /* The per-tick ceiling on GENERATIONS, from SELF_REVIEW_MAX_PER_TICK,
    defaulting to 10.
 
-   Parsed the same defensive way SALES_AUTOLOOP_DAILY_DRAFT_CAP is, and for the
-   same reason: Number("") is 0 in JavaScript, not NaN. A blank or
+   Parsed defensively (as the retired sales loop's draft cap was), for this
+   reason: Number("") is 0 in JavaScript, not NaN. A blank or
    whitespace-only variable would otherwise parse as a deliberate ceiling of
    zero and silently disable the job while looking configured. Missing, blank,
    non-numeric, zero and negative all fall back to the default; only a finite
@@ -62243,6 +61310,8 @@ shutdownControl.setServer(app.listen(PORT, function () {
      each, which is how a suite run hammered the login into 429s. Production
      runs `node server.js` (package.json "start"), where this holds. */
   if (require.main === module) {
+    // NAMED (Nov 23 2026, LR-1): the scorer's calls go on the model_calls ledger and through the caps
+    require("./leadRadar").setModelLedger({ record: recordModelCall, enforce: enforceDailyModelCallLimit });
     startLeadRadar(shutdownControl.trackInterval).catch(function (err) {
       console.error("[LeadRadar] startup error:", err.message || err);
     });
@@ -62251,27 +61320,8 @@ shutdownControl.setServer(app.listen(PORT, function () {
       "and the radar would log in to the live Bluesky account.");
   }
 
-  // Fire once ~60s after boot (so it doesn't compete with startup load),
-  // then on its own independent 5-minute interval thereafter. Gated behind
-  // ENABLE_SALES_AUTOLOOP (defaults OFF) so this background Claude spend only
-  // happens when explicitly opted into — manual /api/agents/sales/convert
-  // calls are unaffected, since they call convertSingleLead directly.
-  //
-  // Its own flag rather than a shared background-jobs flag because of what it
-  // costs: it drafts a conversion for every high-intent lead every five
-  // minutes and sends nothing unless SALES_SEND_LIVE is also set, so with that
-  // absent it spends money to produce text nobody reads. Off by default, and
-  // it should stay off unless sending is on.
-  if (process.env.ENABLE_SALES_AUTOLOOP === "true") {
-    setTimeout(function () {
-      salesAutoConvertTick().catch(function (err) {
-        console.error("[SalesAutoConvert] Initial run error:", err.message || err);
-      });
-    }, 60000);
-    shutdownControl.trackInterval("salesAutoConvertTick", setInterval(salesAutoConvertTick, 300000));
-  } else {
-    console.log("[startup] salesAutoConvertTick disabled (ENABLE_SALES_AUTOLOOP not true)");
-  }
+  // NAMED (Nov 23 2026, LR-1): the automatic sales loop (salesAutoConvertTick, ENABLE_SALES_AUTOLOOP) is retired by the
+  // owner's rule: nothing is posted to anyone outside BizForce without a person approving that exact text.
 
   // Daily Store Agent proposal pass. Gated on ENABLE_STORE_PROPOSAL_JOB alone.
   // It used to also require a shared background-jobs flag, but that second gate
@@ -62699,10 +61749,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] runNightlyBackup disabled (ENABLE_NIGHTLY_BACKUP not true)");
   }
 
-  // RedditRadar disabled — Railway datacenter IP blocked by Reddit; revive later via residential proxy
-  // startRedditRadar().catch(function (err) {
-  //   console.error("[RedditRadar] startup error:", err.message || err);
-  // });
+  // NAMED (Nov 23 2026, LR-1): redditRadar.js is deleted (it never ran: Reddit blocks Railway's addresses).
 }));
 
 /* SIGTERM, SIGINT and the two crash events (lib/gracefulShutdown.js), ONLY WHEN
@@ -62716,14 +61763,12 @@ if (require.main === module) {
 }
 
 module.exports = {
-  runSalesAutoConvert,
 
   /* Exported for the entitlement check scripts. None of these passes is a route
      and none can be driven with a request, so the checks drive the real
      functions rather than copies of them — a re-implementation would prove only
      that the copy is gated. */
   __runSelfReviewPass: runSelfReviewPass,
-  __runSalesAutoConvert: runSalesAutoConvert,
   __runStoreProposalPass: runStoreProposalPass,
   __selfReviewPlanFor: function (userId) { return getUserPlan(userId); },
 

@@ -833,6 +833,11 @@ const SECTIONS = ["needs_you", "plans", "activity", "autopilot", "outbound", "sp
     check("the registry is the scheduler's: each of server.js's " + crons.length + " cron.schedule calls has exactly one entry, with the same expression",
       crons.length === 14 && regCron.length === crons.length && matched.every(Boolean) && new Set(matched).size === crons.length,
       JSON.stringify(crons.map((c, i) => [c.expr, matched[i] && matched[i].tick])));
+    // NAMED (Nov 23 2026, LR-1): BEFORE server.js's three tracked intervals (and salesAutoConvertTick, now retired). AFTER
+    // also the radar's own tick, started and tracked in leadRadar.js (setInterval(radarTick, 300000), tracked as leadRadarTick).
+    { const lr = /var handle = setInterval\(radarTick, (\d+)\);\n\s*if \(typeof track === "function"\) track\("leadRadarTick", handle\);/.exec(
+        fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8").replace(/\r\n/g, "\n"));
+      if (lr) intervals.push({ tick: "leadRadarTick", ms: Number(lr[1]) }); }
     check("... and each tracked setInterval has its entry with the same interval",
       intervals.length === regEvery.length && intervals.every(t => regEvery.some(r => r.tick === t.tick && r.every_ms === t.ms)), JSON.stringify(intervals));
     const libDir = path.join(REPO, "lib");

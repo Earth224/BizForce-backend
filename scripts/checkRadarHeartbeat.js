@@ -23,6 +23,10 @@
      E. A radar that was loaded but not started writes no heartbeat, and
         server.js starts it only when server.js is the program — so loading
         server.js, as about twenty checks do, writes none.
+     F. NAMED (Nov 23 2026, LR-1): YouTube writes its own radar_status row (source 'youtube') after a
+        pass that ran: its outcome, searches and captured count; an error pass
+        and a thrown pass write outcome 'error'; a pass that did not run (inside
+        the 3-hour gap) writes nothing; with ENABLE_YOUTUBE_RADAR off, nothing.
 
    MUTATE=<name> edits leadRadar.js IN MEMORY (nothing on disk is touched).
    MUTATE=all runs each in its own process; an unmatched search text is an
@@ -41,8 +45,13 @@ const MUTATIONS = {
   // searches is written as 0 even when the tick searched nothing (a back-off skip)
   "zero-for-uncounted": [[RADAR, "    searches: skipped ? null : tick.searches,", "    searches: tick.searches,"]],
   // a radar that was never started writes the heartbeat anyway
-  "heartbeat-without-start": [[RADAR, "async function writeRadarHeartbeat(fields, when) {\n  if (!radarStarted) return;\n", "async function writeRadarHeartbeat(fields, when) {\n"]],
+  // NAMED (Nov 23 2026, LR-1): BEFORE (fields, when); the function takes a source now
+  "heartbeat-without-start": [[RADAR, "async function writeRadarHeartbeat(fields, when, source) {\n  if (!radarStarted) return;\n", "async function writeRadarHeartbeat(fields, when, source) {\n"]],
   // a tick skipped for a back-off is recorded as nothing_new
+  // NAMED (Nov 23 2026, LR-1): the YouTube pass writes no heartbeat
+  "youtube-heartbeat-skipped": [[RADAR, "        if (yt) {\n          await writeRadarHeartbeat({", "        if (false) {\n          await writeRadarHeartbeat({"]],
+  // NAMED (Nov 23 2026, LR-1): the YouTube row is written under the Bluesky source
+  "youtube-heartbeat-as-bluesky": [[RADAR, "          }, \"youtube pass\", \"youtube\");\n        }", "          }, \"youtube pass\");\n        }"]],
   "nothing-new-in-backoff": [[RADAR, "  if (tick.stop) {\n    row.last_outcome = tick.stop.outcome;", "  if (tick.stop && !tick.stop.skipped) {\n    row.last_outcome = tick.stop.outcome;"]]
 };
 if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -153,8 +162,8 @@ function radar(opts) {
     if (name === "@supabase/supabase-js") return { createClient: () => supabase };
     if (name === "@atproto/api") return { BskyAgent: FakeBskyAgent };
     if (name === "@anthropic-ai/sdk") return function Anthropic() { throw new Error("no model in this check"); };
-    if (name === "./mastodonRadar") return { runMastodonRadarOnce: async () => {} };
-    if (name === "./youtubeRadar") return { runYoutubeRadarOnce: async () => {} };
+    // NAMED (Nov 23 2026, LR-1): BEFORE a "./mastodonRadar" stub too; leadRadar.js no longer requires it (the file is deleted)
+    if (name === "./youtubeRadar") return { runYoutubeRadarOnce: async () => { if (o.youtube instanceof Error) throw o.youtube; return o.youtube === undefined ? null : o.youtube; } };
     if (name === "./lib/resolveAnthropicKey") return () => async () => null;
     if (name === "./lib/bskyGate") return gateModule;
     if (name === "./lib/ownerAccount") return require(path.join(REPO, "lib/ownerAccount"));
@@ -292,8 +301,36 @@ const KEYWORDS = 32;
   // shutdownControl.trackInterval (a SIGTERM stops its interval). Still exactly one call, still guarded.
   const startSite = FILES[SERVER].indexOf("    startLeadRadar(shutdownControl.trackInterval).catch(function (err) {");
   const guard = FILES[SERVER].lastIndexOf("  if (require.main === module) {\n", startSite);
+  // NAMED (Nov 23 2026, LR-1): BEFORE the start sat under 60 characters after the guard; AFTER the ledger hand-in (setModelLedger) sits
+  // between them, inside the same guard, so the distance is under 300 and the hand-in must be there too.
+  const handIn = FILES[SERVER].indexOf("    require(\"./leadRadar\").setModelLedger({ record: recordModelCall, enforce: enforceDailyModelCallLimit });\n", guard);
   check("server.js starts the radar only when it is the program, so loading it (as the checks do) writes no heartbeat",
-    startSite > 0 && guard > 0 && startSite - guard < 60 && (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1);
+    startSite > 0 && guard > 0 && startSite - guard < 300 && handIn > guard && handIn < startSite && (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1);
+
+  /* ── F. YouTube's own heartbeat ───────────────────────────────────────── */
+  // NAMED (Nov 23 2026, LR-1): radar_status written for youtube too
+  console.log("\n══ F. YouTube writes its own radar_status row ══");
+  const ytRows = (st) => st.heartbeats.filter(h => h.source === "youtube");
+  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" }, youtube: { outcome: "captured", searches: 3, matched: 5, captured: 2, capturedKnown: true, error: null } });
+  await R.mod.startLeadRadar(); await flush();
+  let yr = ytRows(R.state)[0] || {};
+  check("F1. a pass that ran: one youtube row, outcome captured, searches 3, captured 2, no error",
+    ytRows(R.state).length === 1 && yr.last_outcome === "captured" && yr.searches === 3 && yr.captured === 2 && yr.last_error === null && !!yr.last_tick_started_at && !!yr.last_tick_finished_at, JSON.stringify(ytRows(R.state)));
+  check("F1. ... and the Bluesky rows stay source bluesky", R.state.heartbeats.filter(h => h.source !== "youtube").every(h => h.source === "bluesky"), JSON.stringify(R.state.heartbeats.map(h => h.source)));
+  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" }, youtube: { outcome: "error", searches: 1, matched: 0, captured: 0, capturedKnown: false, error: "upsert for 'x': boom" } });
+  await R.mod.startLeadRadar(); await flush();
+  yr = ytRows(R.state)[0] || {};
+  check("F2. an uncounted capture is null, never 0, and the error is kept", yr.last_outcome === "error" && yr.captured === null && /boom/.test(yr.last_error || ""), JSON.stringify(yr));
+  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" }, youtube: new Error("quota ledger down") });
+  await R.mod.startLeadRadar(); await flush();
+  yr = ytRows(R.state)[0] || {};
+  check("F3. a pass that throws: outcome error, nulls, the message", yr.last_outcome === "error" && yr.searches === null && yr.captured === null && /quota ledger down/.test(yr.last_error || ""), JSON.stringify(yr));
+  R = radar({ env: { ENABLE_YOUTUBE_RADAR: "true" } });
+  await R.mod.startLeadRadar(); await flush();
+  check("F4. a pass that did not run (null, inside the 3-hour gap): no youtube row", ytRows(R.state).length === 0, JSON.stringify(ytRows(R.state)));
+  R = radar({ youtube: { outcome: "captured", searches: 1, matched: 1, captured: 1, capturedKnown: true, error: null } });
+  await R.mod.startLeadRadar(); await flush();
+  check("F5. YouTube switched off: no youtube row", ytRows(R.state).length === 0, JSON.stringify(ytRows(R.state)));
 
   check("zero Bluesky calls left this process (the agent is a stub)", true);
   console.log("");

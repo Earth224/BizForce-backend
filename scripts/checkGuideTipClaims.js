@@ -308,7 +308,7 @@ const DASH = "analytics-dashboard.html", BILLING = "billing.html", SALES = "agen
   RADAR_PAGE = "agents/lead-radar.html", BROKER = "broker-agent.html", PUBLICIST = "publicist-agent.html", COMMUNITY = "community-agent.html";
 const SEO = "agents/seo.html", CONTENT = "agents/content.html", SOCIAL = "agents/social.html", EMAIL = "email-agent.html", STORE = "store-agent.html",
   INFLUENCER = "influencer-agent.html", OPERATIONS = "operations-agent.html", RD = "rd-agent.html", CARDS = "digital-cards.html", BIZID = "business-id.html";
-const SERVER = "server.js", BRAIN = "config/brain.js", RADARS = ["leadRadar.js", "mastodonRadar.js", "youtubeRadar.js"];
+const SERVER = "server.js", BRAIN = "config/brain.js", RADARS = ["leadRadar.js", "youtubeRadar.js"];   // NAMED (Nov 23 2026, LR-1): BEFORE + "mastodonRadar.js" (deleted)
 const RETENTION = "lib/youtubeRetention.js";
 // The guide's keys are bare filenames; these seven pages live in agents/.
 const IN_AGENTS = ["seo.html", "sales.html", "content.html", "social.html", "analytics.html", "lead-radar.html", "sms.html"];
@@ -350,8 +350,8 @@ const MUTATIONS = {
   // only the guide-wide guard G1 can catch it
   "warnings-panel-elsewhere": [[GUIDE, '"Document a workflow before you automate it;',
     '"Check the Warnings panel, then document a workflow before you automate it;']],
-  // Mastodon capture loses its switch: the "only when switched on" wording would be false
-  "mastodon-ungated": [["leadRadar.js", 'if (process.env.ENABLE_MASTODON_RADAR === "true") {', "if (true) {"]],
+  // NAMED (Nov 23 2026, LR-1): BEFORE "mastodon-ungated" (ENABLE_MASTODON_RADAR is gone). AFTER Mastodon is scored again: the tip and subtitle naming only Bluesky would be false
+  "mastodon-scored-again": [["leadRadar.js", 'const SCORABLE_SOURCES = ["bluesky"];', 'const SCORABLE_SOURCES = ["bluesky", "mastodon"];']],
   // ── groups 6–10 ──
   // wallet tip 68 states the invented payouts again
   "restore-wallet-68-amounts": [[GUIDE,
@@ -392,7 +392,9 @@ const MUTATIONS = {
   "history-unlimited": [[SERVER, ".select(\"id, type, amount, description, created_at\")\n      .eq(\"user_id\", req.user.id)\n      .order(\"created_at\", { ascending: false })\n      .limit(50);",
     ".select(\"id, type, amount, description, created_at\")\n      .eq(\"user_id\", req.user.id)\n      .order(\"created_at\", { ascending: false });"]],
   // the marketplace edit sends a status: "nothing sends a status" would be false
-  "marketplace-sends-status": [["marketplace.html", "tags: tagsRaw, media: listingMedia };", "tags: tagsRaw, media: listingMedia, status: \"paused\" };"]],
+  // NAMED (Nov 23 2026, LR-1B): BEFORE anchored on "media: listingMedia };", which P2-2 (279e0f3) changed to
+  // mediaForSave(), so the mutation could not apply and survived. AFTER anchored on the current edit payload.
+  "marketplace-sends-status": [["marketplace.html", "tags: tagsRaw, media: mediaForSave() };", "tags: tagsRaw, media: mediaForSave(), status: \"paused\" };"]],
   // the Autonomous mode copy claims the agent acts on what it finds again
   "restore-act-on-findings": [[AP, "' carry out its scheduled runs below in the ',\n                  'background, without you launching them. Off means it ',",
     "' start its own tasks in the background ',\n                  'without you launching them, and act on what it finds. Off means it ',"]],
@@ -438,7 +440,8 @@ const MUTATIONS = {
   // the drip engine leaves dry-run mode: the sms tips would be false
   "drip-engine-sends": [[SERVER, "    var DRY_RUN = true;\n", "    var DRY_RUN = false;\n"]],
   // direct SMS sending opens: sms tip 5 would be false
-  "direct-sms-opens": [[SERVER, "\nconst SMS_DIRECT_SEND_ENABLED = false;", "\nconst SMS_DIRECT_SEND_ENABLED = true;"]],
+  // NAMED (Nov 23 2026, LR-1): BEFORE flipped SMS_DIRECT_SEND_ENABLED (deleted with the Twilio send code). AFTER the route answers success instead of 503
+  "direct-sms-opens": [[SERVER, '  return res.status(503).json({ error: "SMS sending is not offered.", code: "sms_not_offered" });', '  return res.json({ ok: true });']],
   // ── D, block C's leftovers ──
   // agents/sms.html's subtitle claims to reach customers with automated drip campaigns again
   "restore-sms-subtitle": [["agents/sms.html", "<p class=\"agent-subtitle\">SMS subscribers and consent, drip campaigns built message by message, enrollment, and a dry-run log of what would go out — no text is sent.</p>",
@@ -629,9 +632,10 @@ check("L. the tip says it searches a fixed set of buyer-intent phrases on Bluesk
 // from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it."). AFTER, the
 // switches tip says "Mastodon, YouTube and scoring each wait on their own switch", and the YouTube section's own
 // heading and the page subtitle carry the rest (both asserted below); no tip may restate the old, false lines.
-const lrSwitchTip = tipWith(lrTips, "Mastodon, YouTube and scoring each wait on their own switch");
-check("L. a tip says Mastodon, YouTube and scoring each wait on their own switch, and no tip says YouTube is switched off or unshown (named after: was the YouTube paragraph)",
-  !!lrSwitchTip && /New Bluesky finds arrive every 5 minutes/.test(lrSwitchTip) &&
+// NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon, YouTube and scoring each wait on their own switch"; AFTER Mastodon lead search is removed.
+const lrSwitchTip = tipWith(lrTips, "YouTube and scoring each wait on their own switch");
+check("L. a tip says YouTube and scoring each wait on their own switch, and names no Mastodon capture, and no tip says YouTube is switched off or unshown (named after: was the YouTube paragraph)",
+  !!lrSwitchTip && /New Bluesky finds arrive every 5 minutes/.test(lrSwitchTip) && !/Mastodon/.test(lrSwitchTip) &&
   lrTips.every(t => !/YouTube capture is switched off|Older scored YouTube finds can appear|YouTube finds are not shown here/.test(t)), lrSwitchTip);
 check("L. the tip says it does not read your Business Profile", /does not read your Business Profile/.test(lrTip));
 check("L. no Lead Radar tip makes a Business Profile claim: the profile is named only in that denial",
@@ -643,9 +647,10 @@ check("L. the rewritten tip uses no watching word", !WATCHING.test(lrTip), lrTip
 const PROFILE_READ = /business_profiles|businessProfile|bfLoadBusinessContext/;
 check("L. no radar file reads business_profiles or a business profile",
   RADARS.every(f => !PROFILE_READ.test(FILES[f])), RADARS.filter(f => PROFILE_READ.test(FILES[f])).join(", "));
-check("L. the searches are fixed lists in code: KEYWORDS and BIZFORCE_KEYWORDS, HASHTAGS, and YouTube's KEYWORDS",
+// NAMED (Nov 23 2026, LR-1): BEFORE also mastodonRadar.js's HASHTAGS; that file is deleted.
+check("L. the searches are fixed lists in code: KEYWORDS and BIZFORCE_KEYWORDS, and YouTube's KEYWORDS",
   /\nconst KEYWORDS = \[/.test(FILES["leadRadar.js"]) && /\nconst BIZFORCE_KEYWORDS = \[/.test(FILES["leadRadar.js"]) &&
-  /\nconst HASHTAGS = \[/.test(FILES["mastodonRadar.js"]) && /\nconst KEYWORDS = \[/.test(FILES["youtubeRadar.js"]));
+  /\nconst KEYWORDS = \[/.test(FILES["youtubeRadar.js"]));
 check("L. the Lead Radar page itself reads no business profile", !/business_profile|bfLoadBusinessContext|\/api\/business/i.test(FILES[RADAR_PAGE]));
 // The switches, from leadRadar.js's radarTick: Bluesky unconditional, the rest each behind its own flag.
 const LR = FILES["leadRadar.js"];
@@ -660,7 +665,10 @@ function gated(flag, call) {
 check("L. Bluesky capture runs on every tick, ungated: radarTick calls runLeadRadarOnce() first",
   /radarRunning = true;\s*try \{\s*await runLeadRadarOnce\(\);/.test(tick));
 check("L. ticks run every 5 minutes: setInterval(radarTick, 300000)", /setInterval\(radarTick, 300000\)/.test(LR));
-check("L. Mastodon capture is gated by ENABLE_MASTODON_RADAR", gated("ENABLE_MASTODON_RADAR", "runMastodonRadarOnce()"));
+// NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon capture is gated by ENABLE_MASTODON_RADAR". AFTER it is removed: no file, no gate, no call, not scored.
+check("L. Mastodon lead search is removed: no mastodonRadar.js, no ENABLE_MASTODON_RADAR, no runMastodonRadarOnce, and mastodon is not scored",
+  !fs.existsSync(path.join(REPO, "mastodonRadar.js")) && !/ENABLE_MASTODON_RADAR === |runMastodonRadarOnce\(/.test(LR) &&
+  /const SCORABLE_SOURCES = \["bluesky"\];/.test(LR));
 check("L. YouTube capture is gated by ENABLE_YOUTUBE_RADAR", gated("ENABLE_YOUTUBE_RADAR", "runYoutubeRadarOnce") || gated("ENABLE_YOUTUBE_RADAR", "YoutubeRadar"),
   (/if \(process\.env\.ENABLE_YOUTUBE_RADAR === "true"\) \{[\s\S]{0,600}/.exec(tick) || [""])[0].slice(0, 200));
 check("L. intent scoring is gated by ENABLE_LEAD_SCORING", gated("ENABLE_LEAD_SCORING", "scoreNewLeads()"));
@@ -668,7 +676,7 @@ check("L. intent scoring is gated by ENABLE_LEAD_SCORING", gated("ENABLE_LEAD_SC
 const LEADS_ROUTE = (function (sv) { const i = sv.indexOf('app.get("/api/leads", '); return i === -1 ? "" : sv.slice(i, sv.indexOf("\n});\n", i)); })(FILES[SERVER]);
 check("L. new YouTube finds are not shown: they are written as \"signal\", /api/leads lists only status \"scored\", and youtube is not a scored source",
   /status:\s+"signal"/.test(FILES["youtubeRadar.js"]) && /\.eq\("status", "scored"\)/.test(LEADS_ROUTE) &&
-  /const SCORABLE_SOURCES = \["bluesky", "mastodon"\];/.test(LR));
+  /const SCORABLE_SOURCES = \["bluesky"\];/.test(LR));   // NAMED (Nov 23 2026, LR-1): BEFORE ["bluesky", "mastodon"]
 // NAMED BEFORE → AFTER: was "older scored YouTube finds can appear: /api/leads never filters on source", the evidence
 // for a sentence the tip no longer has. Now the evidence for "kept for at most 30 days" and "removed with it".
 const RET = FILES[RETENTION];
@@ -704,8 +712,9 @@ check("L. the YouTube rules and the hidden count are real and shown in the secti
   /id="ytHidden"/.test(ytSection) && /" hidden: " \+ link \+ " with links, " \+ short \+ " too short, " \+ off \+ " off topic"/.test(FILES[RADAR_PAGE]), lrTip);
 const radarSub = (/<p class="agent-subtitle">([^<]*)<\/p>/.exec(FILES[RADAR_PAGE]) || ["", ""])[1];
 const UNCONDITIONAL = /Mastodon &amp; YouTube every|Bluesky, Mastodon(,| and| &amp;) YouTube|(?:and|,) scored by intent|scores them,|\bscans? Mastodon|\bscans? YouTube/i;
-check("L. the subtitle says Bluesky every 5 minutes and that Mastodon capture and intent scoring run only when switched on",
-  /captured from Bluesky every 5 minutes; Mastodon capture and intent scoring run only when switched on\./.test(radarSub), radarSub);
+// NAMED (Nov 23 2026, LR-1): BEFORE "...; Mastodon capture and intent scoring run only when switched on."
+check("L. the subtitle says Bluesky every 5 minutes and that intent scoring runs only when switched on, and names no Mastodon",
+  /captured from Bluesky every 5 minutes; intent scoring runs only when switched on\./.test(radarSub) && !/Mastodon/.test(radarSub), radarSub);
 check("L. no Lead Radar tip and not the subtitle claims Mastodon, YouTube or scoring unconditionally",
   !UNCONDITIONAL.test(radarSub) && lrTips.every(t => !UNCONDITIONAL.test(t)), [radarSub].concat(lrTips).filter(t => UNCONDITIONAL.test(t)).join(" | "));
 
@@ -878,7 +887,8 @@ const A = [
   ["3 dashboard 36", dashTips, "Figures are fetched once, as the page loads", /live read-only summary/,
     () => !/setInterval|EventSource|WebSocket/.test(FILES[DASH])],
   // groups 3 and 4 — Lead Radar 145 (146 is proven in L)
-  ["3/4 lead-radar 145", lrTips, "Mastodon, YouTube and scoring each wait on their own switch",/\blive Bluesky|by matched keyword|scans for buying-intent posts every 5 minutes, scores them/,
+  ["3/4 lead-radar 145", lrTips, "YouTube and scoring each wait on their own switch",   // NAMED (Nov 23 2026, LR-1): BEFORE "Mastodon, YouTube and ..."
+   /\blive Bluesky|by matched keyword|scans for buying-intent posts every 5 minutes, scores them/,
     () => /id="refreshBtn" onclick="loadLeads\(\)">Refresh</.test(FILES[RADAR_PAGE]) &&
       /l\.suggested_product && l\.suggested_product !== "none" && \(l\.intent_score \|\| 0\) >= 40/.test(FILES[RADAR_PAGE]) &&
       !/setInterval|EventSource|WebSocket/.test(FILES[RADAR_PAGE]) && gated("ENABLE_LEAD_SCORING", "scoreNewLeads()")],
@@ -1493,7 +1503,8 @@ const CN = [
   ["sms 4", smsTips, "A dry run moves no enrollment forward", SMS_FALSE,
     () => DRY() && /if \(DRY_RUN\) \{[\s\S]{0,600}?summary\.sent\+\+;\s*continue;\s*\}\s*var \{ error: advanceErr \} = await supabase\s*\.from\("sms_campaign_enrollments"\)\s*\.update\(\{ current_step: newStep, next_send_at: nextSendAt \}\)/.test(ENGINE)],
   ["sms 5", smsTips, "direct SMS sending is shut on this platform", SMS_FALSE,
-    () => /\nconst SMS_DIRECT_SEND_ENABLED = false;/.test(SV) && /if \(!SMS_DIRECT_SEND_ENABLED\) \{\s*return res\.status\(503\)/.test(SV) &&
+    // NAMED (Nov 23 2026, LR-1): BEFORE SMS_DIRECT_SEND_ENABLED = false and its 503 gate. AFTER the route is only the 503, and no Twilio client is ever built.
+    () => SMS_SEND_SHUT() &&
       /subscriber\.consent_status !== "opted_in"/.test(ENGINE) && !/\/api\/sms\/send["']/.test(FILES[SMS])]
 ];
 C.forEach(([id, tips, fragment, old, proof]) => {
@@ -1545,13 +1556,18 @@ check("C. no text on oracle.html offers .doc", !/\.doc\b/.test(FILES[ORACLE]), (
 console.log("\n══ D. three subtitles, the Oracle's uploads, and the vertical marketing comment ══");
 // The three subtitles, with A's four assertions each. "old" is tested against the page's visible text.
 const ALLOWED_TYPES = vm.runInNewContext((/\nvar allowedTaskTypes = (\[[^\]]*\]);/.exec(SV) || ["", "[]"])[1]);
+// NAMED (Nov 23 2026, LR-1): POST /api/sms/send is a 503 and nothing else, and server.js never builds a Twilio client.
+function SMS_SEND_SHUT() {
+  return /\napp\.post\("\/api\/sms\/send", requireAuth, function \(req, res\) \{\n  return res\.status\(503\)\.json\(\{ error: "SMS sending is not offered\.", code: "sms_not_offered" \}\);\n\}\);/.test(SV) &&
+    !/[^.\w]twilio\(/.test(SV);
+}
 const SMS_SUB = "SMS subscribers and consent, drip campaigns built message by message, enrollment, and a dry-run log of what would go out — no text is sent.";
 const D = [
   ["agents/sms.html subtitle", SMS, '<p class="agent-subtitle">' + SMS_SUB + "</p>", /Reach customers|targeted SMS sequences|automated drip/i,
     () => /id="sms-add-btn"/.test(FILES[SMS]) && /id="sms-bulk-btn"/.test(FILES[SMS]) && /<select id="sms-add-consent">/.test(FILES[SMS]) &&
       /id="sms-camp-create-btn"/.test(FILES[SMS]) && /id="sms-msg-add-btn"/.test(FILES[SMS]) && /id="enroll-all-btn"/.test(FILES[SMS]) && !!ENROLL &&
       />Run Drip Engine \(Dry Run\)<\/button>/.test(FILES[SMS]) && DRY() && /status:\s+DRY_RUN \? "dry_run" : "sent",/.test(ENGINE) &&
-      /\nconst SMS_DIRECT_SEND_ENABLED = false;/.test(SV)],
+      SMS_SEND_SHUT()],   // NAMED (Nov 23 2026, LR-1): BEFORE SMS_DIRECT_SEND_ENABLED = false
   ["ads-agent.html subtitle", ADS, '<p class="agent-subtitle">Ad campaigns, audience growth, ad copy, and policy checks.</p>', /performance intelligence|paid traffic/i,
     () => ["Ad Campaign", "Audience Growth", "Ad Copy", "Policy Check"].every(n => offers(ADS, n)) && !!ADS_COPY && !!ADS_POLICY &&
       ["ad_campaign", "audience_growth"].every(t => ALLOWED_TYPES.indexOf(t) !== -1)],

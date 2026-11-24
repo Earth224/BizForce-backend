@@ -25,7 +25,7 @@
      D. The route: application/xml, cached in memory for 10 minutes (one
         read pair per window), a read failure is a 503 and is not cached.
      E. The frontend: sitemap.xml is an index of exactly sitemap-pages.xml
-        and sitemap-blog.xml; sitemap-pages.xml keeps /, /app, /vitality,
+        and sitemap-blog.xml; sitemap-pages.xml keeps /, /app, /vitality (LR-1: no /suppressed.html),
         /xxl-xtreme and adds /suppressed.html; _redirects rewrites
         /sitemap-blog.xml (200) to this route on blogpost.html's API host,
         above every catch-all; no static sitemap-blog.xml shadows it;
@@ -276,8 +276,10 @@ function wellFormed(xml) {
     JSON.stringify(locs(INDEX)) === JSON.stringify(["https://bizforceai.net/sitemap-pages.xml", "https://bizforceai.net/sitemap-blog.xml", "https://bizforceai.net/sitemap-support.xml", "https://bizforceai.net/sitemap-campaigns.xml", "https://bizforceai.net/sitemap-cards.xml", "https://bizforceai.net/sitemap-posts.xml"]), INDEX);
   // NAMED (Oct 27 2026, launch item #12): BEFORE the five pages ended at /suppressed.html. AFTER the four legal pages
   // follow it, /terms, /privacy, /refund and /contact, each public and canonical (checkLaunchBlockB section 12).
-  check("E. sitemap-pages.xml keeps /, /app, /vitality, /xxl-xtreme, /suppressed.html and adds /terms, /privacy, /refund, /contact", !!PAGES && wellFormed(PAGES) === null &&
-    JSON.stringify(locs(PAGES)) === JSON.stringify(["https://bizforceai.net/", "https://bizforceai.net/app", "https://bizforceai.net/vitality", "https://bizforceai.net/xxl-xtreme", "https://bizforceai.net/suppressed.html",
+  // NAMED (Nov 23 2026, LR-1): BEFORE /suppressed.html was listed after /xxl-xtreme; AFTER it is removed from sitemap-pages.xml
+  // (LR-READ STEP 10). The page itself is unchanged.
+  check("E. sitemap-pages.xml keeps /, /app, /vitality, /xxl-xtreme and /terms, /privacy, /refund, /contact, and no longer lists /suppressed.html", !!PAGES && wellFormed(PAGES) === null &&
+    JSON.stringify(locs(PAGES)) === JSON.stringify(["https://bizforceai.net/", "https://bizforceai.net/app", "https://bizforceai.net/vitality", "https://bizforceai.net/xxl-xtreme",
       "https://bizforceai.net/terms", "https://bizforceai.net/privacy", "https://bizforceai.net/refund", "https://bizforceai.net/contact"]), PAGES);
   const api = (/var API_URL = "([^"]+)";/.exec(PAGE) || [])[1];
   const redirLines = (REDIR || "").split("\n").map(l => l.trim());

@@ -1,4 +1,6 @@
 /* ══════════════════════════════════════════════════════════════════════════
+   NAMED (Nov 23 2026, LR-1): static pins updated; this check is excluded from the suite (it resolves account 6df1851e) and was not run.
+
    checkEntitlementGate.js — the five routes that spent the platform's key for
    free, and the proof they no longer do.
 
@@ -106,6 +108,9 @@ const ROUTES = [
   { path: "/api/oracle/invocation", method: "get"  },
   { path: "/api/oracle/chat",       method: "post" },
   { path: "/api/self-reviews/run",  method: "post" },
+  // NAMED (Nov 23 2026, LR-1): BEFORE draft-reply was M. AFTER it is A (lib/routeAccess.js ADMIN_IN_HANDLER): the owner check by id sits in the
+  // handler, AFTER requireActiveSubscription, which it keeps because it calls the model. This file stops at the gate, so the
+  // entitlement answers below are unchanged; a paying account that is not the owner is refused 403 later, in the handler.
   { path: "/api/leads/draft-reply", method: "post" }
 ];
 

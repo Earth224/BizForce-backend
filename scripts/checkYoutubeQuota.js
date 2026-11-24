@@ -64,7 +64,8 @@ const PAGE = fs.readFileSync(path.join(FRONTEND, "agents", "lead-radar.html"), "
 
 const MUTATIONS = {
   // the search is sent first and reserved after
-  "reserve-after-fetch": [[RADAR, "      if (!(await reserve(\"search.list\"))) break;\n\n      try {\n        var searchData = await fetchSearchResults(keyword);\n",
+  // NAMED (Nov 23 2026, LR-1): BEFORE the anchor had no pass.searches++ line (LR-1 counts searches for the youtube radar_status row).
+  "reserve-after-fetch": [[RADAR, "      if (!(await reserve(\"search.list\"))) break;\n      pass.searches++;   // NAMED (Nov 23 2026, LR-1)\n\n      try {\n        var searchData = await fetchSearchResults(keyword);\n",
     "      try {\n        var searchData = await fetchSearchResults(keyword);\n        if (!(await reserve(\"search.list\"))) break;\n"]],
   // a ledger that cannot be read or written is ignored, and calls go ahead
   "fail-open-missing-ledger": [[RADAR, "        console.error(\"[YoutubeRadar] No YouTube call this pass: \" + (readErr.message || readErr) + \".\");\n        break;\n",
@@ -75,7 +76,8 @@ const MUTATIONS = {
   // a ninth keyword
   "ninth-keyword": [[RADAR, "  \"does quantum jumping actually work\"\n];", "  \"does quantum jumping actually work\",\n  \"is tongkat ali safe\"\n];"]],
   // YouTube rows enter the scorer
-  "youtube-scorable": [[LEAD, "const SCORABLE_SOURCES = [\"bluesky\", \"mastodon\"];", "const SCORABLE_SOURCES = [\"bluesky\", \"mastodon\", \"youtube\"];"]],
+  // NAMED (Nov 23 2026, LR-1): BEFORE the anchor was ["bluesky", "mastodon"]; Mastodon lead search is removed.
+  "youtube-scorable": [[LEAD, "const SCORABLE_SOURCES = [\"bluesky\"];", "const SCORABLE_SOURCES = [\"bluesky\", \"youtube\"];"]],
   // the signals route serves any account
   "signals-ungated": [[SERVER, "    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) {\n      console.warn(\"[/api/leads/youtube-signals] REFUSING",
     "    if (false) {\n      console.warn(\"[/api/leads/youtube-signals] REFUSING"]]
@@ -295,10 +297,12 @@ const otherRows = (n, units) => Array.from({ length: n }, () => ({ caller: "soci
   console.log("\n══ E. eight keywords, never scored, never sent to ══");
   check("E. KEYWORDS is exactly 8", Array.isArray(A.radar.KEYWORDS) && A.radar.KEYWORDS.length === 8, A.radar.KEYWORDS && A.radar.KEYWORDS.length);
   const scorable = /const SCORABLE_SOURCES = (\[[^\]]*\]);/.exec(FILES[LEAD]);
-  check("E. youtube is not in SCORABLE_SOURCES", !!scorable && JSON.stringify(JSON.parse(scorable[1])) === JSON.stringify(["bluesky", "mastodon"]), scorable && scorable[1]);
+  // NAMED (Nov 23 2026, LR-1): BEFORE exactly ["bluesky", "mastodon"]; AFTER exactly ["bluesky"].
+  check("E. youtube is not in SCORABLE_SOURCES", !!scorable && JSON.stringify(JSON.parse(scorable[1])) === JSON.stringify(["bluesky"]), scorable && scorable[1]);
   const sendable = /(?:var|const) OUTREACH_SENDABLE_SOURCES = (\[[^\]]*\]);/.exec(FILES[SERVER]);
   check("E. youtube is not in OUTREACH_SENDABLE_SOURCES", !!sendable && JSON.parse(sendable[1]).indexOf("youtube") === -1 && JSON.parse(sendable[1]).length > 0, sendable && sendable[1]);
-  check("E. capture is still switched on only by ENABLE_YOUTUBE_RADAR exactly \"true\"", /if \(process\.env\.ENABLE_YOUTUBE_RADAR === "true"\) \{[\s\S]{0,400}await runYoutubeRadarOnce\(\);/.test(FILES[LEAD]));
+  // NAMED (Nov 23 2026, LR-1): BEFORE {0,400}; the gate now also stamps the pass for its radar_status row before the call.
+  check("E. capture is still switched on only by ENABLE_YOUTUBE_RADAR exactly \"true\"", /if \(process\.env\.ENABLE_YOUTUBE_RADAR === "true"\) \{[\s\S]{0,800}await runYoutubeRadarOnce\(\);/.test(FILES[LEAD]));
 
   /* ── F. the signals route ──────────────────────────────────────────────── */
   console.log("\n══ F. GET /api/leads/youtube-signals ══");
@@ -386,7 +390,8 @@ const otherRows = (n, units) => Array.from({ length: n }, () => ({ caller: "soci
   check("G. empty and capture on: it says nothing has been found yet", /data-state="youtube_none_yet">YouTube capture is on, and nothing has been found yet\./.test(none.list.innerHTML), none.list.innerHTML);
   const refused = await runPage(403, { error: "no", code: "lead_radar_unavailable" });
   check("G. a refusal hides the section and draws nothing", refused.section.hidden === true && refused.list.innerHTML === "");
-  check("G. Refresh reloads it with the list", /function loadLeads\(\) \{[\s\S]{0,400}loadYoutubeFinds\(\);/.test(script));
+  // NAMED (Nov 23 2026, LR-1): BEFORE {0,400}; loadLeads now first shows the sign-in prompt when signed out.
+  check("G. Refresh reloads it with the list", /function loadLeads\(\) \{[\s\S]{0,700}loadYoutubeFinds\(\);/.test(script));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

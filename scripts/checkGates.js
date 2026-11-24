@@ -66,7 +66,9 @@
      J. OLD VS NEW, BY OUTPUT, for every B2 adapter, each recording its
         decision: G3 (automatic posting on, a listing edit), G14 (making an
         agent), G8 and G7 (filing a Bluesky post), G23 and G22 (outreach: the
-        convert route's 422 and convertSingleLead), G24 (bfcSendWithinLimits,
+        convert route's 422 and convertSingleLead; NAMED (Nov 23 2026, LR-1):
+        AFTER the convert route's 422 and POST /api/agents/sales/send-approved,
+        convertSingleLead drafting only and recording nothing), G24 (bfcSendWithinLimits,
         whose body is b096831's byte for byte under a new name, and a wrapper
         proved transparent), G25 (the guide route, its handler wrapped and
         proved transparent), G18, G16 and G13 (the schedule pass) and G17
@@ -248,7 +250,9 @@ function indexDefs(src) {
   const vre = /^(?:var|const|let) ([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*=[ \t]*/gm;
   while ((m = vre.exec(src))) {
     if (defs.has(m[1]) || inside(m.index)) continue;
-    const brk = /;\r?\n/g; brk.lastIndex = m.index + m[0].length; let b;
+    // NAMED (Nov 23 2026, LR-1): BEFORE /;\r?\n/ only. AFTER a statement may end "];   // a note" (LR-1 writes
+    // OUTREACH_SENDABLE_SOURCES that way); without this its definition ran on through the next constants.
+    const brk = /;[ \t]*(?:\/\/[^\n]*)?\r?\n/g; brk.lastIndex = m.index + m[0].length; let b;
     while ((b = brk.exec(src))) {
       const nextCh = src[b.index + b[0].length];
       if (nextCh === undefined || nextCh === "\n" || /[^\s]/.test(nextCh)) { defs.set(m[1], src.slice(m.index, b.index + 1)); defs.pos.set(m[1], m.index); break; }
@@ -1112,32 +1116,50 @@ function compare(section, label, oldRun, newRun, expect) {
     }
   }
 
-  /* J5. G23 and G22: outreach. */
+  /* J5. G23 and G22: outreach.
+     NAMED (Nov 23 2026, LR-1): BEFORE convertSingleLead asked canSendOutreach and recorded G23/G22 for every live
+     draft, and the convert route was compared with B1_HEAD. AFTER the owner's rule (nothing posts without an
+     approved text): convertSingleLead only drafts, so it asks no cap and records nothing; the convert route drafts
+     one lead (its refusal wording changed, so it is held to its status and its records, not to B1_HEAD); and
+     G23/G22 are recorded by POST /api/agents/sales/send-approved, at the send, where the caps are now checked. */
   {
     const constOf = name => vm.runInNewContext("(" + DEFS.new.get(name).replace(new RegExp("^(var|const|let) " + name + "\\s*=\\s*"), "").replace(/;\s*$/, "") + ")");
     const BOOK = constOf("OUTREACH_BOOK_PRODUCT");
     const lead = { author_handle: "reader.bsky.social", post_uri: "at://x/1", suggested_product: BOOK, post_text: "Any book on this?", outreach_safe: true };
+    let gateAsked = 0;
     const runLead = async (w, s) => {
-      const c = makeCtx({ globals: { canSendOutreach: async () => JSON.parse(JSON.stringify(s.gate)), callAnthropicText: async () => { throw new Error("no model in this check"); } } });
+      const c = makeCtx({ globals: { canSendOutreach: async () => { gateAsked++; return JSON.parse(JSON.stringify(s.gate)); }, callAnthropicText: async () => { throw new Error("no model in this check"); } } });
       script(w, "lead", DEFS[w].get("convertSingleLead"), ["canSendOutreach", "callAnthropicText"], "convertSingleLead").runInContext(c.sandbox);
       const out = await capture(() => c.sandbox.__api.convertSingleLead(MEMBER, JSON.parse(JSON.stringify(s.lead || lead)), "SYSTEM", s.dryRun === true));
       await flush();
       return { out: out, logs: c.logs, writes: c.db.writes, gateRows: c.db.gateRows };
     };
     const facts = { agent: "sales" };
+    const recordsAre = function (label, n, records) {
+      const want = records.map(r => ({ user_id: r.user || MEMBER, action: r.action, target: r.target, outcome: r.outcome, results: res3(r.results),
+        facts: r.facts === undefined ? null : r.facts, member_gate_name: r.member === undefined ? null : r.member }));
+      const got = n.gateRows.map(recordOf);
+      check("D " + label + ": " + (want.length ? want.length + " record(s), " + want.map(w => w.outcome + " " + w.results.map(x => x.gate + ":" + x.result + (x.code ? "/" + x.code : "")).join(",")).join("; ") : "no record"),
+        J(got) === J(want), "got " + J(got).slice(0, 600) + " want " + J(want).slice(0, 600));
+      check("D " + label + ": nothing logged as unwritten", n.logs.every(l => l.indexOf("[gates]") === -1), J(n.logs.filter(l => l.indexOf("[gates]") !== -1)));
+    };
     const LEADS = [
       { label: "a lead with no offer (skipped first)", s: { lead: Object.assign({}, lead, { suggested_product: "nothing" }), gate: { allowed: true } }, rec: [] },
-      { label: "a dry run (never gated)", s: { dryRun: true, gate: { allowed: false, reason: "daily_cap_reached" } }, rec: [] },
-      { label: "the daily cap reached (skipped)", s: { gate: { allowed: false, reason: "daily_cap_reached" } },
-        rec: [{ action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "pass"], ["G22", "fail", "daily_cap_reached"]], facts: facts }] },
-      { label: "already contacted (skipped)", s: { gate: { allowed: false, reason: "already_contacted" } },
-        rec: [{ action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "pass"], ["G22", "fail", "already_contacted"]], facts: facts }] },
-      { label: "allowed, then drafting", s: { gate: { allowed: true } }, rec: [{ action: "outreach_send", target: "lead", outcome: "ran", results: [["G23", "pass"], ["G22", "pass"]], facts: facts }] }
+      { label: "a dry run (never gated)", s: { dryRun: true, gate: { allowed: false, reason: "daily_cap_reached" } }, rec: [] }
     ];
     for (const t of LEADS) { const o = await runLead("b1", t.s), n = await runLead("new", t.s); compareB2("J5", t.label, o, n, t.rec); }
+    for (const reason of ["daily_cap_reached", "already_contacted", null]) {
+      gateAsked = 0;
+      const n = await runLead("new", { gate: reason ? { allowed: false, reason: reason } : { allowed: true } });
+      const label = "convertSingleLead with the caps " + (reason ? "refusing (" + reason + ")" : "allowing");
+      check("J5 " + label + ": drafts anyway (reaches the model), asks no cap, records nothing — drafting is not sending",
+        gateAsked === 0 && n.out.thrown === true && n.out.message === "no model in this check", J(n.out).slice(0, 300));
+      recordsAre(label, n, []);
+    }
+
     const SIG = "app.post(\"/api/agents/sales/convert\", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {";
     const fresh = new FixedDate(FIXED - 2 * 24 * 3600 * 1000).toISOString();
-    const leadRow = o => Object.assign({ post_uri: "at://x/2", intent_score: 8, intent_reason: "asked", status: "scored", post_created_at: fresh, outreach_safe: true, reply_invited: true }, o);
+    const leadRow = o => Object.assign({ post_uri: "at://x/2", source: "bluesky", intent_score: 8, intent_reason: "asked", status: "scored", post_created_at: fresh, outreach_safe: true, reply_invited: true }, o);
     const runConvert = (w, s) => runRoute(w, "convert", SIG, ["convertSingleLead"], {
       respond: function (q) { if (q.table === "bsky_leads") return { data: s.lead, error: null }; return null; },
       globals: { convertSingleLead: async () => ({ conversion: null, sent: false, send_reason: "stubbed", skipped: true }) }
@@ -1154,7 +1176,46 @@ function compare(section, label, oldRun, newRun, expect) {
       const o = await runConvert("b1", t.s), n = await runConvert("new", t.s);
       const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]);
       check("J5 " + t.label + ": answered " + want, o.out.res.status === want && o.out.res.sent === 1, J(o.out).slice(0, 300));
-      compareB2("J5", t.label, o, n, t.rec);
+      check("J5 " + t.label + ": still answered " + want + " today, with the same refusal codes as " + B1_HEAD,
+        n.out.res.status === want && n.out.res.sent === 1 && J(((n.out.res.body || {}).reasons || []).map(r => r.code)) === J(((o.out.res.body || {}).reasons || []).map(r => r.code)) &&
+        (n.out.res.body || {}).code === (o.out.res.body || {}).code, J(n.out).slice(0, 300));
+      recordsAre(t.label, n, t.rec);
+    }
+
+    /* The one send. reserveOutreachSend (the cap at the send) and sendBlueskyReply are stubbed; the route is the real one. */
+    const SA = "app.post(\"/api/agents/sales/send-approved\", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {";
+    const TEXT = "A fair question, and a book answers it well: https://blacksuncircle.com/";
+    const saLead = o => Object.assign(leadRow({ post_uri: "at://x/3", suggested_product: BOOK, author_handle: "reader.bsky.social" }), o);
+    const runSend = s => {
+      const sends = [];
+      const p = runRoute("new", "sendapproved", SA, ["reserveOutreachSend", "sendBlueskyReply", "LEAD_SCORE_FAILED_REASON"], {
+        env: s.live === false ? {} : { SALES_SEND_LIVE: "true" },
+        respond: function (q) { if (q.table === "bsky_leads") return { data: s.lead || saLead({}), error: null }; return null; },
+        globals: {
+          LEAD_SCORE_FAILED_REASON: "scoring failed after 3 attempts",
+          reserveOutreachSend: async () => (s.slot ? Object.assign({}, s.slot) : { ok: true, id: "slot-1", release: async () => {} }),
+          sendBlueskyReply: async (l, text) => { sends.push(text); return { sent: true, uri: "at://posted/1" }; }
+        }
+      }, { user: { id: s.user || OWNER_ID, role: "admin" }, body: { lead_post_uri: "at://x/3", text: s.text || TEXT } });
+      return p.then(n => Object.assign(n, { sends: sends }));
+    };
+    const SENDS = [
+      { label: "send-approved, the daily cap reached at the send (409)", s: { slot: { ok: false, reason: "daily_cap_reached" } }, sent: 0,
+        rec: [{ user: OWNER_ID, action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "pass"], ["G22", "fail", "daily_cap_reached"]], facts: facts }] },
+      { label: "send-approved, already contacted (409)", s: { slot: { ok: false, reason: "already_contacted" } }, sent: 0,
+        rec: [{ user: OWNER_ID, action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "pass"], ["G22", "fail", "already_contacted"]], facts: facts }] },
+      { label: "send-approved, the caps allow it: the approved text is posted (200)", s: {}, sent: 1,
+        rec: [{ user: OWNER_ID, action: "outreach_send", target: "lead", outcome: "ran", results: [["G23", "pass"], ["G22", "pass"]], facts: facts }] },
+      { label: "send-approved, SALES_SEND_LIVE off (409)", s: { live: false }, sent: 0, rec: [] },
+      { label: "send-approved, replies not invited (422)", s: { lead: saLead({ reply_invited: false }) }, sent: 0, rec: [] },
+      { label: "send-approved, not the credential owner (403)", s: { user: MEMBER }, sent: 0, rec: [] }
+    ];
+    for (const t of SENDS) {
+      const n = await runSend(t.s);
+      const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]);
+      check("J5 " + t.label + ": answered " + want + ", " + (t.sent ? "posting exactly the approved text once" : "posting nothing"),
+        n.out.res.status === want && n.out.res.sent === 1 && n.sends.length === t.sent && (!t.sent || n.sends[0] === TEXT), J({ out: n.out, sends: n.sends }).slice(0, 400));
+      recordsAre(t.label, n, t.rec);
     }
   }
 

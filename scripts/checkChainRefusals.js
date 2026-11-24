@@ -1,4 +1,6 @@
 /* ══════════════════════════════════════════════════════════════════════════
+   NAMED (Nov 23 2026, LR-1): static pins updated; this check is excluded from the suite (it resolves account 6df1851e) and was not run.
+
    checkChainRefusals.js — three refusals the chain dispatcher makes that
    nothing else proved, against the live router.
 
@@ -82,6 +84,8 @@ const Module = require("module");
 const REPO = path.join(__dirname, "..");
 const SERVER_PATH = path.join(REPO, "server.js");
 
+// NAMED (Nov 23 2026, LR-1): unchanged. sales/convert now only drafts (it never posts) but still writes the pipeline and spends a model call,
+// so it stays blocked; POST /api/agents/sales/send-approved is not in the tool catalogue, so a chain cannot reach it.
 const BLOCKED = ["store/generate-proposals", "seo/generate-post", "seo/optimize", "sales/convert", "sales/lead-status",
   "email/propose-sequence",     // File an email sequence for approval
   "social/propose-post"];       // Publish approved posts to Bluesky

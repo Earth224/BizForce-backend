@@ -228,6 +228,8 @@ const MUTATIONS = {
   "public-page-noindex": [["FE:contact.html", "<meta name=\"description\"", "<meta name=\"robots\" content=\"noindex\">\n<meta name=\"description\""]],
   // #12: a public page left out of the sitemap
   "page-missing-from-sitemap": [["FE:sitemap-pages.xml", "<loc>https://bizforceai.net/privacy</loc>", "<loc>https://bizforceai.net/privacy-old</loc>"]],
+  // NAMED (Nov 23 2026, LR-1): /suppressed.html put back into the sitemap
+  "suppressed-back-in-sitemap": [["FE:sitemap-pages.xml", "<loc>https://bizforceai.net/privacy</loc>", "<loc>https://bizforceai.net/suppressed.html</loc></url><url><loc>https://bizforceai.net/privacy</loc>"]],
   // #12: robots.txt blocks everything
   // NAMED (Nov 21 2026, P3-1B): BEFORE the anchor was "Allow: /"; AFTER "Allow: /\n", since "Allow: /p/" follows it
   "robots-disallow-all": [["FE:robots.txt", "Allow: /\n", "Disallow: /\n"]],
@@ -989,10 +991,22 @@ function fakeDb(tables, fail) {
       else if (/^blog/.test(f)) canOk = !!can && /tag\.setAttribute\("rel", "canonical"\)/.test(t);
       else if (f === "card-view.html") canOk = !!can && can[1] === "https://bizforceai.net/card-view.html" && /setCanonical\(cardUrl\);/.test(t);
       else canOk = !!can && can[1] === "https://bizforceai.net/" + f && /<script src="\/scripts\/bf-canonical\.js" data-keep="[a-z,]+"><\/script>/.test(t);
-      check("12. " + f + ": a title, a description, a canonical, og:title/description/type/url, and not noindex",
-        title.length >= 10 && !!desc && desc.length >= 50 && canOk && og.every(Boolean) && !noindex(t),
+      // NAMED (Nov 23 2026, LR-1B): BEFORE every public page was required NOT to be noindex. AFTER the owner made
+      // suppressed.html "noindex, follow" (the outreach destination, out of the sitemap since LR-1); it alone must be
+      // noindex, and keeps its title, description, canonical and OG tags. Every other public page is still not noindex.
+      const WANT_NOINDEX = f === "suppressed.html";
+      check("12. " + f + ": a title, a description, a canonical, og:title/description/type/url, and " + (WANT_NOINDEX ? "noindex, follow (LR-1B)" : "not noindex"),
+        title.length >= 10 && !!desc && desc.length >= 50 && canOk && og.every(Boolean) && noindex(t) === WANT_NOINDEX &&
+        (!WANT_NOINDEX || metaContent(t, "name", "robots") === "noindex, follow"),
         JSON.stringify({ title, desc: desc && desc.length, can: can && can[1], og: og.map(Boolean), noindex: noindex(t) }));
-      if (want) {
+      // NAMED (Nov 23 2026, LR-1): BEFORE every page with a canonical path was required in the sitemap. AFTER the owner
+      // took /suppressed.html out of sitemap-pages.xml; it keeps its title, description and canonical (above) and must
+      // now be ABSENT from the sitemap.
+      const OUT_OF_SITEMAP = ["suppressed.html"];
+      if (want && OUT_OF_SITEMAP.indexOf(f) !== -1) {
+        const url = "https://bizforceai.net" + want;
+        check("12. " + f + ": its og:url is its canonical, and it is NOT in the sitemap (LR-1)", og[3] === url && locs.indexOf(url) === -1, og[3] + " / " + (locs.indexOf(url) !== -1));
+      } else if (want) {
         const url = "https://bizforceai.net" + want;
         check("12. " + f + ": its og:url is its canonical, and it is in the sitemap", og[3] === url && locs.indexOf(url) !== -1, og[3] + " / " + (locs.indexOf(url) !== -1));
       }
@@ -1043,7 +1057,8 @@ function fakeDb(tables, fail) {
     const exprs = [...new Set([...uncommented(SRC).matchAll(/cron\.schedule\("([^"]+)"/g)].map(m => m[1]))];
     const exprMissing = exprs.filter(e => README.indexOf("cron `" + e + "`") === -1);
     check("13. every cron schedule in server.js is in the README's job table (" + exprs.length + ")", exprs.length >= 5 && exprMissing.length === 0, exprMissing.join(", "));
-    check("13. every interval is in the job table too", ["dripTick", "reminderTick", "salesAutoConvertTick", "Lead Radar"].every(j => README.indexOf(j) !== -1));
+    // NAMED (Nov 23 2026, LR-1): BEFORE "salesAutoConvertTick" (retired); AFTER "leadRadarTick", the radar's own interval.
+    check("13. every interval is in the job table too", ["dripTick", "reminderTick", "leadRadarTick", "Lead Radar"].every(j => README.indexOf(j) !== -1));
     const sections = ["## Environment variables", "## Background jobs", "## The check suite", "## Migrations", "## Deploy order", "## Email", "## Backups and the restore drill"];
     check("13. README sections: what BizForce is, env vars, jobs, the suite, migrations, deploy order, email, backups and the restore drill",
       sections.every(h => README.indexOf("\n" + h + "\n") !== -1) && /^# BizForce-backend\n\n\S/.test(README), sections.filter(h => README.indexOf("\n" + h + "\n") === -1).join(","));

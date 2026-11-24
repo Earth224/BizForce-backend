@@ -1,10 +1,16 @@
 /* ══════════════════════════════════════════════════════════════════════════
+   NAMED (Nov 23 2026, LR-1): static pins updated; this check is excluded from the suite (it resolves account 6df1851e) and was not run.
+   NAMED (Nov 23 2026, LR-1): runSalesAutoConvert is RETIRED by the owner's rule (nothing is posted without an approved text), so
+   section 3 no longer runs it: it proves the pass, its export and its test hook are gone. BEFORE four paths; AFTER three
+   that run, and the sales pass proved absent. The intent floor and the bsky_leads interception below are kept: they
+   cost nothing and still stop any lead from being drafted in this process.
+
    checkRemainingSpendPaths.js — the last four model-calling paths that never
    asked whether the account was paying.
 
      POST /api/assignments/:id/start          platform key, requireAuth only
      POST /api/agents/store/generate-proposals BYOK w/ silent platform fallback
-     runSalesAutoConvert                      ENABLE_SALES_AUTOLOOP, default off
+     runSalesAutoConvert                      RETIRED (NAMED (Nov 23 2026, LR-1)): gone, with ENABLE_SALES_AUTOLOOP
      runStoreProposalPass                     ENABLE_STORE_PROPOSAL_JOB, ditto
 
    The two routes are tested the way 18e035d's five were: by walking the route's
@@ -65,16 +71,8 @@ const SUBJECT_USER_ID = resolveSubjectAccount();
 /* Before server.js reads it. See the header. */
 process.env.OUTREACH_MIN_INTENT = "100";
 
-/* Forced, not inherited. Re-checked before every sales run below. */
-const SALES_DRY_RUN_FROM_ENV = process.env.SALES_AUTOLOOP_DRY_RUN;
-process.env.SALES_AUTOLOOP_DRY_RUN = "true";
-function forceSalesDryRun() {
-  process.env.SALES_AUTOLOOP_DRY_RUN = "true";
-  if (process.env.SALES_AUTOLOOP_DRY_RUN !== "true") {
-    console.error("REFUSING TO RUN the sales pass: SALES_AUTOLOOP_DRY_RUN could not be forced to \"true\". Nothing was run.");
-    process.exit(1);
-  }
-}
+/* NAMED (Nov 23 2026, LR-1): BEFORE SALES_AUTOLOOP_DRY_RUN was forced to "true" here before every sales run (forceSalesDryRun).
+   AFTER the variable is read by nothing (the automatic loop is retired), and no sales run happens here. */
 
 const path = require("path");
 const REPO = path.join(__dirname, "..");
@@ -289,7 +287,7 @@ async function recordNewRows(userId, sinceIso) {
   const paying = await resolveEntitledAccount(supabase);
   const admin = (usersResult.data || []).filter(function (u) { return String(u.role).toLowerCase() === "admin"; })[0];
   if (!unentitled || !admin) { console.error("could not find the subject account and the admin account"); process.exit(1); }
-  console.log("  SALES_AUTOLOOP_DRY_RUN from the environment: " + JSON.stringify(SALES_DRY_RUN_FROM_ENV) + " — forced to \"true\" here");
+  // NAMED (Nov 23 2026, LR-1): BEFORE the SALES_AUTOLOOP_DRY_RUN line was printed here; the variable is gone.
 
   console.log("  unentitled : " + unentitled.id + "  (" + unentitled.email + ")");
   console.log("  paying     : " + paying.id + "  (" + paying.email + ")");
@@ -339,65 +337,20 @@ async function recordNewRows(userId, sinceIso) {
       owner.sent ? ("refused " + owner.sent.status) : ("passed=" + owner.passed));
   }
 
-  /* ════ 3: runSalesAutoConvert ══════════════════════════════════════════ */
-  console.log("\n══ runSalesAutoConvert ══");
-  console.log("    the pass only ever processes OUTREACH_CREDENTIAL_OWNER_ID, which is the");
-  console.log("    admin account — so the unentitled case is simulated through the plan");
-  console.log("    lookup rather than with a second account. There is no second account it");
-  console.log("    would ever reach.");
-
-  const salesBefore = await countsFor(admin.id);
+  /* ════ 3: runSalesAutoConvert, retired ════════════════════════════════ */
+  /* NAMED (Nov 23 2026, LR-1): BEFORE this section ran the pass three times (entitled, not entitled, unreadable plan) and proved
+     it skipped the unentitled account and wrote nothing. AFTER the pass is retired by the owner's rule: nothing is
+     posted, replied or sent to anyone outside BizForce unless a person approved that exact text first. So this
+     proves it is gone: no export, no test hook, no function in server.js, no timer, and no read of its variables. */
+  console.log("\n══ runSalesAutoConvert (retired, LR-1) ══");
+  const SERVER_SRC = require("fs").readFileSync(path.join(REPO, "server.js"), "utf8");
+  check("LR-1: runSalesAutoConvert is not exported, and has no test hook",
+    server.runSalesAutoConvert === undefined && server.__runSalesAutoConvert === undefined);
+  check("LR-1: server.js defines no runSalesAutoConvert and no salesAutoConvertTick",
+    !/function runSalesAutoConvert\s*\(/.test(SERVER_SRC) && !/function salesAutoConvertTick\s*\(/.test(SERVER_SRC));
+  check("LR-1: server.js reads none of ENABLE_SALES_AUTOLOOP, SALES_AUTOLOOP_DRY_RUN, SALES_AUTOLOOP_DAILY_DRAFT_CAP",
+    !/process\.env\.(ENABLE_SALES_AUTOLOOP|SALES_AUTOLOOP_DRY_RUN|SALES_AUTOLOOP_DAILY_DRAFT_CAP)\b/.test(SERVER_SRC));
   let sinceIso = new Date(Date.now() - 2000).toISOString();
-
-  /* (a) entitled — the real answer, admin exemption and all. The lead read
-     comes back empty, so getting through the gate drafts nothing. */
-  server.__setPassPlanLookup(null);
-  forceSalesDryRun();
-  const leadReadsBefore = leadReads;
-  const salesEntitled = await server.__runSalesAutoConvert();
-  console.log("    entitled run: " + JSON.stringify(salesEntitled));
-  check("the admin is processed rather than skipped",
-    salesEntitled.processed === 1 && salesEntitled.skippedNotEntitled === 0,
-    "processed=" + salesEntitled.processed + " skippedNotEntitled=" + salesEntitled.skippedNotEntitled);
-  check("the summary reports a skippedNotEntitled count at all",
-    Object.prototype.hasOwnProperty.call(salesEntitled, "skippedNotEntitled"),
-    Object.keys(salesEntitled).join(", "));
-  check("it reached its lead read, and the read was intercepted — no lead could be drafted",
-    leadReads > leadReadsBefore, "intercepted bsky_leads reads: " + (leadReads - leadReadsBefore));
-
-  /* (b) not entitled. Under MUTATE the gate is gone, so this must fail. */
-  server.__setPassPlanLookup(async function () {
-    return MUTATING
-      ? { active: true, exempt: false, inactive_reason: null, access_reason: null }
-      : { active: false, exempt: false, inactive_reason: "no_subscription", access_reason: null };
-  });
-  forceSalesDryRun();
-  const salesRefused = await server.__runSalesAutoConvert();
-  console.log("    unentitled run: " + JSON.stringify(salesRefused));
-  check("an unentitled account is skipped", salesRefused.skippedNotEntitled === 1,
-    "skippedNotEntitled=" + salesRefused.skippedNotEntitled);
-  check("and nothing was processed for it", salesRefused.processed === 0,
-    "processed=" + salesRefused.processed);
-
-  /* (c) the plan cannot be read — fail closed, and counted as a failure. */
-  server.__setPassPlanLookup(async function () { throw new Error("simulated entitlement read failure"); });
-  forceSalesDryRun();
-  const salesBroken = await server.__runSalesAutoConvert();
-  console.log("    unreadable-plan run: " + JSON.stringify(salesBroken));
-  check("an unreadable plan fails closed — skipped", salesBroken.skippedNotEntitled === 1,
-    "skippedNotEntitled=" + salesBroken.skippedNotEntitled);
-  check("an unreadable plan counts as a failure, so the pass cannot close clean",
-    salesBroken.failed >= 1, "failed=" + salesBroken.failed);
-  server.__setPassPlanLookup(refuseEveryPlan);
-
-  const salesAfter = await countsFor(admin.id);
-  console.log("\n    owner rows across all three sales runs:");
-  console.log("    " + deltaLine("admin", salesBefore, salesAfter).trim());
-  check("no model call was made by any sales run", modelCalls.length === 0, "model calls: " + modelCalls.length);
-  SPEND_TABLES.forEach(function (t) {
-    check("sales pass wrote zero " + t + " rows", salesAfter[t] === salesBefore[t],
-      salesBefore[t] + " → " + salesAfter[t]);
-  });
 
   /* ════ 4: runStoreProposalPass ═════════════════════════════════════════ */
   console.log("\n══ runStoreProposalPass ══");

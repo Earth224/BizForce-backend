@@ -17,7 +17,7 @@ The server reads `.env` (dotenv) in a local run. On Railway, every variable is s
 
 ## Environment variables
 
-These are all 74 variables the running server reads: `server.js` and every local module it requires (`lib/`, `config/`, `leadRadar.js`, `mastodonRadar.js`, `youtubeRadar.js`, `redditRadar.js`). The list is generated from those reads (`node scripts/_envReads.js` prints it), and `scripts/checkLaunchBlockB.js` fails when this table leaves one out. Only names are listed here, never values.
+These are all 91 variables the running server reads: `server.js` and every local module it requires (`lib/`, `config/`, `leadRadar.js`, `youtubeRadar.js`). The list is generated from those reads (`node scripts/_envReads.js` prints it), and `scripts/checkLaunchBlockB.js` fails when this table leaves one out. Only names are listed here, never values.
 
 A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything else, and the startup log names the variable when it is off. "On unless exactly `false`" is the reverse.
 
@@ -91,9 +91,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TWILIO_ACCOUNT_SID` | none | Twilio account. SMS sending is refused, naming what is missing, unless all three are set. |
-| `TWILIO_AUTH_TOKEN` | none | Twilio auth token. It also verifies inbound SMS webhooks. |
-| `TWILIO_PHONE_NUMBER` | none | The number SMS is sent from. |
+| `TWILIO_AUTH_TOKEN` | none | Twilio auth token. It verifies inbound SMS webhooks (opt-outs); SMS sending is not offered. |
 | `TWILIO_WEBHOOK_URL` | rebuilt from the request | The exact public URL Twilio posts inbound SMS to, used to verify its signature. |
 | `ENABLE_DRIP_SCHEDULER` | off | Exactly `true` runs the SMS drip engine every 5 minutes (and once at boot). |
 | `VAPID_PUBLIC_KEY` | none | Web push key pair for calendar reminders. Without them, no push is sent. |
@@ -142,9 +140,6 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 |---|---|---|
 | `BLUESKY_IDENTIFIER` | none | The one Bluesky account the radar searches and replies from. |
 | `BLUESKY_APP_PASSWORD` | none | Its app password. The check suite blanks both in every check. |
-| `ENABLE_MASTODON_RADAR` | off | Exactly `true` adds Mastodon to the radar. |
-| `MASTODON_INSTANCE` | `https://mastodon.social` | The Mastodon server searched and posted to. |
-| `MASTODON_ACCESS_TOKEN` | none | The Mastodon account's token, for replies. |
 | `ENABLE_YOUTUBE_RADAR` | off | Exactly `true` adds YouTube comments to the radar. |
 | `YOUTUBE_API_KEY` | none | The YouTube Data API key. |
 | `YOUTUBE_DAILY_UNIT_CAP` | `5000` | YouTube API units the whole server may spend per day. |
@@ -152,12 +147,9 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `ENABLE_YOUTUBE_RETENTION` | on | On unless exactly `false`: the daily deletion of YouTube data older than 30 days (YouTube's policy). |
 | `ENABLE_LEAD_SCORING` | off | Exactly `true` scores captured leads with a model call. |
 | `OUTREACH_MIN_INTENT` | `60` | The intent score (0 to 100) a lead needs before outreach considers it. |
-| `OUTREACH_DAILY_CAP` | `5` | Outreach replies per day. |
+| `OUTREACH_DAILY_CAP` | `5` | Outreach replies per day, checked at the send. A blank, unparseable or below-1 value means 5. |
 | `OUTREACH_ACCOUNT_DAILY_CEILING` | `25` | Outreach sends per account per UTC day. A negative value stops outreach. |
-| `ENABLE_SALES_AUTOLOOP` | off | Exactly `true` drafts a conversion for high-intent leads every 5 minutes (a model call each). |
-| `SALES_AUTOLOOP_DRY_RUN` | on | On unless exactly `false`: the auto-loop drafts but never sends. |
-| `SALES_SEND_LIVE` | off | Exactly `true` lets the Sales Agent actually send what it drafts. |
-| `SALES_AUTOLOOP_DAILY_DRAFT_CAP` | `50` | Drafts the auto-loop may make per day. |
+| `SALES_SEND_LIVE` | off | Exactly `true` lets the owner post a reply they approved (POST /api/agents/sales/send-approved, one lead, the exact text shown). Nothing posts without that approval. |
 
 ### Background jobs and the BizCash wallet
 
@@ -208,8 +200,9 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `runNightlyBackup` | cron `BACKUP_CRON` (`0 8 * * *`), `BACKUP_TIMEZONE` (America/Los_Angeles) | `ENABLE_NIGHTLY_BACKUP` exactly `true` |
 | `dripTick`: SMS drip engine | every 5 minutes, and once at boot | `ENABLE_DRIP_SCHEDULER` exactly `true` |
 | `reminderTick`: calendar push reminders | every 60 seconds | always, when `server.js` is the program |
-| `salesAutoConvertTick`: Sales Agent auto-loop | every 5 minutes, first run 60 s after boot | `ENABLE_SALES_AUTOLOOP` exactly `true` |
-| Lead Radar: Bluesky search | every 5 minutes | always, when `server.js` is the program (Mastodon, YouTube and scoring have their own gates above) |
+| Lead Radar (`leadRadarTick`): Bluesky search | every 5 minutes | always, when `server.js` is the program (YouTube and scoring have their own gates above) |
+
+Retired (Nov 23 2026, LR-1): `salesAutoConvertTick`, the Sales Agent auto-loop, and Mastodon lead search. Nothing is posted, replied or sent to anyone outside BizForce unless a person approved that exact text first.
 
 `scripts/checkCronJobs.js` runs every cron expression under a fake clock across both daylight-saving changes.
 

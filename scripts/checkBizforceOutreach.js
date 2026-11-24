@@ -29,7 +29,10 @@
         supplement instruction already forbade any URL but its own.
      5. Sending: every server.js code line naming a send flag (comments
         stripped) is identical to BASELINE, and so are sendMastodonReply and
-        canSendOutreach. sendBlueskyReply's behaviour is pinned by
+        canSendOutreach. NAMED (Nov 23 2026, LR-1): AFTER the loop's flags are
+        gone, SALES_SEND_LIVE is read in sendBlueskyReply and send-approved
+        only, the caps parse safely, sendMastodonReply is removed, and 3 checks
+        the draft OFFERED for approval (convertSingleLead no longer sends). sendBlueskyReply's behaviour is pinned by
         checkBskyGate.js since it moved onto the shared Bluesky gate.
 
    MUTATIONS — each must turn the named section red:
@@ -113,7 +116,10 @@ function literal(src, name) { const c = {}; vm.runInNewContext(defs(src, [name])
 /* ── scoring: the code from the first prompt input to the call, as scoreNewLeads runs it ── */
 function scoringPrompt(src, lead) {
   const a = src.indexOf("        var source  = lead.source || \"bluesky\";");
-  const b = src.indexOf("        var response = await createScoringMessage({");
+  // NAMED (Nov 23 2026, LR-1): BEFORE the block ended at the model call. AFTER the scorer's ledger cap check (an await) sits
+  // just above the call, so the block ends at that check when it is there.
+  const capAt = src.indexOf("        // NAMED (Nov 23 2026, LR-1): the caps first");
+  const b = capAt !== -1 ? capAt : src.indexOf("        var response = await createScoringMessage({");
   if (a < 0 || b < 0) throw new Error("EXTRACTION FAILED: the scorer's prompt block");
   const ctx = { lead: lead };
   const extra = /function isBizforceLead/.test(src) ? defs(src, ["BIZFORCE_KEYWORDS", "isBizforceLead", "bizforceScoringPrompt"]) : "";
@@ -130,7 +136,7 @@ function storedProduct(src, lead, modelProduct) {
 }
 
 /* ── drafting: the real convertSingleLead, stubbed at the model, database and senders ── */
-const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_DAILY_CAP", "OUTREACH_PRODUCT_FACTS",
+const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_PRODUCT_FACTS",
   "OUTREACH_HOME_URL", "OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BIZFORCE_DESTINATION", "OUTREACH_BOOK_DESTINATION",
   "OUTREACH_OWN_DOMAINS", "outreachDraftRejection", "nowIso", "DRAFT_ATTEMPT_CEILING", "OUTREACH_EMOJI_PATTERN", "stripOutreachEmoji",
   "truncateOrchestratorPreview", "normalizeMemoryMetadata", "detectOutreachLinkFacets",
@@ -161,11 +167,19 @@ async function draftRun(src, product, modelMessage) {
     sendMastodonReply: async (lead, text) => { sends.push(text); return { sent: true, uri: "https://fake/post" }; }
   };
   vm.createContext(ctx);
-  vm.runInContext(defs(src, LIFTED, NEW_NAMES) + "\nthis.run = convertSingleLead;", ctx);
+  // NAMED (Nov 23 2026, LR-1): BEFORE OUTREACH_DAILY_CAP was lifted. AFTER it is a multi-line parse the lifter cannot cut
+  // out, and convertSingleLead no longer reads it; BASELINE read it only in a log line, so it is given as 5 (its default).
+  vm.runInContext("var OUTREACH_DAILY_CAP = 5;\n" + defs(src, LIFTED, NEW_NAMES) + "\nthis.run = convertSingleLead;", ctx);
   const lead = { id: "lead-1", post_uri: "at://did:plc:fixture/app.bsky.feed.post/1", source: "bluesky", author_handle: "fixture.bsky.social",
     post_text: "fixture post", matched_keyword: "fixture", intent_score: 80, intent_reason: "asks", suggested_product: product };
   const result = await ctx.run(SUBJECT_USER_ID, lead, "SHARED SYSTEM PROMPT", false);
-  return { prompt: prompts[0] || null, sends: sends, sent: !!(result && result.sent), reason: result && result.send_reason };
+  /* NAMED (Nov 23 2026, LR-1): BEFORE convertSingleLead posted the reply itself, so "what goes out" was the text the sender
+     received. AFTER it only drafts (result.draft, offered for approval; send-approved posts it), so
+     "offered" is the draft for the working copy and the sent text for BASELINE. */
+  const drafting = result && Object.prototype.hasOwnProperty.call(result, "draft");
+  const offered = drafting ? (result.draft ? [result.draft] : []) : sends;
+  const reason = drafting && result.draft_rejection ? "draft_rejected" : (result && result.send_reason);
+  return { prompt: prompts[0] || null, sends: sends, offered: offered, sent: !!(result && result.sent), reason: reason, drafting: drafting };
 }
 
 (async function main() {
@@ -187,10 +201,11 @@ async function draftRun(src, product, modelMessage) {
   check("1. nor is a Mastodon or YouTube row, whatever it matched", !isBiz({ source: "mastodon", matched_keyword: BKW[0] }) && !isBiz({ source: "youtube", matched_keyword: BKW[0] }));
 
   console.log("\n══ 2. scoring: the supplement prompt is untouched; BizForce has its own ══");
+  // NAMED (Nov 23 2026, LR-1): BEFORE three leads (Bluesky, Mastodon, Spanish). AFTER Mastodon is no longer scored (SCORABLE_SOURCES is
+  // ["bluesky"]) and its hashtag wording is gone, so the Mastodon fixture is dropped; the Bluesky prompt is still identical.
   const SUPP = [{ source: "bluesky", matched_keyword: "anyone tried tongkat ali", lang: "en", post_text: "anyone tried tongkat ali? asking for real" },
-    { source: "mastodon", matched_keyword: "libido", lang: "en", post_text: "#libido thoughts" },
     { source: "bluesky", matched_keyword: "why is my libido low", lang: "es", post_text: "por que mi libido esta baja" }];
-  check("2. for three supplement leads (Bluesky, Mastodon, Spanish) the scorer prompt is byte-identical to " + BASELINE,
+  check("2. for two supplement leads (Bluesky, Spanish) the scorer prompt is byte-identical to " + BASELINE,
     SUPP.every(l => scoringPrompt(RADAR, l) === scoringPrompt(RADAR0, l)));
   const bizLead = { source: "bluesky", matched_keyword: "stripe froze my account", lang: "en", post_text: "stripe froze my account again, what are other supplement brands using?" };
   const bp = scoringPrompt(RADAR, bizLead);
@@ -210,10 +225,12 @@ async function draftRun(src, product, modelMessage) {
   for (const p of SUPP_PRODUCTS.concat(["Quantum Jumping book"])) {
     const msg = p === "Quantum Jumping book" ? "That frustration is common. BlackSunCircle.com" : "Many people like it. https://mrearthrose.com/";
     const now = await draftRun(SERVER, p, msg), then = await draftRun(SERVER0, p, msg);
-    if (now.prompt === then.prompt && JSON.stringify(now.sends) === JSON.stringify(then.sends) && now.sent === then.sent && now.sent) same++;
-    else console.log("    differs: " + p + " sent " + then.sent + " → " + now.sent);
+    // NAMED (Nov 23 2026, LR-1): BEFORE the reply sent now equalled the reply sent then. AFTER the draft offered for approval equals the
+    // reply BASELINE sent, and nothing is sent now.
+    if (now.prompt === then.prompt && JSON.stringify(now.offered) === JSON.stringify(then.offered) && now.offered.length === 1 && then.sent && !now.sent && now.sends.length === 0) same++;
+    else console.log("    differs: " + p + " offered " + JSON.stringify(then.offered) + " → " + JSON.stringify(now.offered));
   }
-  check("3. for all six supplement products and the book, the model's prompt and the reply sent are identical to " + BASELINE, same === SUPP_PRODUCTS.length + 1, same + " of " + (SUPP_PRODUCTS.length + 1));
+  check("3. for all six supplement products and the book, the model's prompt and the reply offered for approval are identical to what " + BASELINE + " sent, and nothing is sent", same === SUPP_PRODUCTS.length + 1, same + " of " + (SUPP_PRODUCTS.length + 1));
   const before = await draftRun(SERVER0, "BizForceAI", "x");
   check("3. at " + BASELINE + " a BizForceAI lead was skipped: no offer", !before.prompt && before.reason === "unsupported_product", before.reason);
   const DEST = (function () { const c = {}; vm.runInNewContext(defs(SERVER, ["OUTREACH_HOME_URL", "OUTREACH_PRODUCT_DESTINATIONS"]) + "\nthis.v = OUTREACH_PRODUCT_DESTINATIONS.BizForceAI;", c); return c.v; })();
@@ -221,20 +238,22 @@ async function draftRun(src, product, modelMessage) {
   check("3. now it is drafted against the BizForce instruction, with " + DEST + " as the one link",
     !!biz.prompt && /THE OFFER FOR THIS LEAD IS BIZFORCEAI/.test(biz.prompt) && biz.prompt.indexOf("The one link you may give them: " + DEST + "\n") !== -1 &&
     !/From MrEarthRose\.com|from MrEarthRose\.com/.test(biz.prompt) && !/structure-function/.test(biz.prompt));
-  check("3. and a draft carrying that link is sent once (with the arrival parameter, checkEngineArrival.js)", biz.sent && biz.sends.length === 1 && /https:\/\/bizforceai\.net\//.test(biz.sends[0]), biz.reason);
+  // NAMED (Nov 23 2026, LR-1): BEFORE "is sent once". AFTER it is offered once for approval and convertSingleLead sends nothing.
+  check("3. and a draft carrying that link is offered once for approval (with the arrival parameter, checkEngineArrival.js), and not sent",
+    biz.drafting && !biz.sent && biz.sends.length === 0 && biz.offered.length === 1 && /https:\/\/bizforceai\.net\//.test(biz.offered[0]), biz.reason);
 
   console.log("\n══ 4. links ══");
   const held = [];
   for (const m of ["We built a platform for this: https://mrearthrose.com/", "See https://bizforceai.net/pricing", "Our homepage: https://bizforceai.net/", DEST + "?utm_source=bluesky",
     "Sign up at https://buy.stripe.com/abc"]) {
     const r = await draftRun(SERVER, "BizForceAI", m);
-    held.push(!r.sent && r.sends.length === 0 && r.reason === "draft_rejected");
+    held.push(!r.sent && r.sends.length === 0 && r.offered.length === 0 && r.reason === "draft_rejected");   // NAMED (Nov 23 2026, LR-1): + nothing offered
   }
   check("4. a BizForce draft linking mrearthrose.com, another bizforceai.net path (/pricing, the homepage), a query string or Stripe is held", held.every(Boolean), JSON.stringify(held));
   const cross = await draftRun(SERVER, "War Horse", "Worth a look: https://bizforceai.net/");
   const cross0 = await draftRun(SERVER0, "War Horse", "Worth a look: https://bizforceai.net/");
   check("4. a supplement draft linking bizforceai.net is now held (it was sent at " + BASELINE + ") — the one tightening",
-    !cross.sent && cross.reason === "draft_rejected" && cross0.sent, JSON.stringify([cross0.sent, cross.sent]));
+    !cross.sent && cross.offered.length === 0 && cross.reason === "draft_rejected" && cross0.sent, JSON.stringify([cross0.sent, cross.sent]));
 
   console.log("\n══ 5. sending is unchanged ══");
   /* Code only, comments stripped (Stop anything hammering the Bluesky login):
@@ -242,15 +261,25 @@ async function draftRun(src, product, modelMessage) {
      lib/bskyGate.js, and a comment is not a send flag. */
   const codeOnly = src => src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
   const flagLines = src => codeOnly(src).split("\n").filter(l => /ENABLE_SALES_AUTOLOOP|SALES_SEND_LIVE|SALES_AUTOLOOP_DRY_RUN|OUTREACH_DAILY_CAP|OUTREACH_ACCOUNT_DAILY_CEILING|OUTREACH_MIN_INTENT|SALES_AUTOLOOP_DAILY_DRAFT_CAP/.test(l)).map(l => l.trimEnd()).join("\n");
-  check("5. every server.js code line naming a send flag (comments stripped) is identical to " + BASELINE, flagLines(SERVER) === flagLines(SERVER0),
-    flagLines(SERVER).split("\n").length + " lines");
+  /* NAMED (Nov 23 2026, LR-1): BEFORE every send-flag line was identical to BASELINE. AFTER the automatic loop and its flags are retired
+     and OUTREACH_DAILY_CAP is parsed safely, so the flags are pinned to what they now do. */
+  const fl = flagLines(SERVER);
+  check("5. no code line reads ENABLE_SALES_AUTOLOOP, SALES_AUTOLOOP_DRY_RUN or SALES_AUTOLOOP_DAILY_DRAFT_CAP (the loop is retired)",
+    !/ENABLE_SALES_AUTOLOOP|SALES_AUTOLOOP_DRY_RUN|SALES_AUTOLOOP_DAILY_DRAFT_CAP/.test(fl), fl);
+  check("5. SALES_SEND_LIVE is read exactly twice: in sendBlueskyReply and in send-approved",
+    (codeOnly(SERVER).match(/process\.env\.SALES_SEND_LIVE/g) || []).length === 2 &&
+    /process\.env\.SALES_SEND_LIVE/.test(defs(SERVER, ["sendBlueskyReply"])), (codeOnly(SERVER).match(/process\.env\.SALES_SEND_LIVE/g) || []).length);
+  check("5. OUTREACH_DAILY_CAP and OUTREACH_ACCOUNT_DAILY_CEILING are both read through a parse that falls back (never Number(env || n))",
+    !/Number\(process\.env\.OUTREACH_DAILY_CAP/.test(fl) && /var raw = process\.env\.OUTREACH_DAILY_CAP;/.test(fl), fl);
   /* sendBlueskyReply now posts through the shared Bluesky gate, so it is no
      longer pinned to BASELINE here; what it sends — send_dry unless
      SALES_SEND_LIVE is exactly "true", the 300-code-point cut, link facets
      only after the cut, the reply target, the returned uri — is pinned by
      scripts/checkBskyGate.js (section H). */
-  check("5. sendMastodonReply and canSendOutreach are identical to " + BASELINE,
-    ["sendMastodonReply", "canSendOutreach"].every(n => defs(SERVER, [n]) === defs(SERVER0, [n])));
+  // NAMED (Nov 23 2026, LR-1): BEFORE sendMastodonReply and canSendOutreach were identical to BASELINE. AFTER sendMastodonReply is removed
+  // (Mastodon replies are gone); canSendOutreach is still identical.
+  check("5. canSendOutreach is identical to " + BASELINE + "; sendMastodonReply no longer exists",
+    defs(SERVER, ["canSendOutreach"]) === defs(SERVER0, ["canSendOutreach"]) && !/function sendMastodonReply/.test(SERVER));
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");

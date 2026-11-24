@@ -21,9 +21,11 @@
      2. The refusal is a statement of fact with no timeline in it.
      3. The owner still gets their leads, unchanged: what the route returns is
         compared row for row against the same query run directly.
-     4. POST /api/leads/draft-reply is NOT gated by owner. A non-owner runs it
-        to a 200 with the SDK stubbed, so nothing is spent; the ledger row it
-        writes is read back and then removed by the residue guard.
+     4. POST /api/leads/draft-reply IS gated by owner. NAMED (Nov 23 2026, LR-1): BEFORE a
+        non-owner ran it to a 200 (the SDK stubbed) and a ledger row was
+        written and removed. AFTER the route drafts about the owner's own book,
+        so a non-owner gets 403 "lead_radar_unavailable", with zero Supabase
+        calls, no model call and no ledger row.
      5. The one owner literal in lib/ownerAccount.js agrees with the residue
         guard's own copy, which is deliberately not derived from it.
 
@@ -47,6 +49,8 @@
    guard on GET /api/leads is `if (false)`. The refusal, zero-read and row
    checks for that route must go red and every other route must stay green.
    Run it after any edit to this file.
+   NAMED (Nov 23 2026, LR-1): MUTATE=unguard-draft makes the draft-reply owner test `if (false)`;
+   section 3 must go red.
    ══════════════════════════════════════════════════════════════════════════ */
 
 require("dotenv").config();
@@ -61,8 +65,10 @@ const { OWNER_ACCOUNT_ID } = require(path.join(REPO, "lib", "ownerAccount.js"));
 
 const MUT = require("./_shared");
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
-if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["unguard-leads"]);
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["unguard-leads", "unguard-draft"]);   // NAMED (Nov 23 2026, LR-1): + unguard-draft
 const MUTATING = process.env.MUTATE === "unguard-leads";
+const MUTATING_DRAFT = process.env.MUTATE === "unguard-draft";
+const DRAFT_NEEDLE = /if \(req\.user\.id !== OUTREACH_CREDENTIAL_OWNER_ID\) return res\.status\(403\)\.json\(LEAD_RADAR_UNAVAILABLE\);/;
 
 /* ── the SDK, stubbed ─────────────────────────────────────────────────────
    Only draft-reply is expected to reach a model call, and it reaches this
@@ -139,6 +145,17 @@ const SERVER_PATH = path.join(REPO, "server.js");
 // The guard line, then (LF or CRLF, as the file on disk has it) the GET /api/leads warning.
 const NEEDLE = /if \(req\.user\.id !== OUTREACH_CREDENTIAL_OWNER_ID\) \{(\r?\n\s*console\.warn\("\[\/api\/leads\] REFUSING user ")/;
 let mutationApplied = false;
+if (MUTATING_DRAFT) {
+  const realCompileD = Module.prototype._compile;
+  Module.prototype._compile = function (content, filename) {
+    if (path.resolve(filename) === path.resolve(path.join(REPO, "server.js"))) {
+      content = MUT.replaceRegexOnce(content, DRAFT_NEEDLE, "if (false) return res.status(403).json(LEAD_RADAR_UNAVAILABLE);", "unguard-draft");
+      mutationApplied = true;
+      console.log("\n!! MUTATION: the owner guard on POST /api/leads/draft-reply is now `if (false)` — section 3 must fail.");
+    }
+    return realCompileD.call(this, content, filename);
+  };
+}
 if (MUTATING) {
   const realCompile = Module.prototype._compile;
   Module.prototype._compile = function (content, filename) {
@@ -308,7 +325,7 @@ function leadLine(l) {
   const { data: highest } = await supabase.from("model_calls").select("id").order("id", { ascending: false }).limit(1).maybeSingle();
   residue.setLedgerMark(highest ? highest.id : 0);
 
-  if (MUTATING) check("the mutation was applied to server.js at compile", mutationApplied === true);
+  if (MUTATING || MUTATING_DRAFT) check("the mutation was applied to server.js at compile", mutationApplied === true);
 
   console.log("\n══ the one literal, and the guard's own copy ══");
   console.log("    lib/ownerAccount.js      : " + OWNER_ACCOUNT_ID);
@@ -400,9 +417,13 @@ function leadLine(l) {
     const r = await runRoute(LEAD_ROUTES[3], owner);
     const grouped = (r.sent && r.sent.body && r.sent.body.pipeline) || {};
     const total = Object.keys(grouped).reduce(function (n, k) { return n + grouped[k].length; }, 0);
-    const direct = await supabase.from("sales_lead_pipeline").select("id", { count: "exact", head: true }).eq("user_id", owner.id);
+    // NAMED (Nov 23 2026, LR-1B): BEFORE the board held every pipeline row. AFTER LR-1's archive (12 stale drafts set to
+    // 'archived', live since LR-1B) the board holds every row that is not archived, and no archived row is on it.
+    const direct = await supabase.from("sales_lead_pipeline").select("id", { count: "exact", head: true }).eq("user_id", owner.id).neq("status", "archived");
+    const archived = await supabase.from("sales_lead_pipeline").select("id", { count: "exact", head: true }).eq("user_id", owner.id).eq("status", "archived");
     check("the owner gets 200", !!r.sent && r.sent.status === 200, r.sent && (r.sent.status + " " + JSON.stringify(r.sent.body).slice(0, 200)));
-    check("the board holds every pipeline row the owner has (" + direct.count + ")", !direct.error && total === direct.count,
+    check("the board holds every pipeline row the owner has that is not archived (" + direct.count + "; " + archived.count + " archived left off)",
+      !direct.error && !archived.error && total === direct.count && !Object.prototype.hasOwnProperty.call(grouped, "archived"),
       total + " on the board vs " + direct.count + " in the table");
     const counts = {};
     Object.keys(grouped).forEach(function (k) { counts[k] = grouped[k].length; });
@@ -422,13 +443,14 @@ function leadLine(l) {
     check("zero Supabase calls were made", r.dbCalls.length === 0, r.dbCalls.map(function (c) { return c.table; }).join(", "));
   }
 
-  /* ── 3. draft-reply is not owner-gated ────────────────────────────────── */
+  /* ── 3. draft-reply is owner-gated (NAMED (Nov 23 2026, LR-1): BEFORE it was not) ─────────── */
   console.log("\n══ POST /api/leads/draft-reply — non-owner ══");
   {
     const names = chainNames(DRAFT_ROUTE.path, DRAFT_ROUTE.method);
     console.log("    layers: " + names.join(" → "));
     const handlerSrc = layerFor(DRAFT_ROUTE.path, DRAFT_ROUTE.method).route.stack.slice(-1)[0].handle.toString();
-    check("the handler has no owner comparison in it", handlerSrc.indexOf("OUTREACH_CREDENTIAL_OWNER_ID") === -1);
+    // NAMED (Nov 23 2026, LR-1): BEFORE "the handler has no owner comparison in it".
+    check("the handler compares the caller with the owner", handlerSrc.indexOf("OUTREACH_CREDENTIAL_OWNER_ID") !== -1);
     check("it is still entitlement-gated (that gate is checkEntitlementGate's job)", names.indexOf("requireActiveSubscription") !== -1);
 
     /* requireActiveSubscription is skipped here on purpose: the subject
@@ -440,16 +462,17 @@ function leadLine(l) {
       { post_text: "anyone tried tongkat ali? (check fixture, scripts/checkLeadRadarOwnerGate.js)", suggested_product: "Tongkat Ali" },
       ["requireActiveSubscription"]);
     console.log("    read-back: " + (r.sent ? (r.sent.status + " " + JSON.stringify(r.sent.body)) : ("nothing sent; thrown=" + (r.thrown && r.thrown.message))));
-    check("a non-owner gets 200", !!r.sent && r.sent.status === 200, r.sent ? ("status " + r.sent.status + " " + JSON.stringify(r.sent.body)) : "nothing was sent");
-    check("with a reply", !!r.sent && r.sent.body && typeof r.sent.body.reply === "string" && r.sent.body.reply.indexOf("CHECK STUB REPLY") === 0);
-    check("the model call went to the stub, from this route only",
-      modelCallsAttempted.length === 1 && modelCallsAttempted[0].route === "POST /api/leads/draft-reply",
-      JSON.stringify(modelCallsAttempted));
+    // NAMED (Nov 23 2026, LR-1): BEFORE "a non-owner gets 200", "with a reply" and one stubbed model call.
+    check("a non-owner gets 403 lead_radar_unavailable", !!r.sent && r.sent.status === 403 && r.sent.body && r.sent.body.code === "lead_radar_unavailable",
+      r.sent ? ("status " + r.sent.status + " " + JSON.stringify(r.sent.body)) : "nothing was sent");
+    check("with no reply in it", !!r.sent && r.sent.body && r.sent.body.reply === undefined);
+    check("zero Supabase calls on the way to the refusal", r.dbCalls.length === 0, r.dbCalls.map(function (c) { return c.table; }).join(", "));
+    check("no model call was made", modelCallsAttempted.length === 0, JSON.stringify(modelCallsAttempted));
 
     const ledger = await supabase.from("model_calls").select("id, user_id, route, model, input_tokens, output_tokens")
       .eq("user_id", subject.id).gt("id", highest ? highest.id : 0).order("id", { ascending: false });
     (ledger.data || []).forEach(function (row) { residue.record("model_calls", row.id); });
-    check("one ledger row was written for the non-owner", !ledger.error && (ledger.data || []).length === 1,
+    check("no ledger row was written for the non-owner (NAMED (Nov 23 2026, LR-1): BEFORE one)", !ledger.error && (ledger.data || []).length === 0,
       ledger.error ? ledger.error.message : ((ledger.data || []).length + " rows"));
     (ledger.data || []).forEach(function (row) { console.log("    ledger read-back: " + JSON.stringify(row)); });
   }
@@ -464,8 +487,8 @@ function leadLine(l) {
     before.agent_memory + " → " + after.agent_memory);
   check("zero ai_tasks rows written for the non-owner", after.ai_tasks === before.ai_tasks,
     before.ai_tasks + " → " + after.ai_tasks);
-  check("exactly one model_calls row written for the non-owner (draft-reply's, removed below)",
-    after.model_calls === before.model_calls + 1, before.model_calls + " → " + after.model_calls);
+  check("zero model_calls rows written for the non-owner (NAMED (Nov 23 2026, LR-1): BEFORE exactly one, draft-reply's)",
+    after.model_calls === before.model_calls, before.model_calls + " → " + after.model_calls);
 
   console.log("");
   const cleanupResult = await residue.cleanup("end of run");

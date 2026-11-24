@@ -1009,8 +1009,12 @@ const everything = b => JSON.stringify(b.db.tables);
   const RADAR = lf(fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8"));
   const { execFileSync } = require("child_process");
   const atBase = f => { try { return lf(execFileSync("git", ["show", "553d7da:" + f], { cwd: REPO, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })); } catch (e) { return null; } };
-  check("L1. lib/bskyGate.js and leadRadar.js are byte-identical to 553d7da (the platform login and Lead Radar are unchanged)",
-    atBase("lib/bskyGate.js") === GATE && atBase("leadRadar.js") === RADAR);
+  // NAMED (Nov 23 2026, LR-1): BEFORE lib/bskyGate.js AND leadRadar.js byte-identical to 553d7da. AFTER bskyGate.js still
+  // byte-identical; leadRadar.js was changed on purpose by LR-1 (Mastodon removed, scorer on the ledger, youtube heartbeat),
+  // proven by checkLeadRadarRepair. Here: it still logs in to Bluesky only through lib/bskyGate.js.
+  const loginLines = t => t.split("\n").filter(l => /BskyAgent|createBskyGate|\.login\(|BLUESKY_(HANDLE|APP_PASSWORD|IDENTIFIER|PASSWORD)/.test(l)).join("\n");
+  check("L1. lib/bskyGate.js is byte-identical to 553d7da (the platform login is unchanged); leadRadar.js's login lines are the same as at 553d7da",
+    atBase("lib/bskyGate.js") === GATE && loginLines(RADAR).length > 0 && loginLines(RADAR) === loginLines(atBase("leadRadar.js") || ""));
 
   /* ── Z. no network ──────────────────────────────────────────────────────── */
   console.log("\n══ Z. no network ══");

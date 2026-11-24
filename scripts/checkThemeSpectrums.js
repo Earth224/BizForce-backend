@@ -347,7 +347,15 @@ function withoutPh1(text) {
   if (c < 0 || d < 0 || t.indexOf(B0, c + 1) !== -1) return null;
   return t.slice(0, c) + "      \"#apScheduleSection .ap-auto{margin-top:0;padding-top:0;border-top:0}\";\n" + t.slice(d + B1.length);
 }
-const profilePolish = withoutPolishWrap(withoutPh1(FILES[PROFILE_JS]));
+/* NAMED (Nov 23 2026, LR-1): the Lead Radar figures table lost its two Mastodon rows (Mastodon lead search is removed).
+   They are put back here, exactly once, right after the Bluesky row, so S2 means what it meant. */
+function withLr1MastodonRows(text) {
+  if (text === null) return null;
+  const at = '      row("Bluesky", r.bluesky);\n';
+  if (text.split(at).length !== 2 || text.indexOf('row("Mastodon"') !== -1) return null;
+  return text.replace(at, at + '      row("Mastodon", r.mastodon);\n      row("Bluesky + Mastodon", r.bluesky_and_mastodon);\n');
+}
+const profilePolish = withoutPolishWrap(withoutPh1(withLr1MastodonRows(FILES[PROFILE_JS])));
 const profileNow = profilePolish === null ? null : withoutStoreSource(withoutB8(withoutB5(withoutB2(withoutAgentTabs(profilePolish)))));
 check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions, the Stock source tile, the agent tabs and the polish's status-line wrap set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);

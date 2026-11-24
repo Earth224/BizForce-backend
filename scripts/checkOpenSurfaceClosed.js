@@ -8,9 +8,13 @@
    SMS_DIRECT_SEND_ENABLED = false.
 
    WHAT THIS PROVES
-     1. sms/send answers 503 "Direct SMS sending is unavailable." and never
+     1. sms/send answers 503 "SMS sending is not offered." and never
         reaches Twilio — the Twilio client is a recorder, and the Twilio
         credentials are set, so an open route WOULD call it.
+        NAMED (Nov 23 2026, LR-1): BEFORE "Direct SMS sending is unavailable." behind
+        SMS_DIRECT_SEND_ENABLED = false, with the Twilio code still below the
+        gate. AFTER the gate and the Twilio code are deleted; the route is the
+        503 and nothing else, and its source names no Twilio and no database.
 
    WHAT THIS NO LONGER CHECKS — AND WHY
      - GET /api/search/businesses. f045991 quoted its q so it could not be
@@ -74,7 +78,8 @@ function routeSource(src, method, route) {
   const sig = "app." + method + '("' + route + '"';
   const start = src.indexOf(sig);
   if (start < 0) throw new Error("route not found: " + route);
-  const end = braceMatch(src, src.indexOf("{", src.indexOf("async function", start)));
+  // NAMED (Nov 23 2026, LR-1): BEFORE indexOf("async function"): sms/send is now a plain function, so the first "function" after the signature.
+  const end = braceMatch(src, src.indexOf("{", src.indexOf("function", start)));
   if (src.slice(end, end + 2) !== ");") throw new Error("route did not end where expected: " + route);
   return src.slice(start, end + 2);
 }
@@ -125,8 +130,13 @@ const R_SMS = routeSource(MUTATE === "sms-open" ? SRC_OLD : SRC_NOW, "post", "/a
   });
   const s1 = await call(smsHandler, { body: { to: "+15005550009", message: "check message " + crypto.randomBytes(4).toString("hex") } });
   console.log("    HTTP " + s1.status + " " + JSON.stringify(s1.body || (s1.nextErr && s1.nextErr.message)) + " | Twilio calls: " + twilioCalls.length);
-  check("1. answers 503 \"Direct SMS sending is unavailable.\"", s1.status === 503 && s1.body && s1.body.error === "Direct SMS sending is unavailable.", s1.status + " " + JSON.stringify(s1.body));
+  // NAMED (Nov 23 2026, LR-1): BEFORE "Direct SMS sending is unavailable."; AFTER "SMS sending is not offered.", code sms_not_offered.
+  check("1. answers 503 \"SMS sending is not offered.\" (code sms_not_offered)", s1.status === 503 && s1.body && s1.body.error === "SMS sending is not offered." &&
+    s1.body.code === "sms_not_offered", s1.status + " " + JSON.stringify(s1.body));
   check("1. and never reaches Twilio", twilioCalls.length === 0, twilioCalls.length + " call(s)");
+  // NAMED (Nov 23 2026, LR-1): the send code is gone, not gated: the route names no Twilio, no database and no gate, and server.js builds no Twilio client.
+  check("1. the route is only the 503: no twilio, supabase or SMS_DIRECT_SEND_ENABLED in it, and server.js never calls twilio(...)",
+    !/twilio|supabase|SMS_DIRECT_SEND_ENABLED/i.test(R_SMS) && !/[^.\w]twilio\(/.test(MUTATE === "sms-open" ? SRC_OLD : SRC_NOW), R_SMS.slice(0, 160));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures); process.exit(1); }

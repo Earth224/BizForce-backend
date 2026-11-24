@@ -613,7 +613,8 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
       agentScheduleTick:    { pass: "runAgentSchedulePass",  gate: "behaviour", why: "R1-R5 above" },
       storeProposalTick:    { pass: "runStoreProposalPass",  gate: "cache" },
       selfReviewTick:       { pass: "runSelfReviewPass",     gate: "cache" },
-      salesAutoConvertTick: { pass: "runSalesAutoConvert",   gate: "cache" },
+      // NAMED (Nov 23 2026, LR-1): BEFORE 18 jobs, with salesAutoConvertTick → runSalesAutoConvert (cache gate). AFTER 17:
+      // the automatic sales loop is retired by the owner's rule (nothing posts without a person approving the exact text).
       dripTick:             { pass: "runDripForAllUsers",    gate: "cache", why: "D above" },
       // named exceptions
       emailSequenceTick:    { pass: "runEmailSequencePass",  exception: /u\.role === "admin"/, why: "sends only for sequences whose owner is an admin, who is exempt" },

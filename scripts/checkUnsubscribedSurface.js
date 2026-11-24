@@ -1,4 +1,6 @@
 /* ══════════════════════════════════════════════════════════════════════════
+   NAMED (Nov 23 2026, LR-1): static pins updated; this check is excluded from the suite (it resolves account 6df1851e) and was not run.
+
    checkUnsubscribedSurface.js — what an account can reach without paying, and
    what anyone can reach without an account, recorded so a new route of that
    kind cannot arrive unreviewed.
@@ -58,7 +60,8 @@
                  AFTER: none; BizForce Market trades in BizCash only.)
      THIRD_PARTY holds or acts on people who are not accounts: SMS
                  subscribers' phone numbers, campaigns and enrollments, and the
-                 direct send (shut by SMS_DIRECT_SEND_ENABLED = false).
+                 direct send (NAMED (Nov 23 2026, LR-1): BEFORE shut by SMS_DIRECT_SEND_ENABLED = false;
+                 AFTER a 503 "SMS sending is not offered." with no send code).
      STORAGE     puts a file in a Supabase storage bucket — real cost against
                  the plan's storage and egress caps, and bf-public is publicly
                  readable by URL.
@@ -79,7 +82,8 @@
      2. Each group is what the router does: P has no sign-in, F is sign-in only, M has
         requireActiveSubscription, A is requireAdmin or an owner check in the handler. The admin set is
         exactly EXPECTED_ADMIN; every route EXPECTED_GATED reviewed before P3-1 is still M except the
-        three P3-1 freed (posting, post photos, a new listing); every disconnect is F.
+        three P3-1 freed (posting, post photos, a new listing) and the two LR-1 moved to A (draft-reply,
+        demand-signals; NAMED (Nov 23 2026, LR-1)); every disconnect is F.
         (NAMED, P3-1: BEFORE section 2 held the gated set to EXPECTED_GATED.)
      3. No free (login-only) route reaches a model call.
      4. Every free route that writes, publishes, stores or reaches another person is in exactly one
@@ -381,9 +385,11 @@ const EXPECTED_OTHERS = {
 
 /* Login-only routes that hold or act on people who are not accounts. */
 const EXPECTED_THIRD_PARTY = {
-  "post /api/sms/send":                     "texts any number — shut: SMS_DIRECT_SEND_ENABLED = false, checkOpenSurfaceClosed",
-  "post /api/sms/subscribers":              "stores a person's phone number",
-  "post /api/sms/subscribers/bulk":         "stores many phone numbers",
+  // NAMED (Nov 23 2026, LR-1): BEFORE "texts any number — shut: SMS_DIRECT_SEND_ENABLED = false". AFTER a 503 stub, no send code (M, gated).
+  "post /api/sms/send":                     "SMS sending is not offered: a 503 stub, no Twilio code, checkOpenSurfaceClosed",
+  // NAMED (Nov 23 2026, LR-1): AFTER opted in only with recorded consent (smsConsentProof, a consent_events row); else pending or opted_out.
+  "post /api/sms/subscribers":              "stores a person's phone number, opted in only with recorded consent",
+  "post /api/sms/subscribers/bulk":         "stores many phone numbers, each opted in only with recorded consent",
   "post /api/sms/campaigns":                "a campaign addressed to subscribers",
   "post /api/sms/campaigns/:id/messages":   "a campaign's message steps",
   "post /api/sms/campaigns/:id/enroll":     "enrolls subscribers in a campaign",
@@ -519,7 +525,8 @@ const EXPECTED_OWN = [
   // NAMED (Nov 6 2026, card upgrades C2, migration 172; effectful login-only 156 -> 158): BEFORE no card leads. AFTER a
   // member marks one of their own leads read or archived (PATCH) and deletes one of their own leads (DELETE); both are
   // .eq("user_id", req.user.id), the rows are the member's own data, served to no one else, and stay theirs to manage
-  // subscribed or not (checkCardLeads). GET /api/digital-cards/:id/leads is a login-only read and needs no entry here.
+  // subscribed or not (checkCardLeads). GET /api/digital-cards/:id/leads is a login-only read and needs no entry here
+  // (NAMED (Nov 23 2026, LR-1): BEFORE it sat in M by mistake; AFTER it is F in lib/routeAccess.js, so a member always reads their own leads).
   "patch /api/card-leads/:id", "delete /api/card-leads/:id",
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176; effectful login-only 158 -> 159): BEFORE no location choice. AFTER a
   // member sets where Shopify stock changes apply on their own connection (location_id and location_name, one of the shop's
@@ -732,7 +739,8 @@ function effectsOf(names, handlerText) {
   if (/status:\s*"(published|active)"/.test(handlerText)) fx.push("publishes");
   if (/\.upload\(|createSignedUploadUrl\(/.test(handlerText) || names.some(function (n) { return /multer/i.test(n); })) fx.push("storage");
   if (/stripe\w*\.(checkout|customers|subscriptions|billingPortal|paymentIntents)/.test(handlerText)) fx.push("stripe");
-  if (/messages\.create\(|sendEmail\(|sendBlueskyReply|sendMastodonReply|sendPushToUser\(/.test(handlerText)) fx.push("sends");
+  // NAMED (Nov 23 2026, LR-1): BEFORE the list also named sendMastodonReply, which is removed (Mastodon lead replies are gone).
+  if (/messages\.create\(|sendEmail\(|sendBlueskyReply|sendPushToUser\(/.test(handlerText)) fx.push("sends");
   if (/callAnthropicText\s*\(/.test(handlerText) || [...MODEL_FNS].some(function (s) { return callRe(s).test(handlerText); })) fx.push("MODEL");
   return fx;
 }
@@ -838,15 +846,19 @@ console.log("\n══ 2. each group is what the router does ══");
 const groupOf = function (k) { return RA.groupOf(k); };
 const wrongP = ROUTES.filter(function (r) { return (groupOf(r.key) === "P") !== (r.cls === "unauthenticated"); });
 check("2. P is exactly the routes with no sign-in (" + RA.PUBLIC.length + ")", wrongP.length === 0, wrongP.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
-const wrongM = ROUTES.filter(function (r) { return (groupOf(r.key) === "M") !== (r.cls === "gated"); });
+/* NAMED (Nov 23 2026, LR-1): POST /api/leads/draft-reply and POST /api/agents/rd/demand-signals moved M -> A (owner by id, in the handler).
+   Both call the model, so they keep requireActiveSubscription in their stacks (a login-only route must never spend, section 3).
+   BEFORE M was exactly the gated routes. AFTER M is the gated routes but those owner-in-handler A routes. */
+const inHandlerGated = function (r) { return RA.ADMIN_IN_HANDLER.indexOf(r.key) !== -1 && r.cls === "gated"; };
+const wrongM = ROUTES.filter(function (r) { return (groupOf(r.key) === "M") !== (r.cls === "gated" && !inHandlerGated(r)); });
 check("2. M is exactly the routes with requireActiveSubscription in front (" + RA.MEMBER.length + ")", wrongM.length === 0, wrongM.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
 const wrongA = ROUTES.filter(function (r) {
   const a = groupOf(r.key) === "A";
   const inHandler = RA.ADMIN_IN_HANDLER.indexOf(r.key) !== -1;
-  return a !== (r.cls === "admin" || inHandler) || (inHandler && r.cls !== "login-only");
+  return a !== (r.cls === "admin" || inHandler) || (inHandler && r.cls !== "login-only" && r.cls !== "gated");   // NAMED (Nov 23 2026, LR-1): BEFORE in-handler had to be login-only
 });
 check("2. A is exactly requireAdmin's routes and the owner-in-handler routes (" + RA.ADMIN.length + ")", wrongA.length === 0, wrongA.map(function (r) { return r.key + " (" + r.cls + ")"; }).join(", "));
-const OWNER_TEXT = /isOwnerAccount\(req\.user\.id\)|!== OUTREACH_CREDENTIAL_OWNER_ID/;
+const OWNER_TEXT = /isOwnerAccount\(req\.user\.id\)|!== OUTREACH_CREDENTIAL_OWNER_ID|userId !== OWNER_ACCOUNT_ID/;   // NAMED (Nov 23 2026, LR-1): + demand-signals' owner check by id
 const inHandlerNoCheck = RA.ADMIN_IN_HANDLER.filter(function (k) { const r = byKeyOf(k); return !r || !OWNER_TEXT.test(r.text); });
 check("2. each owner-in-handler route's handler carries the owner check (" + RA.ADMIN_IN_HANDLER.length + ")", inHandlerNoCheck.length === 0, inHandlerNoCheck.join(", "));
 const wrongF = ROUTES.filter(function (r) { return groupOf(r.key) === "F" && r.cls !== "login-only"; });
@@ -854,7 +866,16 @@ check("2. F is sign-in only (" + RA.FREE.length + ")", wrongF.length === 0, wron
 sameSet("2. the requireAdmin routes are exactly the " + EXPECTED_ADMIN.length + " reviewed", keys(of("admin")), EXPECTED_ADMIN);
 /* NAMED (Nov 20 2026, P3-1): BEFORE section 2 held the gated set to EXPECTED_GATED. AFTER M (lib/routeAccess.js) is the set; every
    route EXPECTED_GATED reviewed must still be M, except the three P3-1 freed (posting, post photos, a new listing). */
-const lostGate = EXPECTED_GATED.filter(function (k) { return FREED_BY_P31.indexOf(k) === -1 && groupOf(k) !== "M"; });
+/* NAMED (Nov 23 2026, LR-1): the two owner-only model routes LR-1 moved to A. Each must be A, owner-in-handler, and still gated. */
+const MOVED_TO_A_BY_LR1 = ["post /api/leads/draft-reply", "post /api/agents/rd/demand-signals"];
+const movedA = MOVED_TO_A_BY_LR1.filter(function (k) { return groupOf(k) !== "A" || RA.ADMIN_IN_HANDLER.indexOf(k) === -1 || !byKeyOf(k) || byKeyOf(k).cls !== "gated"; });
+check("2. LR-1: lead draft-reply and demand signals are the owner's (A, owner check in the handler, still gated)", movedA.length === 0, movedA.join(", "));
+check("2. LR-1: POST /api/agents/sales/send-approved is members only (M, gated) with the owner check",
+  groupOf("post /api/agents/sales/send-approved") === "M" && !!byKeyOf("post /api/agents/sales/send-approved") &&
+  byKeyOf("post /api/agents/sales/send-approved").cls === "gated" && OWNER_TEXT.test(byKeyOf("post /api/agents/sales/send-approved").text));
+check("2. LR-1: GET /api/digital-cards/:id/leads is free (F, sign-in only)",
+  groupOf("get /api/digital-cards/:id/leads") === "F" && !!byKeyOf("get /api/digital-cards/:id/leads") && byKeyOf("get /api/digital-cards/:id/leads").cls === "login-only");
+const lostGate = EXPECTED_GATED.filter(function (k) { return FREED_BY_P31.indexOf(k) === -1 && MOVED_TO_A_BY_LR1.indexOf(k) === -1 && groupOf(k) !== "M"; });   // NAMED (Nov 23 2026, LR-1): but the two moved to A
 check("2. every route reviewed as gated before P3-1 is still members only, but the three P3-1 freed", lostGate.length === 0, lostGate.join(", "));
 const freedOk = FREED_BY_P31.every(function (k) { return groupOf(k) === "F" && byKeyOf(k) && byKeyOf(k).cls === "login-only"; });
 check("2. posting and post photos are free (F, sign-in only)", freedOk, FREED_BY_P31.map(function (k) { return k + " " + groupOf(k); }).join(", "));   // NAMED (Nov 21 2026, P3-1B): BEFORE "posting, post photos and a new listing"

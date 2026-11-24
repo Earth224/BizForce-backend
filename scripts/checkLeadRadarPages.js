@@ -122,10 +122,18 @@ async function boot(pageKey, mode) {
       try { window.localStorage.setItem("bf_token", "check-token"); } catch (e) { /* jsdom always has it */ }
       window.confirm = function () { seen.confirms += 1; return false; };
       window.alert = function () {};
-      window.fetch = function (url) {
+      window.fetch = function (url, opts) {
         const u = String(url);
         const routePath = u.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
         seen.fetched.push(routePath);
+        /* NAMED (Nov 23 2026, LR-1): Draft asks convert for a draft (it never posts); "Post my reply" sends the shown
+           text to send-approved. Both are answered here, in serve mode only, and every body is recorded. */
+        if (mode === "serve" && (routePath === "/api/agents/sales/convert" || routePath === "/api/agents/sales/send-approved")) {
+          const body = JSON.parse((opts && opts.body) || "{}");
+          (seen.bodies = seen.bodies || []).push([routePath, body]);
+          if (routePath === "/api/agents/sales/convert") return Promise.resolve(reply(200, { results: [{ lead_post_uri: body.lead_post_uri, conversion: "Fits the offer.", draft: "Sorry to hear that. This may help.", draft_rejection: "", sent: false }] }));
+          return Promise.resolve(reply(200, { sent: true, uri: "at://posted/1", text: body.text }));
+        }
         if (LEAD_ROUTES.indexOf(routePath) !== -1) {
           if (mode === "refuse") return Promise.resolve(reply(403, REFUSAL));
           if (routePath === "/api/agents/sales/pipeline") return Promise.resolve(reply(200, { pipeline: SAMPLE_PIPELINE }));
@@ -229,26 +237,29 @@ function textOf(el) { return el ? el.textContent.replace(/\s+/g, " ").trim() : n
     const p = await boot("sales", "serve");
     const d = p.doc;
     check("lead cards render", d.querySelectorAll(".sales-lead-card").length === SAMPLE_LEADS.length, d.querySelectorAll(".sales-lead-card").length + " cards");
-    check("per-lead Convert buttons render", d.querySelectorAll(".sales-convert-btn").length === SAMPLE_LEADS.length);
-    check("the Post Public Replies button is present", d.getElementById("salesConvertAllBtn") !== null);
+    check("per-lead Draft buttons render", d.querySelectorAll(".sales-convert-btn").length === SAMPLE_LEADS.length);
+    /* NAMED (Nov 23 2026, LR-1): BEFORE the bulk "Post Public Replies" button and two confirm dialogs (single and bulk)
+       naming the server's account. AFTER no bulk control at all; Draft shows an editable reply and only "Post my reply"
+       posts, sending exactly the text in the box to send-approved. No confirm dialog: the tap on the shown text is the approval. */
+    check("the bulk Post Public Replies button is gone", d.getElementById("salesConvertAllBtn") === null &&
+      Array.prototype.every.call(d.querySelectorAll("button, a"), function (el) { return !/Post Public Replies/.test(el.textContent); }));
     check("no refusal state is shown", !d.querySelector('[data-state="lead_radar_unavailable"]'));
-    check("the confirm names the server's configured account, not a connected one — single", (function () {
-      const btn = d.querySelector(".sales-convert-btn");
-      if (!btn) return false;
-      p.window.confirm = function (msg) { p.seen.lastConfirm = msg; return false; };
-      btn.click();
-      return typeof p.seen.lastConfirm === "string" &&
-        /configured on the server/.test(p.seen.lastConfirm) && /not from an account you connected/.test(p.seen.lastConfirm) &&
-        !/your own connected/.test(p.seen.lastConfirm);
-    })(), p.seen.lastConfirm);
-    check("— and bulk", (function () {
-      const btn = d.getElementById("salesConvertAllBtn");
-      if (!btn) return false;
-      p.seen.lastConfirm = null;
-      btn.click();
-      return typeof p.seen.lastConfirm === "string" &&
-        /configured on the server/.test(p.seen.lastConfirm) && !/your own connected/.test(p.seen.lastConfirm);
-    })(), p.seen.lastConfirm);
+    p.seen.bodies = [];
+    d.querySelector(".sales-convert-btn").click();
+    for (let i = 0; i < 40 && !d.querySelector(".sales-approve-text"); i++) await sleep(25);
+    const box = d.querySelector(".sales-approve-text");
+    check("Draft asks convert for one lead and shows the draft in an editable box; nothing is sent yet",
+      !!box && box.value === "Sorry to hear that. This may help." && p.seen.bodies.length === 1 && p.seen.bodies[0][0] === "/api/agents/sales/convert" &&
+      p.seen.bodies[0][1].lead_post_uri === SAMPLE_LEADS[0].post_uri && !("segment" in p.seen.bodies[0][1]), JSON.stringify(p.seen.bodies));
+    if (box) box.value = "Sorry to hear that. Edited by me.";
+    const post = d.querySelector(".sales-approve-btn");
+    check("a Post my reply button sits with the box", !!post && /Post my reply/.test(post.textContent));
+    if (post) post.click();
+    for (let i = 0; i < 40 && p.seen.bodies.length < 2; i++) await sleep(25);
+    check("Post my reply sends exactly the text in the box, for that lead, to send-approved",
+      p.seen.bodies.length === 2 && p.seen.bodies[1][0] === "/api/agents/sales/send-approved" &&
+      p.seen.bodies[1][1].text === "Sorry to hear that. Edited by me." && p.seen.bodies[1][1].lead_post_uri === SAMPLE_LEADS[0].post_uri, JSON.stringify(p.seen.bodies));
+    check("no confirm dialog was opened at any step", p.seen.confirms === 0);
     p.window.close();
   }
 
@@ -265,8 +276,9 @@ function textOf(el) { return el ? el.textContent.replace(/\s+/g, " ").trim() : n
     check("lead-radar subtitle no longer says 'your market'", !/in your market/.test(radar));
     check("lead-radar subtitle says one keyword set, one account", /One keyword set and one social account/.test(radar));
     check("no confirm dialog says 'your own connected'", sales.indexOf("your own connected") === -1);
-    check("both confirm dialogs say the account is the server's, not a connected one",
-      (sales.match(/configured on the server for this deployment — not from an account you connected/g) || []).length === 2);
+    // NAMED (Nov 23 2026, LR-1): BEFORE both confirm dialogs (single and bulk) named the server's account. AFTER there are no
+    // confirm dialogs on the page at all: nothing posts but "Post my reply" on the shown text.
+    check("sales.html opens no confirm dialog and has no bulk reply", !/confirm\(/.test(sales) && sales.indexOf("convertAllHighIntent") === -1);
     check("lead-radar empty state no longer promises leads", radar.indexOf("No scored leads yet. The radar runs every 5 minutes.") === -1);
     check("sales empty state no longer promises leads", sales.indexOf("No captured leads yet. Lead Radar scans every 5 minutes.") === -1);
   }

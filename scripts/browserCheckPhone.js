@@ -173,6 +173,17 @@
                        217 elements below moved down by it). Every other page is
                        unchanged at 1440 (Settings' Need alerts row is in Preferences, a
                        closed section). The proof is Downloads\phone1\p33-desktop-proof.json.
+                       NAMED (Nov 23 2026, LR-1): two pages are re-recorded in
+                       desktop-baseline-pplr1-<page>.json (the names sort after pp33):
+                       agents/sms.html (where and when consent was given, beside Add and
+                       Import, and one hint line: 5 new, none gone, three fields of the
+                       add row narrower to make room, 45 elements below moved down
+                       28.7 px) and privacy.html (the services line: "Bluesky and
+                       Mastodon" split into Bluesky, approved replies, and Mastodon, your
+                       own posts: 2 list items new, 1 gone, 150 elements below moved
+                       down). agents/sales.html, agents/lead-radar.html and
+                       dashboard.html are unchanged at 1440. The proof is
+                       Downloads\phone1\lr1-desktop-proof.json.
      PHONE_P21=1         only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,

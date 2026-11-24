@@ -69,7 +69,12 @@ const MUTATIONS = {
   "include-failed-scores": [["    if (leadHasRealScore(r)) {\n      real++;", "    if (r.intent_score != null || r.status === \"score_failed\") {\n      real++;"]],
   // the response carries the sampled post text
   // the source filter is gone, and YouTube rows are read again
-  "reads-youtube": [["    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE);\n", ""]],
+  // NAMED (Nov 23 2026, LR-1): BEFORE the anchor was the source filter alone; LR-1 chained the archived filter onto the same line.
+  "reads-youtube": [["    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE).neq(\"status\", \"archived\");   // NAMED (Nov 23 2026, LR-1): archived rows are not demand\n", "    q = q.neq(\"status\", \"archived\");\n"]],
+  // NAMED (Nov 23 2026, LR-1): archived rows (scripts/oneoff/lr1Archive.js) are read again
+  "reads-archived": [["    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE).neq(\"status\", \"archived\");   // NAMED (Nov 23 2026, LR-1): archived rows are not demand\n", "    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE);\n"]],
+  // NAMED (Nov 23 2026, LR-1): the owner test goes back to "any admin by role"
+  "admin-by-role": [["      if (userId !== OWNER_ACCOUNT_ID) {", "      if (req.user.role !== \"admin\") {"]],
   "return-post-text": [["        not_measured: DEMAND_NOT_MEASURED,\n", "        not_measured: DEMAND_NOT_MEASURED,\n        sample_posts: loaded.rows.slice(0, 3).map(function (r) { return { post_text: r.post_text }; }),\n"]]
 };
 
@@ -112,7 +117,8 @@ function definitionOf(name) {
   return null;
 }
 const STUBS = new Set(["supabase", "nowIso", "console", "process", "require", "module", "app", "Buffer", "setTimeout", "fetch",
-  "requireAuth", "requireActiveSubscription", "aiLimiter", "startToolRun", "callAnthropicText", "resolvePreferredLanguage", "Date", "stripe", "Stripe"]);
+  "requireAuth", "requireActiveSubscription", "aiLimiter", "startToolRun", "callAnthropicText", "resolvePreferredLanguage", "Date", "stripe", "Stripe",
+  "OWNER_ACCOUNT_ID"]);   // NAMED (Nov 23 2026, LR-1): the owner's id, stubbed as "owner" (the route tests it by id now)
 const uncommented = (code) => code.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
 function closure(root) {
   const have = new Map();
@@ -206,6 +212,8 @@ function world() {
   for (let i = 0; i < 9; i++) rows.push(row("low libido", { intent_score: 40 }));
   rows.push(row("ad account disabled", { intent_score: 80 }));
   // YouTube rows: in the window, before it, and undated. None may be read.
+  // NAMED (Nov 23 2026, LR-1): archived rows in the window. None may be read.
+  for (let i = 0; i < 3; i++) rows.push(row("how to manifest", { status: "archived", intent_score: 88, post_text: "archived row in the window " + i }));
   rows.push(row("how to manifest", { source: "youtube", intent_score: 72, post_text: "youtube comment in the window", post_uri: "https://www.youtube.com/watch?v=aaaaaaaaaaa&lc=1" }));
   rows.push(row("how to manifest", { source: "youtube", post_created_at: ago(200), post_text: "youtube comment before the window", post_uri: "https://www.youtube.com/watch?v=aaaaaaaaaaa&lc=2" }));
   rows.push(row("how to manifest", { source: "youtube", post_created_at: null, post_text: "youtube comment undated", post_uri: "https://www.youtube.com/watch?v=aaaaaaaaaaa&lc=3" }));
@@ -221,7 +229,7 @@ function build(opts) {
   const persisted = [];
   const ctx = {
     supabase: db.client, JSON, Math, Promise, Number, Object, Array, String, Date,
-    nowIso: () => new Date().toISOString(), process: { env: {} },
+    nowIso: () => new Date().toISOString(), process: { env: {} }, OWNER_ACCOUNT_ID: "owner",
     console: { log() {}, error() {}, warn() {} },
     requireAuth: function requireAuth() {}, requireActiveSubscription: function requireActiveSubscription() {}, aiLimiter: function aiLimiter() {},
     startToolRun: async () => ({ taskId: opts.taskId || "task-0001", complete: async (body) => { persisted.push(JSON.parse(JSON.stringify(body))); return true; }, fail: async () => {} }),
@@ -236,10 +244,10 @@ function build(opts) {
   ctx.app = { post(p) { if (p === ROUTE) { handler = arguments[arguments.length - 1]; middleware = [].slice.call(arguments, 1, -1).map(f => f.name); } } };
   vm.createContext(ctx);
   vm.runInContext(LIFTED, ctx);
-  async function call(body, role) {
+  async function call(body, role, id) {   // NAMED (Nov 23 2026, LR-1): + id (the owner test is by id)
     const res = { code: 200, body: null, status(x) { this.code = x; return this; }, json(x) { this.body = JSON.parse(JSON.stringify(x)); return this; } };
     let err = null;
-    await handler({ user: { id: "owner", role: role || "admin" }, body: body || {} }, res, e => { err = e; res.code = 500; });
+    await handler({ user: { id: id || "owner", role: role || "admin" }, body: body || {} }, res, e => { err = e; res.code = 500; });
     return { status: res.code, body: res.body, err };
   }
   return { db, prompts, persisted, call, api: ctx.api, middleware, rows };
@@ -382,8 +390,15 @@ function leaks(obj, rows) {
   check("a model failure: 200 with measured, themes null and explanation_error",
     rf.status === 200 && rf.body.measured && rf.body.measured.rows_in_window === 35 && rf.body.themes === null && /could not be generated/.test(rf.body.explanation_error), rf.status + " " + JSON.stringify(rf.body && rf.body.explanation_error));
   const bn = build();
-  const rn = await bn.call({ theme: "manifestation" }, "user");
-  check("a non-admin: 403, before anything is read", rn.status === 403 && /owner account/.test(rn.body.error) && bn.db.log.length === 0 && bn.prompts.length === 0, rn.status);
+  // NAMED (Nov 23 2026, LR-1): BEFORE "a non-admin: 403" (the test was role "admin"). AFTER the owner by id: any other account is refused, an admin included.
+  const rn = await bn.call({ theme: "manifestation" }, "user", "member-1");
+  check("a member who is not the owner: 403, before anything is read", rn.status === 403 && /owner account/.test(rn.body.error) && bn.db.log.length === 0 && bn.prompts.length === 0, rn.status);
+  const ba = build();
+  const ra = await ba.call({ theme: "manifestation" }, "admin", "admin-2");
+  check("an admin who is not the owner: 403, before anything is read", ra.status === 403 && /owner account/.test(ra.body.error) && ba.db.log.length === 0 && ba.prompts.length === 0, ra.status);
+  const bo = build();
+  const ro = await bo.call({ theme: "manifestation" }, "user", "owner");
+  check("the owner by id, whatever the role: 200", ro.status === 200 && ro.body && ro.body.measured, ro.status);
   check("the route has requireAuth, requireActiveSubscription and aiLimiter", JSON.stringify(b0.middleware) === JSON.stringify(["requireAuth", "requireActiveSubscription", "aiLimiter"]));
 
   /* ── 10. no row-level field ───────────────────────────────────────────── */
@@ -406,6 +421,8 @@ function leaks(obj, rows) {
   check("by_source names no youtube, for a theme and for all", !r.body.measured.by_source.some(x => x.source === "youtube") && !rall.body.measured.by_source.some(x => x.source === "youtube"),
     JSON.stringify([r.body.measured.by_source, rall.body.measured.by_source]));
   check("no YouTube comment reaches the model, for a theme or for all", [b0, ball].every(bb => bb.prompts.every(p => !/youtube comment/.test(p))));
+  // NAMED (Nov 23 2026, LR-1)
+  check("no archived row reaches the model, for a theme or for all", [b0, ball].every(bb => bb.prompts.every(p => !/archived row in the window/.test(p))));
   check("the YouTube rows are in no count: the window still holds 35 rows, 8 undated, <5 before it",
     m.rows_in_window === 35 && m.undated_rows === 8 && m.dated_before_window === "<5", JSON.stringify([m.rows_in_window, m.undated_rows, m.dated_before_window]));
   const ytOnlyKeywords = ["boost energy naturally", "how to boost energy naturally", "why am i always tired", "low libido help",

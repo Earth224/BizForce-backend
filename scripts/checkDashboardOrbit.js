@@ -292,6 +292,11 @@ const OLD = [];
     OLD.push({ slug: m[1], text: m[0], href: a[1], label: a[2], title: /<h3>([^<]+)<\/h3>/.exec(m[0])[1] });
   }
 }
+/* NAMED (Nov 23 2026, LR-1): the Lead Radar tile's one sentence lost "and Mastodon when switched on" (Mastodon lead search is
+   removed). That sentence is swapped in BASELINE's copy of the tile, once, and the rest of every tile is still compared byte for byte. */
+const LR1_TILE_FROM = "<p>Buying-intent posts from Bluesky, and Mastodon when switched on, scored and ranked.";
+const LR1_TILE_TO = "<p>Buying-intent posts from Bluesky, scored and ranked.";
+OLD.forEach(t => { if (t.slug === "lead-radar" && t.text.split(LR1_TILE_FROM).length === 2) { t.text = t.text.replace(LR1_TILE_FROM, LR1_TILE_TO); t.lr1Swapped = true; } });
 const BASE_DIR = BASE.slice(BASE.indexOf("<div id=\"agentDirectoryLanding\""), BASE.indexOf("<!-- Recent Activity was removed here."));
 
 /* ── fixtures ── */
@@ -367,6 +372,7 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const tpl = (/<template id="orbitTools">([\s\S]*?)<\/template>/.exec(FILES[DASH]) || ["", ""])[1];
   const notKept = OLD.filter(t => tpl.indexOf(t.text) === -1 || FILES[DASH].split(t.text).length !== 2).map(t => t.slug);
   check("each of the 29 tiles is in the template byte for byte, once", notKept.length === 0, notKept.join(", "));
+  check("LR-1: the Lead Radar tile differs from BASELINE only by its Mastodon words (swapped once)", OLD.filter(t => t.lr1Swapped).length === 1 && FILES[DASH].indexOf("and Mastodon when switched on") === -1);
   // NAMED (Nov 10 2026, visual match): rebuilt for one grid cell, so its parts and links are checked, not its bytes.
   const tplDir = (/<div id="agentDirectoryLanding"[\s\S]*?\n<\/div>\n/.exec(tpl) || [""])[0];
   const baseBtn = id => (new RegExp("<button type=\"button\" id=\"" + id + "\"[^\\n]*<\\/button>").exec(BASE_DIR) || ["?"])[0];

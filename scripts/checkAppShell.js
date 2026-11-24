@@ -47,6 +47,14 @@ const FX3_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell
 // NAMED (Nov 22 2026, FX3B): FX3B's hunks in two of the unchanged files (bf-orbit.js: the first portal's boxes built before
 // the settle and the drift's longer lead; css/bizforce-ui.css: the five unused agent icon rules removed), [file, now, before]
 // (U1); undone first, they return each file to frontend d3b1f6f exactly
+// NAMED (Nov 23 2026, LR-1): Mastodon lead search is removed, so two sentences lost "Mastodon": the dashboard's Lead Radar card and the Guide's
+// Lead Radar switches tip. Each pair is [file, now, was]; undone first (it is the newest), each found exactly once.
+const LR1_SWAPS = [
+  ["dashboard.html", "  <p>Buying-intent posts from Bluesky, scored and ranked. Runs on a single social account and is enabled only for the account that owns it.</p>",
+    "  <p>Buying-intent posts from Bluesky, and Mastodon when switched on, scored and ranked. Runs on a single social account and is enabled only for the account that owns it.</p>"],
+  ["scripts/termaximus-guide.js", "\"New Bluesky finds arrive every 5 minutes; YouTube and scoring each wait on their own switch. Press \\\"Refresh\\\" to load.\",",
+    "\"New Bluesky finds arrive every 5 minutes; Mastodon, YouTube and scoring each wait on their own switch. Press \\\"Refresh\\\" to load.\","]
+];
 const FX3B_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx3b.json"), "utf8"));
 const PRESENCE = "scripts/termaximus-presence.js", GUIDE = "scripts/termaximus-guide.js";
 // NAMED (Nov 20 2026, P2-2): the only lines P2-2 added to dashboard.html (see U1).
@@ -102,7 +110,9 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-1B): BEFORE "fx2". AFTER "p31b": the free-account rules (bf-access.js Buy sheet and members intercepts, the Create sheet's Members tags, the composer's photo rule and Show in Google, Talk's members box).
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
-  "sw-old-rev": [[SW, "var SHELL_REV = \"p33\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+  // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
+  // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
+  "sw-old-rev": [[SW, "var SHELL_REV = \"lr1b\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
     "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
@@ -269,7 +279,9 @@ async function page(pathname, opts) {
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
-  check("W1. SHELL_REV \"p33\" in the cache's name", has(sw, "var SHELL_REV = \"p33\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+  // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
+  // NAMED (Nov 23 2026, LR-1B): BEFORE "lr1"; AFTER "lr1b" (suppressed.html noindex).
+  check("W1. SHELL_REV \"lr1b\" in the cache's name", /var SHELL_REV = "lr1b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
@@ -283,6 +295,8 @@ async function page(pathname, opts) {
     // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
     let now = FILES[f];
     if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    // NAMED (Nov 23 2026, LR-1): LR-1's two hunks undone first, the same way
+    LR1_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + "\u0000lr1 hunk missing"; });
     // NAMED (Nov 22 2026, FX3B): FX3B's hunks undone before all the others, the same way
     FX3B_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + "\u0000fx3b hunk missing"; });
     // NAMED (Nov 22 2026, FX3 part D): its hunks undone first, the same way
