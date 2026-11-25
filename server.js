@@ -1523,6 +1523,30 @@ app.use(function (req, res, next) {
   next();
 });
 
+/* NAMED (Nov 25 2026, LR-4): INDEXNOW AFTER A SAVE. After a member saves a listing or service, their profile, their place,
+   or a post (a 2xx answer), their indexable addresses (lib/getFoundRoutes.js indexableUrls; and the post's, when it is
+   indexable, lib/posts.js indexablePost) are queued for IndexNow (indexNowAfterSave, lib/indexNow.js). Off unless
+   ENABLE_INDEXNOW is "true"; it runs after the answer is sent, so it never delays or fails the save. */
+var INDEXNOW_TRIGGERS = [
+  ["POST", /^\/api\/marketplace\/listings\/?$/], ["PUT", /^\/api\/marketplace\/listings\/[^/]+\/?$/],
+  ["PUT", /^\/api\/profile\/me\/?$/], ["PUT", /^\/api\/bfp\/profile\/me\/?$/], ["PUT", /^\/api\/me\/place\/?$/],
+  ["POST", /^\/api\/posts\/?$/, "post"], ["PATCH", /^\/api\/posts\/[^/]+\/?$/, "post"]
+];
+app.use(function (req, res, next) {
+  var path = String(req.path || "");
+  var t = INDEXNOW_TRIGGERS.find(function (x) { return x[0] === req.method && x[1].test(path); });
+  if (t && require("./lib/indexNow").enabled(process.env)) {
+    var sent = null;
+    if (t[2] === "post") { var json = res.json; res.json = function (b) { sent = b; return json.call(this, b); }; }
+    res.on("finish", function () {
+      if (res.statusCode < 200 || res.statusCode > 299 || !req.user || !req.user.id) return;
+      var postId = t[2] === "post" ? (req.method === "PATCH" ? path.split("/")[3] : (sent && sent.post && sent.post.id) || null) : null;
+      indexNowAfterSave(req.user.id, postId);
+    });
+  }
+  next();
+});
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -50616,6 +50640,35 @@ app.get("/api/sitemap/posts.xml", postPageLimiter, async function (req, res) {
     return res.status(503).type("text/plain").send("The post sitemap could not be built just now.");
   }
 });
+
+/* ── GET FOUND (LR-4, Nov 25 2026): pages Google can read, their sitemaps, IndexNow and the Found score ──
+   lib/getFoundRoutes.js mounts GET /@:handle and GET /listing/:id (seller.html and listing.html with the head filled in on
+   the server, lib/publicPages.js; Netlify proxies both here), /api/sitemap/profiles.xml and /api/sitemap/listings.xml,
+   /api/indexnow/key.txt, and the members' GET /api/leads/found and GET/PUT /api/me/google. IndexNow (lib/indexNow.js) is
+   off unless ENABLE_INDEXNOW is "true" and INDEXNOW_KEY is set; indexNowAfterSave (INDEXNOW_TRIGGERS, near the top) queues
+   a member's indexable addresses after a save has answered, and never delays or fails it. */
+/* The tier the robots rule reads: "member" only while getUserPlan says the account is entitled; a failed read throws, and the
+   page answers 503 rather than guess. It gates nothing else. */
+async function getFoundTierOf(userId) { return accessTier(await getUserPlan(userId)); }
+const indexNowQueue = require("./lib/indexNow").createQueue({ sb: supabase, env: process.env, fetch: function (u, o) { return fetch(u, o); }, now: function () { return Date.now(); } });
+const getFoundApi = require("./lib/getFoundRoutes").mountGetFoundRoutes(app, {
+  sb: supabase, requireAuth: requireAuth, requireActiveSubscription: requireActiveSubscription, env: process.env, indexNow: indexNowQueue,
+  tierOf: getFoundTierOf,
+  hiddenAmong: function (sb, kind, ids) { return require("./lib/safety").hiddenAmong(sb, kind, ids); },
+  pageLimiter: postPageLimiter
+});
+function indexNowAfterSave(userId, postId) {
+  if (!require("./lib/indexNow").enabled(process.env)) return;
+  (async function () {
+    var urls = await getFoundApi.indexableUrls(userId);
+    if (postId && require("./lib/postPage").isPostId(postId)) {
+      var row = await supabase.from("posts").select("id, author_id, status, audience, search_visible").eq("id", postId).eq("author_id", userId).maybeSingle();
+      if (!row.error && row.data && !(await require("./lib/safety").hiddenAmong(supabase, "post", [row.data.id])).has(row.data.id) &&
+        await require("./lib/posts").indexablePost(postDeps(), row.data)) urls.push(require("./lib/postPage").postUrl(row.data.id));
+    }
+    indexNowQueue.queue(urls);
+  })().catch(function (e) { console.warn("[indexnow] after save: " + ((e && e.message) || e)); });
+}
 
 /* bizforceai.net/campaign/<share_id>, proxied here by Netlify so the page is
    served with the campaign's own title, image and preview tags. A malformed

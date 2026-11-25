@@ -94,8 +94,8 @@ const MUTATIONS = {
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter): the anchor "p33", the mutant "fx3b"
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment. Mutant "p33".
-  // NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  "shell-rev": [[SW, "var SHELL_REV = \"lr3b\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
+  // NAMED (Nov 25 2026, LR-4B): BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "shell-rev": [[SW, "var SHELL_REV = \"lr4b\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
     // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
@@ -207,7 +207,29 @@ const MUTATIONS = {
   // NAMED (Nov 23 2026, LR-2): the page drops under the theme's fixed backdrop (PHONE_LR2's first screenshot showed only the YouTube card)
   "lr2-under-backdrop": [[LRP, ".lr-page { position: relative; z-index: 1;", ".lr-page {"]],
   // NAMED (Nov 23 2026, LR-2): a slow read that started before Save lands after it and shows the lead unsaved again
-  "lr2-stale-read": [[LRP, "        if (mine !== seq) return;\n", ""]]
+  "lr2-stale-read": [[LRP, "        if (mine !== seq) return;\n", ""]],
+  // NAMED (Nov 25 2026, LR-4): LeadsFound, section J
+  "lr4-tab-gone": [[LRP, '<span class="lr-tbf">Get found</span>', '<span class="lr-tbf">Found</span>']],
+  "lr4-tabs-clip": [[LRP, ".lr-tabs { display: flex; gap: 4px; padding: 0 12px 10px; overflow-x: auto; }", ".lr-tabs { display: flex; gap: 4px; padding: 0 12px 10px; overflow: hidden; }"]],
+  "lr4-top-gap": [[LRP, ".lr-gf-top { display: flex; align-items: center; gap: 16px;", ".lr-gf-top { display: flex; align-items: center; gap: 12px;"]],
+  "lr4-intro-words": [[LRP, "Do the gold ones first.</p>", "Start with the gold ones.</p>"]],
+  "lr4-ring-arc": [[LRP, '<circle id="lrRingArc" cx="48" cy="48" r="40" fill="none" stroke="#f5c46b"', '<circle id="lrRingArc" cx="48" cy="48" r="40" fill="none" stroke="#22d3ee"']],
+  "lr4-ring-track": [[LRP, 'r="40" fill="none" stroke="#1e2848" stroke-width="8"', 'r="40" fill="none" stroke="#141b33" stroke-width="8"']],
+  "lr4-ring-size": [[LRP, '<svg class="lr-ring" id="lrRing" width="96" height="96"', '<svg class="lr-ring" id="lrRing" width="88" height="88"']],
+  "lr4-ring-dash": [[LRP, 'arc.setAttribute("stroke-dasharray", Math.round(RING * n / 100) + " 252");', 'arc.setAttribute("stroke-dasharray", n + " 252");']],
+  "lr4-ring-num": [[LRP, 'fill="#f7f3e8" font-weight="700" font-size="24"', 'fill="#f7f3e8" font-weight="700" font-size="22"']],
+  "lr4-row-pad": [[LRP, ".lr-gfi { display: flex; align-items: center; gap: 10px; padding: 10px 0;", ".lr-gfi { display: flex; align-items: center; gap: 10px; padding: 12px 0;"]],
+  "lr4-row-line": [[LRP, "padding: 10px 0; border-bottom: 1px solid #141b33; }", "padding: 10px 0; border-bottom: 1px solid #1e2848; }"]],
+  "lr4-mark-size": [[LRP, ".lr-gfm { flex: none; width: 26px; height: 26px;", ".lr-gfm { flex: none; width: 24px; height: 24px;"]],
+  "lr4-done-colour": [[LRP, ".lr-gfi.is-done .lr-gfm { border-color: #6ee7b7; color: #6ee7b7; }", ".lr-gfi.is-done .lr-gfm { border-color: #f5c46b; color: #f5c46b; }"]],
+  "lr4-waiting-colour": [[LRP, ".lr-gfi.is-waiting .lr-gfm { border-color: #8e9bbf; color: #8e9bbf; }", ".lr-gfi.is-waiting .lr-gfm { border-color: #a9b3cc; color: #a9b3cc; }"]],
+  "lr4-mark-words": [[LRP, 'var MARKS = { todo: "!", done: "&#10003;", waiting: "&#8230;" };', 'var MARKS = { todo: "!", done: "&#10003;", waiting: "-" };']],
+  "lr4-title-font": [[LRP, ".lr-gft { display: block; font: 600 13.5px", ".lr-gft { display: block; font: 600 14px"]],
+  "lr4-sub-font": [[LRP, ".lr-gfd { display: block; font-size: 12px; line-height: 1.35;", ".lr-gfd { display: block; font-size: 12px; line-height: 1.5;"]],
+  "lr4-button-tall": [[LRP, ".lr-btn.is-s .lr-btnf { height: 34px; }", ".lr-btn.is-s .lr-btnf { height: 38px; }"]],
+  "lr4-small-hit": [[LRP, "    .lr-btn.is-s { margin: -5px 0; }\n", ""]],
+  "lr4-weight": [["@lib/foundScore.js", "var WEIGHTS = { basics: 15, profile: 20,", "var WEIGHTS = { basics: 20, profile: 15,"]],
+  "lr4-waiting-words": [["@lib/foundScore.js", "detail: \"Connected, waiting for each platform's approval\"", "detail: \"Waiting for approval\""]]
 };
 // NAMED (Nov 23 2026, LR-2): + Lead Radar's page and bf-access.js
 const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB, COMP, COMPOSE, LRP, BFA]);   // NAMED (Nov 23 2026, P3-3): + the composer and its page   // NAMED (Nov 22 2026, FX3): + the four boards' files
@@ -395,8 +417,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
 // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
 // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-// NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-check("E1. sw.js SHELL_REV is \"lr3b\"", /\nvar SHELL_REV = "lr3b";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
+// NAMED (Nov 25 2026, LR-4B): BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+check("E1. sw.js SHELL_REV is \"lr4b\"", /\nvar SHELL_REV = "lr4b";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
@@ -738,6 +760,40 @@ check("E1. sw.js SHELL_REV is \"lr3b\"", /\nvar SHELL_REV = "lr3b";[ \t]*(?:\/\/
   // NAMED (Nov 23 2026, LR-2): PHONE_LR2 found it (a chip's read landing after Save showed the lead unsaved again)
   check("I17. a list read that lands after a newer read or a Save is dropped, and a Save that dropped one reads the list again",
     has("mine = ++seq;") && has("        if (mine !== seq) return;\n") && has("var dropped = reading; seq++; reading = false;") && has("if (dropped) { loadLeads(); return; }"));
+
+  /* ── J ── NAMED (Nov 25 2026, LR-4): LeadsFound, "Get found: your Found score" */
+  console.log("\n══ J. LR-4: LeadsFound (Get found: your Found score) ══");
+  const FD = LD.FOUND, RG = FD.RING, RW = FD.ROW, TP = FD.TOP;
+  const FSL = FILES["@lib/foundScore.js"] || "";
+  check("J1. the four tabs " + TB.ITEMS.join(", ") + " in that order, Get found opening its own panel; the row swipes (overflow-x auto) so no tab is cut at 360 px",
+    J(tabs) === J(["Leads", "Inbound", "Get found", "Fingerprint"]) && TB.SWIPE === true && holds(r(".lr-tabs"), { "overflow-x": "auto" }) &&
+    has('id="lrTabGf"') && has('aria-labelledby="lrTabGf" hidden>') && has('["found", "lrTabGf", "lrGf"]'), J([tabs, r(".lr-tabs")]));
+  check("J2. the top: " + px(FD.PANEL.PAD_X) + " sides, " + FD.PANEL.GAP + " px apart; the ring and words " + TP.GAP + " px apart (" + TP.PAD + "); \"" + TP.TITLE + "\" " + TP.TITLE_WEIGHT + " " + TP.TITLE_FONT + " px; the line " + TP.TEXT_FONT + "/" + TP.TEXT_LINE + " " + TP.TEXT_COLOR,
+    holds(r(".lr-gf"), { gap: px(FD.PANEL.GAP), padding: "0 " + px(FD.PANEL.PAD_X) }) &&
+    holds(r(".lr-gf-top"), { display: "flex", "align-items": "center", gap: px(TP.GAP), padding: TP.PAD }) &&
+    holds(r(".lr-gf-t"), { font: TP.TITLE_WEIGHT + " " + px(TP.TITLE_FONT) + " " + F0 }) && has('<p class="lr-gf-t">' + TP.TITLE + "</p>") &&
+    holds(r(".lr-gf-s"), { "font-size": px(TP.TEXT_FONT), "line-height": String(TP.TEXT_LINE), color: TP.TEXT_COLOR }) && has('<p class="lr-gf-s">' + TP.TEXT + "</p>"), J([r(".lr-gf"), r(".lr-gf-top"), r(".lr-gf-s")]));
+  check("J3. the ring: " + RG.SIZE + " px, radius " + RG.R + ", " + RG.STROKE + " px, track " + RG.TRACK + ", gold arc " + RG.ARC + " (round, from the top), the figure " + RG.NUM_WEIGHT + " " + RG.NUM_FONT + " px " + RG.NUM_COLOR + "; the arc is round(2 pi " + RG.R + " x score / 100) of " + RG.DASH_TOTAL + " (" + RG.SAMPLE[0] + " draws " + RG.SAMPLE[1] + ", as the board)",
+    has('<svg class="lr-ring" id="lrRing" width="' + RG.SIZE + '" height="' + RG.SIZE + '" viewBox="0 0 ' + RG.SIZE + " " + RG.SIZE + '"') &&
+    has('<circle cx="48" cy="48" r="' + RG.R + '" fill="none" stroke="' + RG.TRACK + '" stroke-width="' + RG.STROKE + '"></circle>') &&
+    has('<circle id="lrRingArc" cx="48" cy="48" r="' + RG.R + '" fill="none" stroke="' + RG.ARC + '" stroke-width="' + RG.STROKE + '" stroke-linecap="' + RG.CAP + '" stroke-dasharray="0 ' + RG.DASH_TOTAL + '" transform="rotate(' + RG.ROTATE + ' 48 48)"') &&
+    has('<text id="lrRingNum" x="' + RG.NUM_X + '" y="' + RG.NUM_Y + '" text-anchor="middle" fill="' + RG.NUM_COLOR + '" font-weight="' + RG.NUM_WEIGHT + '" font-size="' + RG.NUM_FONT + '">') &&
+    has("var RING = 251.33;") && has('arc.setAttribute("stroke-dasharray", Math.round(RING * n / 100) + " ' + RG.DASH_TOTAL + '");') &&
+    Math.round(251.33 * RG.SAMPLE[0] / 100) === RG.SAMPLE[1] && Math.abs(2 * Math.PI * RG.R - 251.33) < 0.01);
+  check("J4. a row: " + RW.GAP + " px apart, " + RW.PAD + ", a " + RW.LINE + " line; the " + RW.MARK + " px mark (" + RW.MARK_BORDER + " px ring, " + RW.MARK_WEIGHT + " " + RW.MARK_FONT + " px): to do " + RW.TODO + " \"!\", done " + RW.DONE + " tick, waiting " + RW.WAITING + " dots; the title " + RW.TITLE_WEIGHT + " " + RW.TITLE_FONT + " px, the line " + RW.SUB_FONT + "/" + RW.SUB_LINE + " " + RW.SUB_COLOR + "; a " + RW.BUTTON_H + " px button inside a " + LD.HIT + " px target",
+    holds(r(".lr-gfi"), { display: "flex", "align-items": "center", gap: px(RW.GAP), padding: RW.PAD, "border-bottom": "1px solid " + RW.LINE }) &&
+    holds(r(".lr-gfm"), { width: px(RW.MARK), height: px(RW.MARK), "border-radius": px(RW.MARK_RADIUS), border: RW.MARK_BORDER + "px solid " + RW.TODO, color: RW.TODO, font: RW.MARK_WEIGHT + " " + px(RW.MARK_FONT) + " " + F0 }) &&
+    holds(r(".lr-gfi.is-done .lr-gfm"), { "border-color": RW.DONE, color: RW.DONE }) && holds(r(".lr-gfi.is-waiting .lr-gfm"), { "border-color": RW.WAITING, color: RW.WAITING }) &&
+    has('var MARKS = { todo: "' + FD.MARKS.todo + '", done: "' + FD.MARKS.done + '", waiting: "' + FD.MARKS.waiting + '" };') &&
+    holds(r(".lr-gft"), { font: RW.TITLE_WEIGHT + " " + px(RW.TITLE_FONT) + " " + F0 }) &&
+    holds(r(".lr-gfd"), { "font-size": px(RW.SUB_FONT), "line-height": String(RW.SUB_LINE), color: RW.SUB_COLOR }) &&
+    holds(r(".lr-btn.is-s .lr-btnf"), { height: px(RW.BUTTON_H) }) && holds(r(".lr-btn.is-s"), { margin: lift(LD.HIT, RW.BUTTON_H) }) && holds(rule(lr, "    a.lr-gfx "), { "min-height": px(LD.HIT) }),
+    J([r(".lr-gfi"), r(".lr-gfm"), r(".lr-btn.is-s")]));
+  check("J5. the score's weights " + J(FD.WEIGHTS) + " (sum 100) and the board's words, from lib/foundScore.js",
+    FSL.indexOf("var WEIGHTS = { basics: 15, profile: 20, listings: 20, posts: 15, connected: 15, fingerprint: 15 };") !== -1 &&
+    Object.values(FD.WEIGHTS).reduce((a, b) => a + b, 0) === 100 &&
+    Object.values(FD.TITLES).every(t => FSL.indexOf('title: "' + t + '"') !== -1) &&
+    Object.values(FD.DETAILS).every(t => FSL.indexOf('"' + t + '"') !== -1) && FD.WAITING_TITLE === ["YouTube", "TikTok", "Instagram", "Facebook"].join(", "));
 
   T.finish();
 })();

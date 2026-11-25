@@ -292,15 +292,23 @@ const NEEDPOST = {
        are not drawn, so they take the nearest drawn kind's colours;
      the board draws the NEW and WON pills; TALKING (#b79cfa on #070b18) and LOST (#c9d1e6 on #2b3a6b) are not drawn;
      the pill is a 44 px button (HIT) that opens the small menu (Talking, Won, Lost, Back to New), which the board does not draw;
-     a won item carries "Add to my customers" under it (not drawn). */
+     a won item carries "Add to my customers" under it (not drawn).
+   NAMED (Nov 25 2026, LR-4): + LeadsFound ("Get found: your Found score"), measured from its .dc.html (FOUND). The tabs are now all
+   four the board draws: Leads, Inbound, Get found, Fingerprint. KEPT, and named in the report as deviations from that board:
+     the tab row swipes (overflow-x auto) where the board clips it (overflow hidden), so no tab is cut at 360 px (TABS.SWIPE);
+     the gold items come first (the brief: "the order shows gold items first"), then the done ones, then the waiting row; the
+       board draws "Add" first, two done items, then "Fix";
+     the 34 px buttons are drawn inside 44 px targets (HIT), and a done profile row is a link to the page (min 44 px);
+     the ring's figure is in the site's font, never Space Grotesk; the Posts Fix asks first (a card under the row, not drawn);
+     the sixth item, "Fingerprint complete", is below the board's fold (not drawn), and is built in the same row style. */
 const LEADS = {
-  BOARDS: ["LeadsHome", "LeadsReply", "LeadsFingerprint", "LeadsInbound"],
+  BOARDS: ["LeadsHome", "LeadsReply", "LeadsFingerprint", "LeadsInbound", "LeadsFound"],
   FONT: 'system-ui, -apple-system, "Segoe UI", Arial, sans-serif',
   PAGE: { BG: "#070b18", TEXT: "#e6eaf5" },
   HIT: 44,
   HEADER: { PAD: "12px 8px 4px", GAP: 6, BUTTON: 44, MARK: 34, MARK_RADIUS: 10, MARK_BG: "#0f2a3a", TITLE: "Lead Radar", TITLE_FONT: 18, TITLE_WEIGHT: 700,
     SETTINGS: "Radar settings" },
-  TABS: { ITEMS: ["Leads", "Inbound", "Fingerprint"], NOT_DRAWN: ["Get found"], PAD: "0 12px 10px", GAP: 4, H: 40, PAD_X: 14, RADIUS: 20, FONT: 14, WEIGHT: 600,
+  TABS: { ITEMS: ["Leads", "Inbound", "Get found", "Fingerprint"], NOT_DRAWN: [], SWIPE: true, PAD: "0 12px 10px", GAP: 4, H: 40, PAD_X: 14, RADIUS: 20, FONT: 14, WEIGHT: 600,
     COLOR: "#a9b3cc", ON_BG: "#0f2a3a" },
   CONTENT: { PAD_X: 12, GAP: 10 },
   CARD: { RADIUS: 16, BORDER: "#1e2848", BG: "#0b1022", PAD: 12, GAP: 8 },
@@ -345,8 +353,21 @@ const LEADS = {
       card_lead: { BG: "#14302a", COLOR: "#6ee7b7", PATH: "M14 10h4M14 14h3" },
       campaign: { BG: "#2a2410", COLOR: "#f5c46b", PATH: "M12 21s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.5-7 10-7 10z" } },
     NOT_DRAWN: ["tip", "lead_reply"],
-    PILLS: { NEW: { BG: "#22d3ee", COLOR: "#070b18" }, WON: { BG: "#f5c46b", COLOR: "#070b18" } } }
+    PILLS: { NEW: { BG: "#22d3ee", COLOR: "#070b18" }, WON: { BG: "#f5c46b", COLOR: "#070b18" } } },
+  FOUND: {
+    PANEL: { PAD_X: 16, GAP: 6 },
+    TOP: { GAP: 16, PAD: "4px 0 8px", TITLE: "Found score", TITLE_FONT: 17, TITLE_WEIGHT: 700,
+      TEXT: "How easy you are to find on Google and the apps people search. Do the gold ones first.", TEXT_FONT: 13, TEXT_LINE: 1.4, TEXT_COLOR: "#a9b3cc" },
+    RING: { SIZE: 96, R: 40, STROKE: 8, TRACK: "#1e2848", ARC: "#f5c46b", CAP: "round", ROTATE: -90, DASH_TOTAL: 252, SAMPLE: [62, 156],
+      NUM_X: 48, NUM_Y: 54, NUM_FONT: 24, NUM_WEIGHT: 700, NUM_COLOR: "#f7f3e8" },
+    ROW: { GAP: 10, PAD: "10px 0", LINE: "#141b33", MARK: 26, MARK_RADIUS: 13, MARK_BORDER: 2, MARK_FONT: 13, MARK_WEIGHT: 700,
+      TODO: "#f5c46b", DONE: "#6ee7b7", WAITING: "#8e9bbf", TITLE_FONT: 13.5, TITLE_WEIGHT: 600, SUB_FONT: 12, SUB_LINE: 1.35, SUB_COLOR: "#a9b3cc", BUTTON_H: 34 },
+    MARKS: { todo: "!", done: "&#10003;", waiting: "&#8230;" },
+    WEIGHTS: { basics: 15, profile: 20, listings: 20, posts: 15, connected: 15, fingerprint: 15 },
+    TITLES: { basics: "Add your city and a short bio", profile: "Your profile page on Google", listings: "Your listings on Google", posts: "Posts shown in Google", fingerprint: "Fingerprint complete" },
+    DETAILS: { basics: "Google and Need alerts use them to match you", waiting: "Connected, waiting for each platform's approval", connected: "Your posts and approved replies go out from your account" },
+    WAITING_TITLE: "YouTube, TikTok, Instagram, Facebook" }
 };
 
-// NAMED (Nov 24 2026, LR-3): + LEADS.INBOUND. NAMED (Nov 23 2026, LR-2): + LEADS. NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
+// NAMED (Nov 25 2026, LR-4): + LEADS.FOUND, TABS four. NAMED (Nov 24 2026, LR-3): + LEADS.INBOUND. NAMED (Nov 23 2026, LR-2): + LEADS. NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
 module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX, COMPOSER, NEEDPOST, LEADS };

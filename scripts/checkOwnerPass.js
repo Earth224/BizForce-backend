@@ -316,6 +316,9 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       // NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs). BEFORE "getUserPlan in agentLiveBody". AFTER the same read,
       // moved unchanged into accountUsageToday, which agentLiveBody and the Command Center's usage section share. Still 19.
       "getUserPlan in accountUsageToday",
+      // NAMED (Nov 25 2026, LR-4): one more reader. getFoundTierOf gives lib/getFoundRoutes.js the tier for the robots rule
+      // ("member" makes a page indexable); a failed read throws and the page answers 503. It lets no free account in.
+      "getUserPlan in getFoundTierOf",
       // NAMED (Oct 29 2026, Executive Headquarters, Block 3a): BEFORE 16 readers; AFTER 17. The calendar's agent-run
       // read reads .active only to show whether a schedule will run; unknown (a failed read) shows nothing. It gates nothing.
       "getUserPlan in /api/agents/live/calendar",

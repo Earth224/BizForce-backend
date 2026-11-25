@@ -1,0 +1,12 @@
+[
+ [
+  "music-popout.html",
+  "    /* NAMED (Nov 25 2026, LR-4): on a phone the 440 px boombox is drawn smaller to fit the screen (the factor the page's\n       script sets, --bbx-pop-fit, at most 1), and its layout box shrinks with it, so nothing scrolls sideways. The\n       desktop window is unchanged: every rule is inside this media query. */\n    @media (max-width: 760px){\n      #bfMusicPopout{width:100%;max-width:100%;display:flex;justify-content:center}\n      #bfMusicPopout .bfm-pop{width:100%;min-width:0}\n      #bfMusicPopout .bfm-pop .bbx{transform:scale(var(--bbx-pop-fit, 1));transform-origin:top center;margin:0 calc((var(--bbx-pop-fit, 1) - 1) * 220px) calc((var(--bbx-pop-fit, 1) - 1) * 250px)}\n      #bfMusicPopout .bfm-pop .bfm-drawer{width:100%;max-width:100%}\n    }\n",
+  ""
+ ],
+ [
+  "music-popout.html",
+  "<script>\n  /* NAMED (Nov 25 2026, LR-4): the boombox's scale on a phone: the room the page has (its width less 24 px of padding) over the\n     box's 440 px, at most 1. Only the phone rule above reads it, so the desktop window is unchanged. */\n  (function () {\n    function fit() {\n      var w = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);\n      document.documentElement.style.setProperty(\"--bbx-pop-fit\", String(Math.min(1, Math.floor(((w - 24) / 440) * 1000) / 1000)));\n    }\n    fit();\n    window.addEventListener(\"resize\", fit);\n  })();\n</script>\n",
+  ""
+ ]
+]

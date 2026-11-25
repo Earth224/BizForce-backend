@@ -64,6 +64,11 @@ const LR2_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell
 // and the class that turns it on). [file, now, was]; undone before LR-2's (they are the newest), each found exactly once, they
 // return termaximus-guide.js to frontend f73aec1 exactly.
 const LR3B_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.lr3b.json"), "utf8"));
+// NAMED (Nov 25 2026, LR-4): music-popout.html scrolled sideways on a phone (401 px at 360; LR-4 PART E asks for none): its
+// boombox is drawn smaller on a phone (a rule inside @media (max-width: 760px) and the script that sets its scale). [file, now,
+// was]; undone before LR-3B's (they are the newest), each found exactly once, they return music-popout.html to frontend 5f560dd
+// exactly, so the player and its button icon stay byte for byte as at 1803344.
+const LR4_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.lr4.json"), "utf8"));
 const PRESENCE = "scripts/termaximus-presence.js", GUIDE = "scripts/termaximus-guide.js";
 // NAMED (Nov 20 2026, P2-2): the only lines P2-2 added to dashboard.html (see U1).
 const P22_DASH_LINES = [
@@ -78,6 +83,9 @@ const UNCHANGED = ["oracle.html", "mychart.html", "calendar.html", "synastry.htm
   "scripts/bf-hq-views.js", "scripts/bf-orbit.js", "dashboard.html", "css/bf-phone.css", "css/bizforce-ui.css", "scripts/termaximus-guide.js", "music-popout.html"];
 
 const MUTATIONS = {
+  // NAMED (Nov 25 2026, LR-4): music-popout.html changed outside LR-4's two hunks (the music script), and a hunk no longer found
+  "lr4-popout-player-changed": [["music-popout.html", "<script src=\"/scripts/bf-music.js\"></script>\n<script>\n", "<script src=\"/scripts/bf-music.js?v=2\"></script>\n<script>\n"]],
+  "lr4-popout-hunk-changed": [["music-popout.html", "transform-origin:top center;", "transform-origin:center;"]],
   "shown-on-oracle": [[BAR, "    \"oracle.html\", \"mychart.html\", \"calendar.html\", \"synastry.html\", \"the-third.html\"\n", "    \"mychart.html\", \"calendar.html\", \"synastry.html\", \"the-third.html\"\n"]],
   "shown-on-legal": [[BAR, "    \"terms.html\", \"privacy.html\", \"refund.html\", \"contact.html\",\n", "    \"terms.html\", \"refund.html\", \"contact.html\",\n"]],
   "shown-on-campaign-link": [[BAR, "\"/campaign/\", \"/c/\", ", "\"/c/\", "]],
@@ -119,8 +127,8 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  "sw-old-rev": [[SW, "var SHELL_REV = \"lr3b\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+  // NAMED (Nov 25 2026, LR-4B): BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "sw-old-rev": [[SW, "var SHELL_REV = \"lr4b\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
     "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
@@ -288,8 +296,8 @@ async function page(pathname, opts) {
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  check("W1. SHELL_REV \"lr3b\" in the cache's name", /var SHELL_REV = "lr3b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
+  // NAMED (Nov 25 2026, LR-4B): BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  check("W1. SHELL_REV \"lr4b\" in the cache's name", /var SHELL_REV = "lr4b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
@@ -303,6 +311,8 @@ async function page(pathname, opts) {
     // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
     let now = FILES[f];
     if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    // NAMED (Nov 25 2026, LR-4): LR-4's hunks undone before all the others, the same way
+    LR4_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " lr4 hunk missing"; });
     // NAMED (Nov 24 2026, LR-3B): LR-3B's hunks undone before all the others, the same way
     LR3B_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " lr3b hunk missing"; });
     // NAMED (Nov 23 2026, LR-2): LR-2's hunks undone before all the others, the same way

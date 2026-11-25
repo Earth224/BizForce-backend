@@ -232,6 +232,21 @@
                        inputs carry a random id, matched by their box). Every other
                        page is unchanged at 1440: the Guide's 40 px of left room is
                        phone only. The proof is Downloads\phone1\lr3b-desktop-proof.json.
+                       NAMED (Nov 25 2026, LR-4): three more in
+                       desktop-baseline-pplr4-<page>.json (the names sort after pplr3b):
+                       agents/lead-radar.html (the Get found tab: 2 new, the Fingerprint
+                       tab and its face 96.1 px along, 62 the same, none gone, height
+                       900), privacy.html (the profile-in-search sentence: 1 new, 6
+                       boxes grew, 350 below moved down 26.4 or 263.9 px, 54 the same,
+                       none gone, the page 264 px taller) and settings.html (the
+                       Privacy tab: 2 new, the tab bar 52 px taller, 61 the same, none
+                       gone, height 1082). contact.html, marketplace.html,
+                       music-popout.html (its fit is phone only), profile.html,
+                       refund.html, terms.html (the narrow-screen wrap rule is phone
+                       only) and home.html (Edit post's audience is in a closed
+                       dialog) are unchanged at 1440. /@handle and /listing/:id are
+                       measured by PHONE_LR4 against the pages as before. The proof is
+                       Downloads\phone1\lr4-desktop-proof.json.
      PHONE_P21=1        only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
@@ -270,6 +285,12 @@
                            account (the members panel, no lead request), signed out (the sign-in page), and
                            Threads waiting for Meta; fixtures only, nothing is ever sent; at 360, 390 and 430;
                            screenshots at 390 x 844 to PHONE_LR2_OUT (default Downloads\lr2)
+     PHONE_LR4=1           only LR-4's Get found, the Google switch, /@handle and /listing/:id with the server's head, privacy and
+                           music-popout's width, and Edit post's audience (lr4Run; NAMED (Nov 25 2026, LR-4)); at 360, 390 and 430;
+                           screenshots and the two heads to PHONE_LR4_OUT (default Downloads\lr4).
+                           NAMED (Nov 25 2026, LR-4B): step 7b holds bf-safety.js back 1500 ms, then the
+                           seller's data 1500 ms, and the storefront's "..." menu must draw both ways;
+                           PHONE_LR4_SELLER=<file> serves that file as /@rose (HEAD's seller.html fails 7b)
      PHONE_LR3=1           only LR-3's Inbound and the storefront's Message (lr3Run; NAMED (Nov 24 2026, LR-3)):
                            the board LeadsInbound measured, the chips filtering, a tap opening the source, the
                            menu's status moves, Add to my customers, and the storefront's Message button for a
@@ -332,7 +353,8 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && process.env.PHONE_LR2 !== "1" && process.env.PHONE_LR3 !== "1" && PAGES.length > 15) {   // NAMED (Nov 23 2026, P3-3): and PHONE_P33. NAMED (Nov 23 2026, LR-2): and PHONE_LR2   // HQ1 and P2-1: their own runs, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && process.env.PHONE_LR2 !== "1" && process.env.PHONE_LR3 !== "1" && process.env.PHONE_LR4 !== "1" && PAGES.length > 15) {   // NAMED (Nov 25 2026, LR-4): and PHONE_LR4
+    // NAMED (Nov 23 2026, P3-3): and PHONE_P33. NAMED (Nov 23 2026, LR-2): and PHONE_LR2   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -532,6 +554,7 @@ function api(method, u, request) {
   const p = u.pathname;
   if (LR2) { const a = lr2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 23 2026, LR-2)
   if (LR3) { const a = lr3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 24 2026, LR-3)
+  if (LR4) { const a = lr4Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 25 2026, LR-4)
   if (FX3) { const a = fx3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 22 2026, FX3)
   if (P23 && FX2S.on && !FX2S.inner) { const a = fx2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, FX2)
   // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
@@ -583,9 +606,11 @@ function api(method, u, request) {
   if (P22) { const a = p22Api(method, p); if (a !== undefined) return a; }
   // NAMED (Nov 20 2026, P2-3): with PHONE_P23=1, posts, the feed, comments and follows are lib/posts.js over P23S.db
   // (p23Api, a promise; the request handler awaits every answer), then P2-1's fixtures (the profile, the counts).
-  if ((P23 || P31 || P32 || P33) && P23_IS(p)) return p23Api(method, u, request);   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 23 2026, P3-3): and PHONE_P33
+  if ((P23 || P31 || P32 || P33 || LR4) && P23_IS(p)) return p23Api(method, u, request);   // NAMED (Nov 25 2026, LR-4): and PHONE_LR4 (Edit post, the Fix)
+    // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 23 2026, P3-3): and PHONE_P33
   if (P23) { const a = fx1Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 20 2026, FX1)
-  if (P21 || P22 || P23 || P31 || P32 || P33) { const a = p21Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 23 2026, P3-3): and PHONE_P33
+  if (P21 || P22 || P23 || P31 || P32 || P33 || LR4) { const a = p21Api(method, p); if (a !== undefined) return a; }   // NAMED (Nov 25 2026, LR-4): and PHONE_LR4
+    // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 23 2026, P3-3): and PHONE_P33
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -601,13 +626,19 @@ function serve() {
     try { p = decodeURIComponent(new URL(req.url, "http://x").pathname); } catch (e) { res.writeHead(400); res.end(); return; }
     if (p === "/__hq1/tone.wav") { res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": TONE.length, "Cache-Control": "no-store" }); res.end(TONE); return; }   // HQ1
     if (p.endsWith("/")) p += "index.html";
+    // NAMED (Nov 25 2026, LR-4B): PHONE_LR4 step 7b holds bf-safety.js back, then answers it as usual
+    // NAMED (Nov 25 2026, LR-4B): PHONE_LR4_SELLER=<file> serves that file as /@rose (to show step 7b fails on an older seller.html)
+    if (LR4 && process.env.PHONE_LR4_SELLER && p === "/@rose" && !/[?&]__plain=1/.test(req.url)) { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(fs.readFileSync(process.env.PHONE_LR4_SELLER)); return; }
+    if (LR4 && LR4S.safetyDelay && p === "/scripts/bf-safety.js" && !req.lr4Held) { req.lr4Held = true; setTimeout(() => server.emit("request", req, res), LR4S.safetyDelay); return; }
     // NAMED (Nov 20 2026, P2-3): /p/<id> is the backend's page (lib/postPage.js over P23S.db), as _redirects proxies it
     if ((P23 || P32 || P31) && /^\/p\/[^/]+$/.test(p)) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 21 2026, P3-1B): and PHONE_P31
       p23PostPage(p.slice(3)).then(r => { res.writeHead(r.code, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(r.html); },
         e => { res.writeHead(500); res.end(String(e && e.message)); });
       return;
     }
-    if (P21 || P23 || P32) p = p21Rewrite(p);   // NAMED (Nov 21 2026, P3-2): and PHONE_P32   // P2-1: /@handle, /listing/:id, /blog/... as the site rewrites them
+    // NAMED (Nov 25 2026, LR-4): /@handle and /listing/:id are the backend's pages (lib/publicPages.js over the frontend's own files), as _redirects proxies them
+    if (LR4 && !/[?&]__plain=1/.test(req.url)) { const html = lr4Page(p); if (html !== null) { res.writeHead(/^\/(@rose|listing\/spring-cake)$/.test(p) ? 200 : 404, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(html); return; } }
+    if (P21 || P23 || P32 || LR4) p = p21Rewrite(p);   // NAMED (Nov 25 2026, LR-4): and PHONE_LR4 (?__plain=1: the file as the old rewrite served it)   // NAMED (Nov 21 2026, P3-2): and PHONE_P32   // P2-1: /@handle, /listing/:id, /blog/... as the site rewrites them
     let file = path.resolve(root, "." + p);
     if (!fs.existsSync(file) && fs.existsSync(file + ".html")) file += ".html";
     if (!file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); res.end("not found"); return; }
@@ -931,6 +962,7 @@ const ORBIT = String.raw`(function(){
     else if (P33) { await p33Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, P3-3)
     else if (LR2) { await lr2Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, LR-2)
     else if (LR3) { await lr3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 24 2026, LR-3)
+    else if (LR4) { await lr4Run(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, LR-4)
     else if (GUIDE_SCAN) {   // NAMED (Nov 24 2026, LR-3B): only the Guide-tab rule, every listed page at 360, 390 and 430
       for (const page of PAGES) { currentPage = page; for (const [w, h] of PHONES) { await open(cdp, origin, page, w, h, true);
         if (!(await evaluate(cdp, "!!document.getElementById('tmx-guide-tab')"))) continue;   // the sideways check judges the room the Guide adds
@@ -3733,5 +3765,392 @@ async function lr3Run(cdp, origin) {
       // ran first; those two are matched by their box, the random part of the id masked in both.
       else { const mask = x => ({ w: x.w, h: x.h, list: x.list.map(e => [String(e[0]).replace(/^input\|sup[a-z0-9]{6}([AN])\|/, "input|sup*$1|"), e[1], e[2]]) }); desktopCompare(KEY, mask(base[KEY]), mask(b)); }
     });
+  }
+}
+
+/* ══ LR-4 (Nov 25 2026): PHONE_LR4=1 ═════════════════════════════════════════════════════════════════════
+   NAMED (Nov 25 2026, LR-4): Get found at PHONE_LR4_WIDTHS (default 360, 390, 430), fixtures only: no request leaves the
+   browser. GET /api/leads/found is lib/foundScore.js compute over the fixture's facts (Rose's posts are P2-3's lib/posts.js over
+   P23S.db, so the Fix's PATCH is the real editPost); GET and PUT /api/me/google answer as lib/getFoundRoutes.js does. Measured
+   against scripts/designSpec.js LEADS.FOUND (LeadsFound): the ring, the title and line, each row's mark, words and button, gold
+   first. Each action goes where it should (Add to Edit profile at the bio, the profile link, Fix's in-page confirm and its
+   PATCH, Open Fingerprint, Connect, a listing's Fix to Edit Listing). Settings, Privacy: the switch, on by default, saved,
+   and a free account's line. /@rose and /listing/spring-cake are served the way the backend serves them (lib/publicPages.js
+   over the frontend's own seller.html and listing.html) and are compared, box by box, with seller.html?u=rose and
+   listing.html?id=... (the page as before), with the new head present. privacy.html and music-popout.html scroll no
+   sideways. Edit post's audience (Public / Followers), Followers to Public refused without a confirmed email (with Resend
+   email), then saved. Four screenshots at 390 x 844 (DPR 2) and the two served heads as text, to PHONE_LR4_OUT. */
+const LR4 = process.env.PHONE_LR4 === "1";
+const LR4_WIDTHS = String(process.env.PHONE_LR4_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const LR4_OUT = process.env.PHONE_LR4_OUT || path.join(os.homedir(), "Downloads", "lr4");
+const LR4_LISTING = uid(5000), LR4_LISTING2 = uid(5001);
+// NAMED (Nov 25 2026, LR-4B): safetyDelay holds back /scripts/bf-safety.js, sellerDelay the seller's data (ms; step 7b)
+const LR4S = { member: true, allDone: false, google: null, puts: [], calls: [], patches: [], resends: 0, safetyDelay: 0, sellerDelay: 0 };
+const LR4_PP = () => require("../lib/publicPages");
+function lr4Facts() {
+  const FS = require("../lib/foundScore");
+  const posts = (P23S.db ? P23S.db.t.posts : []).filter(x => x.author_id === ROSE.id && x.status === "published" && x.audience === "public")
+    .map(x => ({ id: x.id, body: x.body, search_visible: x.search_visible === true }));
+  const done = LR4S.allDone;
+  return FS.compute({
+    profile: { username: "rose", bio: done ? "We bake bread and cakes every morning on Maple Street." : "", place_city: done ? "Portland" : null },
+    profileIndexable: LR4S.google !== false, profileWhy: LR4S.google === false ? "switch_off" : null,
+    listings: [{ id: LR4_LISTING, title: "Spring cake", description: "A light sponge with lemon curd.", category_slug: "food", media: [{ url: "https://cdn.example.com/cake.png" }], indexable: LR4S.google !== false }],
+    posts: posts,
+    connections: { bluesky: true, youtube: !done, tiktok: !done, instagram: !done, facebook: !done },
+    fingerprint: { categories: ["food"], place_city: "Portland", reach: "city", keywords: ["bread", "cakes", "sourdough", "bakery", "pastry"] }
+  });
+}
+function lr4Api(method, u, request) {
+  const p = u.pathname;
+  let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; }
+  if (/^\/api\/(leads\/found|me\/google|auth\/resend-verification)/.test(p) || (/^\/api\/posts\//.test(p) && method === "PATCH")) LR4S.calls.push(method + " " + p);
+  const panel = require("../lib/membership").membersPanelFromCode();
+  if (p === "/api/auth/me") {
+    const verified = !!(P23S.db && (P23S.db.t.users.find(x => x.id === ROSE.id) || {}).email_verified_at);
+    return { user: Object.assign({}, ROSE, { email_verified_at: verified ? ago(24) : null }),
+      access: LR4S.member ? { active: true, exempt: false, access_reason: "subscription", inactive_reason: null, tier: "member", email_verified: verified, members_panel: panel }
+        : { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: verified, members_panel: panel },
+      subscription: null, profile: { username: "rose" } };
+  }
+  if ((p === "/api/leads/found" || p === "/api/me/google") && !LR4S.member) return { __status: 402, __body: { error: "Get found is for members.", code: "members_only", members_panel: panel } };
+  if (p === "/api/leads/found") return lr4Facts();
+  if (p === "/api/me/google" && method === "GET") return { show_in_google: LR4S.google !== false, indexable: LR4S.google !== false, why: LR4S.google === false ? "switch_off" : null, profile_url: "https://bizforceai.net/@rose" };
+  if (p === "/api/me/google" && method === "PUT") {
+    LR4S.puts.push(b);
+    if (typeof b.show_in_google !== "boolean") return { __status: 400, __body: { error: "Show my profile and listings in Google is on or off.", field: "show_in_google" } };
+    LR4S.google = b.show_in_google;
+    const M = require("../lib/getFoundRoutes").SWITCH_MESSAGES;
+    return { saved: true, show_in_google: b.show_in_google, message: b.show_in_google ? M.saved_on : M.saved_off };
+  }
+  if (p === "/api/auth/resend-verification") { LR4S.resends++; return { sent: true, message: "We sent you a new link." }; }
+  if (p === "/api/leads" && method === "GET") return { leads: [], stats: { new_this_week: 0, replied: 0, won: 0 }, sources_on: { bizforce: true, bluesky: true, youtube: false, threads: false }, weaker_hidden: 0 };
+  if (p === "/api/leads/summary") return { new_this_week: 0 };
+  if (p === "/api/leads/fingerprint" && method === "GET") return { fingerprint: { categories: ["food"], place_city: "Portland", place_region: "Oregon", reach: "city", keywords: ["bread", "cakes", "sourdough", "bakery", "pastry"], sources: { bizforce: true, bluesky: true, youtube: false, threads: false } }, categories: P33_CATS, threads: { state: "none" } };
+  if (p === "/api/inbound/summary") return { counts: { new: 0, talking: 0, won: 0, lost: 0 } };
+  if (p === "/api/bfp/seller/rose") { const v = { seller: { user_id: ROSE.id, username: "rose", display_name: "Rose", tagline: "Maple Street Bakery", avatar_url: null }, products: [], services: [], support_links: [] };
+    return LR4S.sellerDelay ? new Promise(r => setTimeout(() => r(v), LR4S.sellerDelay)) : v; }   // NAMED (Nov 25 2026, LR-4B): may be held back (step 7b)
+  if (p === "/api/marketplace/listings/" + LR4_LISTING || p === "/api/marketplace/listings/spring-cake") return { listing: lr4ListingRow(), seller: { user_id: ROSE.id, username: "rose", display_name: "Rose" } };
+  return undefined;
+}
+function lr4ListingRow() {
+  return { id: LR4_LISTING, slug: "spring-cake", title: "Spring cake", description: "A light sponge with lemon curd.", status: "active", listing_kind: "product", price_bfc: 40, price_usd: null,
+    category_slug: null, category: null, media: [{ url: P21_IMG[0], type: "image/png" }], seller_id: ROSE.id, created_at: ago(48) };
+}
+/* The pages the backend serves (lib/getFoundRoutes.js loadProfileView / loadListingView shapes), over the fixture's rows. */
+function lr4ProfileView() {
+  const PP = LR4_PP();
+  return { profile: { user_id: ROSE.id, username: "rose", display_name: "Rose", bio: "We bake bread and cakes every morning on Maple Street.", avatar_url: null, banner_url: null,
+    place_city: "Portland", place_region: "Oregon", place_country: "US", show_products: true },
+    business: { business_name: "Maple Street Bakery" }, listings: [{ id: LR4_LISTING, slug: "spring-cake", title: "Spring cake", description: "A light sponge with lemon curd." }],
+    sameAs: PP.sameAsFrom({ bluesky: "rose.bsky.social" }), robots: LR4S.google === false ? PP.NOINDEX : PP.INDEX };
+}
+function lr4ListingView() {
+  const PP = LR4_PP(), l = lr4ListingRow();
+  return { listing: Object.assign({}, l, { media: [{ url: "https://cdn.example.com/spring-cake.png" }] }), seller: { username: "rose", display_name: "Rose" }, categoryName: "Food & drink",
+    robots: LR4S.google === false ? PP.NOINDEX : PP.INDEX };
+}
+function lr4Page(p) {
+  const PP = LR4_PP();
+  if (/^\/@rose$/.test(p)) return PP.renderProfilePage(lr4ProfileView());
+  if (/^\/listing\/spring-cake$/.test(p)) return PP.renderListingPage(lr4ListingView());
+  if (/^\/@[^/]+$/.test(p)) return PP.renderProfilePage(null);
+  if (/^\/listing\/[^/]+$/.test(p)) return PP.renderListingPage(null);
+  return null;
+}
+const lr4Head = html => html.slice(html.indexOf("<head>"), html.indexOf("</head>") + "</head>".length);
+async function lr4Run(cdp, origin) {
+  fs.mkdirSync(LR4_OUT, { recursive: true });
+  console.log("browserCheckPhone LR-4 (Get found: the board, each action, the Fix confirm; the Google switch; /@handle and /listing/:id as before with the new head; privacy and music-popout; Edit post's audience) at " + LR4_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const LD = require("./designSpec").LEADS, FD = LD.FOUND;
+  const ALLOW = /^(div|section|aside)[#.](bf-safety|bf-safety-backdrop|bfp-dialog|bfp-dialog-backdrop|bf-members-panel)[ .]/;
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    check(at + "no text cut off", m.clipped.length === 0, J(m.clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const ok = x => !!(opts && opts.cover) && ALLOW.test(x);
+    const deco = m.deco.filter(x => !ok(x));
+    check(at + "decoration is under the text", deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !ok(x));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.cover ? " (the dialog is meant to cover the page)" : ""), over.length === 0, J(over));
+    return m;
+  };
+  const BOX = "function bx(e){if(!e)return null;var r=e.getBoundingClientRect(),c=getComputedStyle(e);return {w:Math.round(r.width*10)/10,h:Math.round(r.height),l:Math.round(r.left),r:Math.round(r.right),t:Math.round(r.top),b:Math.round(r.bottom),rad:c.borderTopLeftRadius,pad:c.padding,fs:c.fontSize,fw:c.fontWeight,lh:c.lineHeight,bg:c.backgroundColor,col:c.color,bc:c.borderTopColor,bw:c.borderTopWidth,txt:(e.innerText||'').replace(/\\s+/g,' ').trim()};}";
+  const READ_GF = "(function(){" + BOX + "var q=function(s){return document.querySelector(s);},qa=function(s){return [].slice.call(document.querySelectorAll(s));};var arc=q('#lrRingArc');" +
+    "return {tabOn:(q('.lr-tb[aria-selected=true] .lr-tbf')||{}).textContent,tabs:qa('.lr-tb .lr-tbf').map(function(t){return t.textContent;}),panel:!!q('#lrGf')&&!q('#lrGf').hidden," +
+    "ring:bx(q('#lrRing')),dash:arc&&arc.getAttribute('stroke-dasharray'),arcOn:arc&&arc.getAttribute('visibility'),arcCol:arc&&arc.getAttribute('stroke'),num:(q('#lrRingNum')||{}).textContent,label:q('#lrRing')&&q('#lrRing').getAttribute('aria-label')," +
+    "title:bx(q('.lr-gf-t')),line:bx(q('.lr-gf-s')),top:bx(q('.lr-gf-top')),msg:q('#lrGfMsg')&&!q('#lrGfMsg').hidden?q('#lrGfMsg').textContent:null," +
+    "rows:qa('#lrGfList .lr-gfi').map(function(e){var a=e.querySelector('.lr-gfx'),btn=e.querySelector('.lr-btn'),f=btn&&btn.querySelector('.lr-btnf');return {key:e.getAttribute('data-key'),status:(e.className.match(/is-(todo|done|waiting)/)||[])[1],row:bx(e),mark:bx(e.querySelector('.lr-gfm')),markTxt:(e.querySelector('.lr-gfm')||{}).textContent," +
+    "t:bx(e.querySelector('.lr-gft')),d:bx(e.querySelector('.lr-gfd')),href:a&&a.tagName==='A'?a.getAttribute('href'):null,linkH:a&&a.tagName==='A'?Math.round(a.getBoundingClientRect().height):null," +
+    "btn:btn?{txt:btn.textContent.trim(),hit:bx(btn),face:bx(f),href:btn.getAttribute('href'),gf:btn.getAttribute('data-gf')}:null};}),confirm:bx(q('#lrGfConfirm'))};})()";
+  const tap = sel => ev("(function(){var e=document.querySelector(" + J(sel) + ");if(!e)return false;e.scrollIntoView({block:'center'});e.click();return true;})()");
+  const waitFor = async (expr, n) => { for (let i = 0; i < (n || 40); i++) { try { if (await ev(expr)) return true; } catch (e) { /* navigating */ } await sleep(100); } return false; };
+  const px = n => n + "px";
+  const rgb = hex => { const v = parseInt(hex.slice(1), 16); return "rgb(" + (v >> 16) + ", " + ((v >> 8) & 255) + ", " + (v & 255) + ")"; };
+  const sw = () => ev("({sw:document.documentElement.scrollWidth,bw:document.body?document.body.scrollWidth:0,iw:window.innerWidth})");
+  const PAGE_HEAD = "(function(){var m=function(s){var e=document.querySelector(s);return e?(e.getAttribute('content')||e.getAttribute('href')):null;};var ld=document.querySelector('script[type=\"application/ld+json\"]');var t=null;try{t=ld?JSON.parse(ld.textContent)['@type']:null;}catch(e){t='bad';}" +
+    "return {title:document.title,robots:m('meta[name=robots]'),canonical:m('link[rel=canonical]'),og:m('meta[property=\"og:title\"]'),ogImage:m('meta[property=\"og:image\"]'),ld:t,noscript:document.querySelectorAll('body > noscript').length};})()";
+
+  for (const w of LR4_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(LR4_OUT, name + ".png"), Buffer.from(r.data, "base64")); } };
+    Object.assign(P23S, await p23World(false));
+    P23S.db.t.posts.filter(x => x.author_id === ROSE.id).forEach(x => { x.search_visible = false; });
+    Object.assign(LR4S, { member: true, allDone: false, google: null, puts: [], calls: [], patches: [], resends: 0 });
+
+    // 1. LeadsFound, a member
+    await open(cdp, origin, "agents/lead-radar.html#found", w, h, true);
+    await waitFor("document.querySelectorAll('#lrGfList .lr-gfi').length>0");
+    let at = "LR4 Get found at " + w + ": ";
+    let r = await ev(READ_GF);
+    const fx = lr4Facts();
+    check(at + "the four tabs " + LD.TABS.ITEMS.join(", ") + ", Get found chosen and shown; one GET /api/leads/found",
+      J(r.tabs) === J(LD.TABS.ITEMS) && r.tabOn === "Get found" && r.panel && LR4S.calls.filter(c => c === "GET /api/leads/found").length >= 1, J([r.tabs, r.tabOn, LR4S.calls]));
+    check(at + "the ring: " + FD.RING.SIZE + " px, gold arc, the score " + fx.score + " (dash " + Math.round(251.33 * fx.score / 100) + " of 252), \"Found score " + fx.score + " of 100\"",
+      r.ring.w === FD.RING.SIZE && r.ring.h === FD.RING.SIZE && r.num === String(fx.score) && r.dash === Math.round(251.33 * fx.score / 100) + " 252" && r.arcOn === "visible" && r.arcCol === FD.RING.ARC && r.label === "Found score " + fx.score + " of 100", J([r.ring, r.num, r.dash, r.label]));
+    check(at + "\"" + FD.TOP.TITLE + "\" " + FD.TOP.TITLE_WEIGHT + " " + FD.TOP.TITLE_FONT + " px and the board's line " + FD.TOP.TEXT_FONT + " px " + FD.TOP.TEXT_COLOR + ", beside the ring, inside the screen",
+      r.title.txt === FD.TOP.TITLE && r.title.fs === px(FD.TOP.TITLE_FONT) && r.title.fw === String(FD.TOP.TITLE_WEIGHT) && r.line.txt === FD.TOP.TEXT && r.line.fs === px(FD.TOP.TEXT_FONT) && r.line.col === rgb(FD.TOP.TEXT_COLOR) &&
+      r.top.l >= 0 && r.top.r <= w && r.title.l >= r.ring.r, J([r.title, r.line, r.top]));
+    check(at + "the rows in the server's order, the gold to-do ones first, then done, then the waiting row",
+      J(r.rows.map(x => x.key)) === J(fx.items.map(x => x.key)) && J(r.rows.map(x => x.status)) === J(fx.items.map(x => x.status)) && r.rows[0].status === "todo" && r.rows[r.rows.length - 1].status === "waiting", J(r.rows.map(x => [x.key, x.status])));
+    const R0 = r.rows, R = k => R0.find(x => x.key === k) || {};
+    check(at + "each row: a " + FD.ROW.MARK + " px mark (to do \"!\" " + FD.ROW.TODO + ", done a tick " + FD.ROW.DONE + ", waiting dots " + FD.ROW.WAITING + "), the title " + FD.ROW.TITLE_WEIGHT + " " + FD.ROW.TITLE_FONT + " px, the line " + FD.ROW.SUB_FONT + " px, a " + FD.ROW.LINE + " rule, padded " + FD.ROW.PAD,
+      r.rows.every(x => x.mark.w === FD.ROW.MARK && x.mark.h === FD.ROW.MARK && x.mark.rad === px(FD.ROW.MARK_RADIUS) && x.mark.col === rgb(FD.ROW[x.status.toUpperCase()]) &&
+        x.markTxt === { todo: "!", done: "✓", waiting: "…" }[x.status] && x.t.fs === px(FD.ROW.TITLE_FONT) && x.t.fw === String(FD.ROW.TITLE_WEIGHT) && x.d.fs === px(FD.ROW.SUB_FONT) &&
+        x.row.pad === FD.ROW.PAD.split(" ").map(v => v === "0" ? "0px" : v).join(" ") && x.row.l >= 0 && x.row.r <= w), J(r.rows.map(x => [x.key, x.mark, x.markTxt, x.t.fs, x.d.fs, x.row.pad])));
+    check(at + "the board's words: \"Add your city and a short bio\" (Add), the profile's address (a link to /@rose), \"Posts shown in Google\" (Fix), \"Bluesky connected\", and \"" + FD.WAITING_TITLE + "\" \"" + FD.DETAILS.waiting + "\"",
+      R("basics").t.txt === FD.TITLES.basics && R("basics").d.txt === FD.DETAILS.basics && R("basics").btn.txt === "Add" && R("profile").d.txt === "bizforceai.net/@rose with your name, city and work" && R("profile").href === "/@rose" &&
+      R("posts").t.txt === FD.TITLES.posts && R("posts").btn.txt === "Fix" && R("connected").t.txt === "Bluesky connected" && R("waiting").t.txt === FD.WAITING_TITLE && R("waiting").d.txt === FD.DETAILS.waiting,
+      J(r.rows.map(x => [x.key, x.t && x.t.txt, x.d && x.d.txt, x.btn && x.btn.txt])));
+    check(at + "every button's face is " + FD.ROW.BUTTON_H + " px inside a 44 px target, and the profile link is 44 px tall",
+      r.rows.filter(x => x.btn).every(x => x.btn.face.h === FD.ROW.BUTTON_H && x.btn.hit.h >= 44 && x.btn.hit.w >= 44 && x.btn.hit.r <= w) && R("profile").linkH >= 44, J(r.rows.filter(x => x.btn).map(x => [x.key, x.btn.face, x.btn.hit])));
+    await ev("window.scrollTo(0,0),true"); await sleep(150);
+    await pageChecks(at);
+    await shot("get-found");
+
+    // 2. Fix for posts: the confirm, Cancel, then Turn on (one PATCH with the post's own text and search_visible true)
+    at = "LR4 the Fix confirm at " + w + ": ";
+    await tap('#lrGfList .lr-gfi[data-key="posts"] [data-gf="posts"]');
+    await waitFor("!!document.getElementById('lrGfConfirm')", 20);
+    let cf = await ev("(function(){var c=document.getElementById('lrGfConfirm');if(!c)return null;var b=[].map.call(c.querySelectorAll('button'),function(x){return [x.textContent.trim(),Math.round(x.getBoundingClientRect().height),x.getAttribute('data-gf')];});return {t:(document.getElementById('lrGfConfirmT')||{}).textContent,b:b,focus:document.activeElement&&document.activeElement.getAttribute('data-gf')};})()");
+    check(at + "Fix asks first: \"Turn on Show in Google for 1 post?\", Turn on and Cancel 44 px, focus on Turn on; nothing sent yet",
+      !!cf && cf.t === "Turn on Show in Google for 1 post?" && J(cf.b.map(x => x[0])) === J(["Turn on", "Cancel"]) && cf.b.every(x => x[1] >= 44) && cf.focus === "posts-yes" && LR4S.calls.filter(c => /^PATCH/.test(c)).length === 0, J([cf, LR4S.calls]));
+    await pageChecks(at);
+    await tap('[data-gf="posts-no"]'); await sleep(200);
+    check(at + "Cancel closes it, sends nothing, and gives focus back to Fix", await ev("!document.getElementById('lrGfConfirm')&&document.activeElement&&document.activeElement.getAttribute('data-gf')==='posts'") === true && LR4S.calls.filter(c => /^PATCH/.test(c)).length === 0);
+    await tap('#lrGfList .lr-gfi[data-key="posts"] [data-gf="posts"]'); await waitFor("!!document.getElementById('lrGfConfirm')", 20);
+    await tap('[data-gf="posts-yes"]');
+    await waitFor("(function(){var e=document.querySelector('#lrGfList .lr-gfi[data-key=posts]');return !!e&&/is-done/.test(e.className);})()", 60);
+    r = await ev(READ_GF);
+    const own = P23S.db.t.posts.find(x => x.id === P23_POST.own) || {};
+    check(at + "Turn on: one PATCH /api/posts/:id (search_visible true, the text unchanged), stored; the list is read again and Posts is done; the score rises by 15",
+      LR4S.calls.filter(c => c === "PATCH /api/posts/" + P23_POST.own).length === 1 && own.search_visible === true && own.body === "Sourdough, second bake of the morning." && R("posts").status === "todo" &&
+      (r.rows.find(x => x.key === "posts") || {}).status === "done" && Number(r.num) === fx.score + 15, J([LR4S.calls, own.search_visible, r.num]));
+
+    // 3. each action goes where it should
+    at = "LR4 the actions at " + w + ": ";
+    const LRP = await ev("[].map.call(document.querySelectorAll('#lrGfList .lr-gfi'),function(e){var b=e.querySelector('.lr-btn');return [e.getAttribute('data-key'),b?(b.getAttribute('href')||b.getAttribute('data-gf')):null];})");
+    check(at + "Add (bio) opens /profile.html#edit-bio, Connect /agents/social.html; a done profile links to /@rose",
+      R("basics").btn.href === "/profile.html#edit-bio" && (fx.items.find(x => x.key === "connected").status === "done" || R("connected").btn.href === "/agents/social.html") && R("profile").href === "/@rose", J([R("basics").btn, LRP]));
+    // the page's own focus() on the bio box is recorded when it is called (headless Chrome sends no focus events to an unfocused window, and the run's after-load Guide-tab probe may move focus later)
+    const { identifier: bioWatch } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "(function(){var f=HTMLElement.prototype.focus;HTMLElement.prototype.focus=function(){if(this.id==='bioInput')window.__bioFocused=true;return f.apply(this,arguments);};})();" });
+    await open(cdp, origin, "profile.html#edit-bio", w, h, true);
+    const bio = await waitFor("window.__bioFocused===true&&document.body.classList.contains('edit-mode')&&document.getElementById('bioInput').offsetParent!==null", 120);
+    await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: bioWatch });
+    check(at + "Add lands in Edit profile: edit mode on, the bio box shown and given focus", bio, J(await ev("({hash:location.hash,focused:window.__bioFocused===true,edit:document.body.classList.contains('edit-mode'),vis:!!document.getElementById('bioInput')&&document.getElementById('bioInput').offsetParent!==null})")));
+    await open(cdp, origin, "marketplace.html?edit=" + LR4_LISTING, w, h, true);
+    const ed = await waitFor("document.getElementById('listingModal').classList.contains('open')&&document.getElementById('modalTitle').textContent==='Edit Listing'", 60);
+    check(at + "a listing's Fix (marketplace.html?edit=<id>) opens Edit Listing for that listing", ed && (await ev("document.getElementById('fTitle').value")) === "Spring cake", await ev("({open:document.getElementById('listingModal').className,t:document.getElementById('fTitle').value})"));
+    await open(cdp, origin, "agents/lead-radar.html#found", w, h, true);
+    await waitFor("document.querySelectorAll('#lrGfList .lr-gfi').length>0");
+    await ev("(function(){var b=document.querySelector('#lrGfList [data-gf=\"fingerprint\"]');if(b){b.click();}return true;})()"); await sleep(400);
+    const fp = await ev("({tab:(document.querySelector('.lr-tb[aria-selected=true] .lr-tbf')||{}).textContent,shown:!!document.getElementById('lrFp')&&!document.getElementById('lrFp').hidden})");
+    // the Fingerprint is complete in the fixture, so its row is done and carries no button; a Fingerprint to do opens the tab (checkGetFound J4, checkDesignFidelity)
+    check(at + "a complete Fingerprint is done (no button)", (fx.items.find(x => x.key === "fingerprint") || {}).status === "done" && !R("fingerprint").btn, J(fp));
+
+    // 4. everything done: 100
+    LR4S.allDone = true;
+    P23S.db.t.posts.filter(x => x.author_id === ROSE.id).forEach(x => { x.search_visible = true; });
+    await open(cdp, origin, "agents/lead-radar.html#found", w, h, true);
+    await waitFor("document.getElementById('lrRingNum')&&document.getElementById('lrRingNum').textContent==='100'", 40);
+    r = await ev(READ_GF);
+    at = "LR4 Get found, all done, at " + w + ": ";
+    check(at + "100, the arc full (251 of 252), every row a green tick and no button", r.num === "100" && r.dash === "251 252" && r.rows.length === 6 && r.rows.every(x => x.status === "done" && !x.btn && x.mark.col === rgb(FD.ROW.DONE)), J([r.num, r.dash, r.rows.map(x => [x.key, x.status])]));
+    await ev("window.scrollTo(0,0),true"); await sleep(150);
+    await pageChecks(at);
+    await shot("get-found-all-done");
+
+    // 5. a free account: the members panel, no request
+    LR4S.member = false; LR4S.calls = [];
+    await open(cdp, origin, "agents/lead-radar.html#found", w, h, true);
+    await sleep(400);
+    check("LR4 Get found (a free account) at " + w + ": the members panel, and no request for the score", (await ev("!!document.getElementById('lrJoin')&&!document.getElementById('lrJoin').closest('[hidden]')")) === true &&
+      LR4S.calls.filter(c => c === "GET /api/leads/found").length === 0, J(LR4S.calls));
+    LR4S.member = true;
+
+    // 6. Settings, Privacy: the switch
+    LR4S.puts = [];
+    await open(cdp, origin, "settings.html#privacy", w, h, true);
+    await waitFor("!document.getElementById('googleRow').hidden", 40);
+    at = "LR4 Settings, Privacy at " + w + ": ";
+    const gs = await ev("(function(){" + BOX + "var row=document.getElementById('googleRow'),t=document.getElementById('googleToggle'),sw=t.closest('label')||t.parentNode,o=null;[].forEach.call(document.styleSheets,function(ss){try{[].forEach.call(ss.cssRules,function(c){if(c.selectorText==='.toggle-switch'&&!o)o={w:parseFloat(c.style.width),h:parseFloat(c.style.height)};});}catch(e){}});return {other:o,panel:!document.getElementById('panel-privacy').hidden&&getComputedStyle(document.getElementById('panel-privacy')).display!=='none',row:bx(row),title:document.getElementById('googleTitle').textContent,checked:t.checked,sw:bx(sw),free:!document.getElementById('googleFree').hidden};})()");
+    // NAMED (Nov 25 2026, LR-4): the switch is Settings' own .toggle-switch, 42 x 44 like every other switch on the page (kept, not restyled)
+    check(at + "\"Show my profile and listings in Google\", on by default, its switch Settings' own toggle (42 px wide, 44 px tall on a phone), inside the screen; no free-account line",
+      gs.panel && gs.title === "Show my profile and listings in Google" && gs.checked === true && gs.sw.h >= 44 && !!gs.other && gs.sw.w === gs.other.w && gs.row.l >= 0 && gs.row.r <= w && !gs.free, J(gs));
+    await pageChecks(at);
+    await shot("settings-google-switch");
+    await ev("(function(){var t=document.getElementById('googleToggle');t.click();return true;})()");
+    await waitFor("(document.getElementById('googleMsg').textContent||'').length>0", 30);
+    const off = await ev("({checked:document.getElementById('googleToggle').checked,msg:document.getElementById('googleMsg').textContent})");
+    check(at + "turning it off: one PUT /api/me/google { show_in_google: false }, it stays off, and says the pages are out of Google",
+      J(LR4S.puts) === J([{ show_in_google: false }]) && off.checked === false && off.msg === require("../lib/getFoundRoutes").SWITCH_MESSAGES.saved_off, J([LR4S.puts, off]));
+    await open(cdp, origin, "settings.html#privacy", w, h, true);
+    await waitFor("!document.getElementById('googleRow').hidden", 40);
+    check(at + "read again, it is off (as saved)", (await ev("document.getElementById('googleToggle').checked")) === false);
+    await ev("(function(){document.getElementById('googleToggle').click();return true;})()");
+    await waitFor("(document.getElementById('googleMsg').textContent||'').length>0", 30);
+    check(at + "turning it back on: PUT true, on", J(LR4S.puts[1]) === J({ show_in_google: true }) && (await ev("document.getElementById('googleToggle').checked")) === true, J(LR4S.puts));
+    LR4S.member = false; LR4S.puts = [];
+    await open(cdp, origin, "settings.html#privacy", w, h, true);
+    await waitFor("!document.getElementById('googleFree').hidden", 40);
+    check(at.replace("Privacy", "Privacy (a free account)") + "the members line, no switch, nothing saved",
+      (await ev("!document.getElementById('googleFree').hidden&&document.getElementById('googleRow').hidden")) === true && LR4S.puts.length === 0);
+    LR4S.member = true; LR4S.google = null;
+
+    // 7. /@rose and /listing/spring-cake: the page as before, with the new head
+    for (const [served, plain] of [["@rose", "@rose?__plain=1"], ["listing/spring-cake", "listing/spring-cake?__plain=1"]]) {
+      // each page is measured once its content has loaded (the storefront's tagline and its support section, the listing's description)
+      const ready = served[0] === "@" ? "(document.body.innerText||'').indexOf('Maple Street Bakery')!==-1&&(document.body.innerText||'').indexOf('support page')!==-1&&!!document.getElementById('sfFollow')" : "(document.body.innerText||'').indexOf('A light sponge with lemon curd.')!==-1";
+      at = "LR4 /" + served + " at " + w + ": ";
+      await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: PAUSE }).then(async ({ identifier }) => {
+        // then until it settles: its element count and height unchanged over three reads 300 ms apart (bf-safety's menu button arrives last)
+        const settle = async () => { let last = "", same = 0; for (let i = 0; i < 40 && same < 3; i++) { const sig = await ev("document.querySelectorAll('*').length+':'+document.documentElement.scrollHeight"); same = sig === last ? same + 1 : 0; last = sig; await sleep(300); } return same >= 3; };
+        const TEXT = "(document.body.innerText||'').replace(/[\\n\\t ]+/g,' ').slice(0,160)";
+        // NAMED (Nov 25 2026, LR-4B): BEFORE (LR-4) the storefront was opened again, up to three times, until its "..." menu was
+        // drawn (seller.html's race with bf-safety.js). AFTER seller.html draws the menu whichever loads first (whenSafety), so
+        // each page is opened once and measured on that first load; a storefront without its menu fails here.
+        const load = async page => { await open(cdp, origin, page, w, h, true);
+          return (await waitFor(ready, 100)) && (await settle()) && (served[0] !== "@" || (await ev("!!document.querySelector('.sf-header .bf-safety-dots')"))); };
+        const readyA = await load(plain), textA = await ev(TEXT); await ev("scrollTo(0,0),true");
+        const before = await ev(BOXES);
+        const readyB = await load(served), textB = await ev(TEXT); await ev("scrollTo(0,0),true");
+        const now = await ev(BOXES);
+        const head = await ev(PAGE_HEAD);
+        const rawHtml = await new Promise(ok => require("http").get(origin + "/" + served, res => { let t = ""; res.on("data", d => t += d); res.on("end", () => ok(t)); }).on("error", () => ok("")));
+        head.served = (/<title>([^<]*)<\/title>/.exec(rawHtml) || [])[1] || null;
+        await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+        // bf-support.js names its two amount inputs "sup" + Math.random() (six characters); the random part is masked, as LR-3 does
+        // NAMED (Nov 25 2026, LR-4B): Termaximus's shooting star (div#tmx-shoot) is drawn at random moments over any page; it is
+        // not the page's own, so it is left out of the compare (seen once in LR-4B's run at 360, in one of the two loads)
+        const key = x => x.list.filter(e => !e[2] && !/^div\|tmx-shoot\|/.test(String(e[0]))).map(e => String(e[0]).replace(/^input\|sup[a-z0-9]{6}([AN])\|/, (m, k) => "input|sup*" + k + "|") + " " + e[1].join(",")).sort();
+        const a = key(before), b = key(now);
+        const diff = a.filter(x => b.indexOf(x) === -1).concat(b.filter(x => a.indexOf(x) === -1));
+        check(at + "every element's box is the same as the page before LR-4 (the file served at the same address), the page height too", readyA && readyB && diff.length === 0 && Math.abs(before.h - now.h) <= 1, J({ ready: [readyA, readyB], text: [textA, textB], diff: diff.slice(0, 8), n: diff.length, h: [before.h, now.h] }));
+        const PP = LR4_PP();
+        const want = served[0] === "@" ? { title: "Rose (@rose) on BizForce", canonical: "https://bizforceai.net/@rose", ld: "LocalBusiness" } : { title: "Spring cake by Rose | BizForce", canonical: "https://bizforceai.net/listing/spring-cake", ld: "Product" };
+        check(at + "the new head (as served; the page's script then sets its own tab title, as before): \"" + want.title + "\", robots index, follow, the canonical, Open Graph, JSON-LD " + want.ld + ", one noscript summary",
+          head.served === want.title && head.robots === PP.INDEX && head.canonical === want.canonical && head.og === want.title && !!head.ogImage && head.ld === want.ld && head.noscript === 1, J(head));
+      });
+      await pageChecks(at);
+    }
+    // 7b. NAMED (Nov 25 2026, LR-4B): the storefront's "..." menu draws whichever loads first. bf-safety.js held back 1500 ms
+    // (it arrives after the seller's data) and the seller's data held back 1500 ms (bf-safety.js first): the menu is drawn
+    // both ways, once, last in the header, in the same order as an ordinary load. A recorder notes, as it happens, whether
+    // bf-safety.js had run when the seller's name was drawn, and when the menu appeared.
+    {
+      const REC = "(function(){var R=window.__race={};new MutationObserver(function(){var n=document.getElementById('sfName');" +
+        "if(R.dataAt===undefined&&n&&/Rose/.test(n.textContent)){R.dataAt=performance.now();R.safetyAtData=!!window.BFSafety;}" +
+        "if(R.dotsAt===undefined&&document.querySelector('.sf-header .bf-safety-dots'))R.dotsAt=performance.now();}).observe(document,{subtree:true,childList:true,characterData:true});})();";
+      const { identifier: recId } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: REC });
+      const HEADER = "[].map.call(document.querySelector('.sf-header').children,function(e){return e.tagName.toLowerCase()+(e.id?'#'+e.id:'')+'.'+String(e.className).split(' ')[0];}).filter(function(x){return /sf-name-block|#sf|bf-safety-dots/.test(x);}).join(' ')";   // the controls the menu sits among (the avatar's own decoration is drawn by bf-profile-design.js on its own schedule)
+      const run = async (safetyDelay, sellerDelay) => {
+        Object.assign(LR4S, { safetyDelay, sellerDelay });
+        await open(cdp, origin, "@rose", w, h, true);
+        const drawn = await waitFor("!!document.querySelector('.sf-header .bf-safety-dots')&&window.__race.dataAt!==undefined", 60);
+        await sleep(300);
+        const out = await ev("({race:window.__race,n:document.querySelectorAll('.sf-header .bf-safety-dots').length,order:" + HEADER + "})");
+        Object.assign(LR4S, { safetyDelay: 0, sellerDelay: 0 });
+        return Object.assign(out, { drawn });
+      };
+      const base = await run(0, 0), late = await run(1500, 0), early = await run(0, 1500);
+      await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: recId });
+      at = "LR4 the storefront's menu at " + w + ": ";
+      check(at + "bf-safety.js late (held back 1500 ms, not yet run when the seller's name is drawn): the menu is drawn once, after it loads, last in the header as on an ordinary load",
+        late.drawn && late.race.safetyAtData === false && late.race.dotsAt > late.race.dataAt && late.n === 1 && late.order === base.order && /bf-safety-dots$/.test(late.order), J({ late, base: base.order }));
+      check(at + "the seller's data late (held back 1500 ms, bf-safety.js already run): the menu is drawn once, with the data, in the same order",
+        early.drawn && early.race.safetyAtData === true && early.n === 1 && early.order === base.order, J({ early, base: base.order }));
+    }
+    if (w === 390) {
+      fs.writeFileSync(path.join(LR4_OUT, "head-profile-rose.txt"), lr4Head(LR4_PP().renderProfilePage(lr4ProfileView())) + "\n");
+      fs.writeFileSync(path.join(LR4_OUT, "head-listing-spring-cake.txt"), lr4Head(LR4_PP().renderListingPage(lr4ListingView())) + "\n");
+    }
+
+    // 8. privacy.html and music-popout.html: no sideways scroll
+    for (const page of ["privacy.html", "music-popout.html"]) {
+      await open(cdp, origin, page, w, h, true);
+      await sleep(300);
+      const s = await sw();
+      const wide = await ev("[].slice.call(document.querySelectorAll('body *')).filter(function(e){var r=e.getBoundingClientRect();if(!(r.width>0&&(r.right>window.innerWidth+1||r.left<-1)))return false;for(var a=e.parentElement;a&&a!==document.body;a=a.parentElement){var c=getComputedStyle(a),q=a.getBoundingClientRect();if(/hidden|clip/.test(c.overflowX+c.overflow)&&q.left>=-1&&q.right<=window.innerWidth+1)return false;}return true;}).slice(0,5).map(function(e){var r=e.getBoundingClientRect();return e.tagName+'#'+e.id+'.'+(e.className&&e.className.baseVal===undefined?e.className:'')+' '+Math.round(r.left)+'-'+Math.round(r.right);})");
+      check("LR4 " + page + " at " + w + ": no sideways scroll (the page " + s.sw + " px wide in " + s.iw + "), nothing past the edge", s.sw <= w + 1 && s.bw <= w + 1 && wide.length === 0, J([s, wide]));
+      if (page === "music-popout.html") {
+        const mp = await ev("(function(){var e=document.getElementById('bfMusicPopout'),b=e&&e.querySelector('.bbx'),r=e&&e.getBoundingClientRect(),q=b&&b.getBoundingClientRect();return {box:!!b,l:r&&Math.round(r.left),r:r&&Math.round(r.right),bl:q&&Math.round(q.left),br:q&&Math.round(q.right),fit:getComputedStyle(document.documentElement).getPropertyValue('--bbx-pop-fit')};})()");
+        check("LR4 music-popout.html at " + w + ": #bfMusicPopout and the player inside the screen", mp.l >= 0 && mp.r <= w && (!mp.box || (mp.bl >= 0 && mp.br <= w)), J(mp));
+      }
+    }
+
+    // 9. Edit post's audience
+    at = "LR4 Edit post at " + w + ": ";
+    Object.assign(P23S, await p23World(false));
+    LR4S.calls = [];
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("!!document.querySelector('#feed [data-post=\"" + P23_POST.own + "\"]')", 60);
+    const openEdit = async () => {
+      await ev("(function(){var e=document.querySelector('#feed [data-post=\"" + P23_POST.own + "\"]');if(e)e.scrollIntoView({block:'start'});return true;})()"); await sleep(400);
+      await tap('#feed [data-post="' + P23_POST.own + '"] .bfp-act[data-act=share]'); await sleep(600);
+      await ev("(function(){var i=[].filter.call(document.querySelectorAll('#bf-safety .bf-safety-item'),function(n){return n.textContent.trim()==='Edit';})[0];if(i)i.click();return !!i;})()");
+      await waitFor("!!document.getElementById('bfpEditSave')", 30);
+    };
+    await openEdit();
+    const AUD = "(function(){var r=[].map.call(document.querySelectorAll('input[name=bfpEditAud]'),function(x){var l=x.closest('label'),b=l.getBoundingClientRect();return [x.value,x.checked,(l.textContent||'').trim(),Math.round(b.height),Math.round(b.width)];});var s=document.getElementById('bfpEditSeo');" +
+      "return {r:r,label:(document.getElementById('bfpEditAudL')||{}).textContent,group:(document.getElementById('bfpEditAud')||{getAttribute:function(){return null;}}).getAttribute('role'),seo:!!s&&!s.hidden,err:(document.getElementById('bfpEditErr')||{}).textContent||'',resend:!!document.getElementById('bfpEditResend')};})()";
+    let au = await ev(AUD);
+    check(at + "\"Who sees it\": Public (chosen) and Followers, a radio group, each 44 px or more; Show in Google offered while Public",
+      au.label === "Who sees it" && au.group === "radiogroup" && J(au.r.map(x => [x[0], x[1], x[2]])) === J([["public", true, "Public"], ["followers", false, "Followers"]]) && au.r.every(x => x[3] >= 44 && x[4] >= 44) && au.seo, J(au));
+    await ev("(function(){var f=document.querySelector('input[name=bfpEditAud][value=followers]');f.click();return true;})()"); await sleep(150);
+    au = await ev(AUD);
+    check(at + "Followers hides Show in Google", au.seo === false && au.r[1][1] === true, J(au));
+    await ev("(function(){var d=document.querySelector('#bfpEditSave');d.scrollIntoView({block:'center'});return true;})()");
+    await pageChecks(at + "(the dialog open) ", { cover: true });
+    await tap("#bfpEditSave");
+    await waitFor("!document.getElementById('bfpEditSave')", 30);
+    const toF = P23S.db.t.posts.find(x => x.id === P23_POST.own) || {};
+    check(at + "Save: one PATCH with audience followers; the post is for followers", toF.audience === "followers" && LR4S.calls.filter(c => c === "PATCH /api/posts/" + P23_POST.own).length === 1, J([toF.audience, LR4S.calls]));
+    // Followers to Public without a confirmed email: refused, with Resend email
+    (P23S.db.t.users.find(x => x.id === ROSE.id) || {}).email_verified_at = null;
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("!!document.querySelector('#feed [data-post=\"" + P23_POST.own + "\"]')", 60);
+    await openEdit();
+    au = await ev(AUD);
+    check(at + "a followers post opens with Followers chosen", au.r[1][1] === true && au.seo === false, J(au));
+    await ev("(function(){document.querySelector('input[name=bfpEditAud][value=public]').click();return true;})()"); await sleep(150);
+    await tap("#bfpEditSave");
+    await waitFor("(document.getElementById('bfpEditErr')||{}).textContent", 30);
+    au = await ev(AUD);
+    const still = P23S.db.t.posts.find(x => x.id === P23_POST.own) || {};
+    check(at + "Followers to Public with no confirmed email: refused (the post stays for followers), the reason shown, with Resend email",
+      still.audience === "followers" && /confirm/i.test(au.err) && au.resend === true, J([still.audience, au.err, au.resend]));
+    await ev("(function(){var d=document.getElementById('bfpEditErr');d.scrollIntoView({block:'center'});return true;})()"); await sleep(150);
+    await shot("edit-post-audience");
+    await ev("(function(){var b=document.getElementById('bfpEditResend');if(b)b.click();return true;})()"); await sleep(400);
+    check(at + "Resend email sends one POST /api/auth/resend-verification", LR4S.resends === 1, LR4S.resends);
+    (P23S.db.t.users.find(x => x.id === ROSE.id) || {}).email_verified_at = ago(1);
+    await tap("#bfpEditSave");
+    await waitFor("!document.getElementById('bfpEditSave')", 30);
+    const pub = P23S.db.t.posts.find(x => x.id === P23_POST.own) || {};
+    check(at + "once confirmed, Save makes it Public", pub.audience === "public", pub.audience);
   }
 }

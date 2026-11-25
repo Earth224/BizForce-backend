@@ -37,7 +37,8 @@ const MUTATIONS = {
   "race-is-500": [[SERVER, "      .upsert(updates, { onConflict: \"user_id\" }).select(\"*\").single();\n    if (error) {\n      if (require(\"./lib/handles\").isUniqueViolation(error)) return res.status(409)", "      .upsert(updates, { onConflict: \"user_id\" }).select(\"*\").single();\n    if (error) {\n      if (false) return res.status(409)"]],
   "legacy-route-unchecked": [[SERVER, "const claim = await require(\"./lib/handles\").checkClaim(supabase, { raw: req.body.username, table: \"profiles\", userId: req.user.id });", "const claim = { handle: String(req.body.username).toLowerCase().replace(/^@/, \"\") };"]],
   "legacy-race-is-500": [[SERVER, "      .eq(\"user_id\", req.user.id)\n      .select(\"*\")\n      .single();\n\n    if (error) {\n      if (require(\"./lib/handles\").isUniqueViolation(error))", "      .eq(\"user_id\", req.user.id)\n      .select(\"*\")\n      .single();\n\n    if (error) {\n      if (false)"]],
-  "no-at-redirect": [[REDIRECTS, "/@:handle /seller.html?u=:handle 200\n", ""]],
+  // NAMED (Nov 25 2026, LR-4): BEFORE the anchor "/@:handle /seller.html?u=:handle 200". AFTER Netlify proxies /@handle to the backend.
+  "no-at-redirect": [[REDIRECTS, "/@:handle https://dynamic-prosperity-production-5382.up.railway.app/@:handle 200\n", ""]],
   "seller-ignores-path": [[SELLER, "  if (!handle) { var at = /^\\/@([a-z0-9_-]{1,40})$/i.exec(window.location.pathname); if (at) handle = at[1]; }\n", ""]],
   "country-unchecked": [[PLACES, "    else if (typeof c === \"string\" && COUNTRY_CODES.indexOf(c) !== -1) updates.place_country = c;", "    else if (typeof c === \"string\") updates.place_country = c;"]],
   "opt-in-any-value": [[PLACES, "    if (typeof b.local_opt_in !== \"boolean\") return", "    if (false) return"]],
@@ -64,13 +65,14 @@ const ME = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8
     // NAMED (Nov 21 2026, P3-2, migration 199): 199_verified_badge.sql (bf_profiles.verified_reason and verified_at, the Verified badge) is allowed above too, by name; "the highest" (199) is checkBuyListingDigital R1's.
     // NAMED (Nov 21 2026, FX2, migration 200): 200_categories_and_intent.sql (the shared categories table, post category, intent, need_place and need_when, marketplace_listings.category_slug, and 200e's agents_card_view, search_visible and the SEO fields; applied by hand Nov 21 2026) is allowed above too, by name; "the highest" (200) is checkBuyListingDigital R1's.
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
-    top === 205 /* NAMED (Nov 24 2026, LR-3): BEFORE 204 */ /* NAMED (Nov 23 2026, LR-2): BEFORE 203 */ && migNames.filter(x => /^190_/.test(x)).join() === "190_notifications_links.sql" && migNames.filter(x => /^189_/.test(x)).join() === "189_handles_and_place.sql" &&
+    top === 206 /* NAMED (Nov 25 2026, LR-4): BEFORE 205 */ /* NAMED (Nov 24 2026, LR-3): BEFORE 204 */ /* NAMED (Nov 23 2026, LR-2): BEFORE 203 */ && migNames.filter(x => /^190_/.test(x)).join() === "190_notifications_links.sql" && migNames.filter(x => /^189_/.test(x)).join() === "189_handles_and_place.sql" &&
     // NAMED (Nov 21 2026, P3-1C, migration 201): 201_member_welcome.sql (the member welcome and the free-account clawback, once per account: two unique partial indexes on wallet_transactions) is allowed above too, by name; "the highest" (201) is checkBuyListingDigital R1's.
     // NAMED (Nov 23 2026, P3-3, migration 202): 202_need_found_and_alerts.sql (posts.need_found_at, a Need marked Found, and user_preferences.need_alerts) is allowed too, by name.
     // NAMED (Nov 23 2026, LR-1, migration 203): 203_lr1_archived_and_sms_pending.sql (sales_lead_pipeline may be 'archived'; sms_subscribers.consent_status defaults to 'pending') is allowed too, by name.
     // NAMED (Nov 23 2026, LR-2, migration 204): 204_lr2_member_lead_radar.sql (lead_fingerprints, member_leads, member_lead_replies, lead_search_cache, threads_connections) is allowed too, by name.
     // NAMED (Nov 24 2026, LR-3, migration 205): 205_lr3_inbound.sql (inbound_items) is allowed too, by name.
-    migNames.filter(x => Number(x.slice(0, 3)) > 190).join() === "191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql,202_need_found_and_alerts.sql,203_lr1_archived_and_sms_pending.sql,204_lr2_member_lead_radar.sql,205_lr3_inbound.sql", J([top]));
+    // NAMED (Nov 25 2026, LR-4, migration 206): 206_lr4_get_found.sql (show_in_google, indexnow_sent) is allowed too, by name.
+    migNames.filter(x => Number(x.slice(0, 3)) > 190).join() === "191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql,195_users_email_canonical.sql,196_storage_account_tables.sql,197_storage_account_functions.sql,198_storage_account_backfill.sql,199_verified_badge.sql,200_categories_and_intent.sql,201_member_welcome.sql,202_need_found_and_alerts.sql,203_lr1_archived_and_sms_pending.sql,204_lr2_member_lead_radar.sql,205_lr3_inbound.sql,206_lr4_get_found.sql", J([top]));
   const m189 = FILES[M189] || "", m190 = FILES[M190] || "";
   check("R2. 189 holds the handle format as a named CHECK, dropped first (safe to re-run)",
     has(m189, "DROP CONSTRAINT IF EXISTS bf_profiles_username_format;") && has(m189, "CHECK (username IS NULL OR username ~ '^[a-z0-9_][a-z0-9_-]{2,29}$')"));
@@ -164,7 +166,9 @@ const ME = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8
   /* ══ A ══ */
   console.log("\n══ A. /@handle ══");
   const red = FILES[REDIRECTS] || "";
-  check("A1. _redirects rewrites /@handle to seller.html?u=handle (200: the address stays /@handle)", has(red, "\n/@:handle /seller.html?u=:handle 200\n"));
+  // NAMED (Nov 25 2026, LR-4): BEFORE a rewrite to /seller.html?u=:handle. AFTER a 200 proxy to the backend's GET /@:handle, which serves
+  // seller.html with the head filled in on the server (lib/publicPages.js; checkGetFound), so the address still stays /@handle.
+  check("A1. _redirects proxies /@handle to the backend's /@:handle, which serves seller.html (200: the address stays /@handle)", has(red, "\n/@:handle https://dynamic-prosperity-production-5382.up.railway.app/@:handle 200\n"));
   check("A2. ...before any catch-all, so it is reached", red.indexOf("/@:handle") > -1 && (red.indexOf("\n/* ") === -1 || red.indexOf("/@:handle") < red.indexOf("\n/* ")));
   const seller = FILES[SELLER] || "";
   const atRe = (/var at = \/(.+?)\/i\.exec\(window\.location\.pathname\)/.exec(seller) || [])[1];

@@ -152,6 +152,8 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `SALES_SEND_LIVE` | off | Exactly `true` lets a member post a reply they approved (POST /api/leads/:id/send, one lead, exactly the text they approved, from their own account). Nothing posts without that approval. |
 | `THREADS_APP_ID` | none | The app id of BizForce's Threads app (see "Threads app setup" below). Needed only for Threads; without it (or `THREADS_APP_SECRET`) Connect Threads answers 503 "Threads is not set up yet". |
 | `THREADS_APP_SECRET` | none | That app's secret, sent in the code exchange and the long-lived token exchange. Needed only for Threads, with `THREADS_APP_ID`. A secret; set it only on Railway and never commit it. |
+| `ENABLE_INDEXNOW` | off | Exactly `true` (with `INDEXNOW_KEY` set) sends the address of a member's indexable profile, listing or post to api.indexnow.org after it is created or changes: one batch a minute at most, each address at most once per UTC day (migration 206b). Bing and others read IndexNow; Google does not. See "Get found" below. |
+| `INDEXNOW_KEY` | none | The IndexNow key: 8 to 128 letters, digits and dashes. It is public by design: GET /api/indexnow/key.txt serves it (bizforceai.net/indexnow-key.txt through Netlify) while IndexNow is on. |
 
 ### Background jobs and the BizCash wallet
 
@@ -411,6 +413,15 @@ The member moves each item New, Talking, Won or Lost. A sale, a donation and a t
 - **Notices.** A sale and a donation each send an in-app notice and a push. No email and no SMS.
 - **The won stat.** The Leads tab's "won" counts won leads plus won Inbound items. A Bluesky reply item whose lead is also won counts once.
 - **Backfill.** `node scripts/oneoff/lr3Backfill.js` is a dry run that prints counts only. `--apply` writes the last 90 days and is safe to run again.
+
+## Get found
+
+Lead Radar's Get found tab (`lib/foundScore.js`, GET /api/leads/found, members only) shows the Found score, 0 to 100, and its checklist. No model is called.
+
+- **Pages Google can read.** Netlify proxies `/@:handle` and `/listing/:id` to GET /@:handle and GET /listing/:id (`lib/getFoundRoutes.js`). They serve the frontend's seller.html and listing.html with the head filled in on the server (`lib/publicPages.js`): title, description, canonical, Open Graph, JSON-LD and a noscript summary. The page in the browser is unchanged. After changing seller.html, listing.html or _headers, run `node scripts/buildPublicShells.js` (`--check` only compares).
+- **Who is indexed.** "index, follow" only for a member whose pages are public, not suspended or hidden, with "Show my profile and listings in Google" on (Settings, Privacy; `user_preferences.show_in_google`, migration 206a; on unless turned off). A listing must also be active and not hidden. Everything else is noindex.
+- **Sitemaps.** /sitemap-profiles.xml and /sitemap-listings.xml (GET /api/sitemap/profiles.xml and /api/sitemap/listings.xml) list exactly the indexable pages, cached 10 minutes; the switch clears the cache at once. Submit https://bizforceai.net/sitemap.xml in Google Search Console (free); it lists both.
+- **IndexNow.** Off by default. To turn it on: make a key (for example 32 random hex characters), set `INDEXNOW_KEY` to it and `ENABLE_INDEXNOW` to `true` on Railway, redeploy, then open https://bizforceai.net/indexnow-key.txt and check that it shows the key. The key file sits at the site's root, so every address on the site may be sent with it (each request names it as `keyLocation`). A send never blocks a save.
 
 ## Google Wallet setup
 

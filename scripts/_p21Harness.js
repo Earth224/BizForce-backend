@@ -56,7 +56,8 @@ function setup(filename, mutations, names) {
   const libCache = {};
   function libRequire(name) {
     // NAMED (Nov 20 2026, P2-2): also "./<name>", a lib file's require of its neighbour (lib/moderation.js requires "./safety")
-    const m = /^\.\/(?:lib\/)?([a-zA-Z0-9_]+)(?:\.js)?$/.exec(name);
+    // NAMED (Nov 25 2026, LR-4): AND a generated neighbour, "./publicShells.generated" (lib/publicPages.js); BEFORE letters, digits and _ only
+    const m = /^\.\/(?:lib\/)?([a-zA-Z0-9_]+(?:\.generated)?)(?:\.js)?$/.exec(name);
     const key = m ? "@lib/" + m[1] + ".js" : null;
     if (key && typeof FILES[key] === "string") {
       if (!libCache[key]) {

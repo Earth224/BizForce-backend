@@ -271,9 +271,12 @@ function wellFormed(xml) {
   // sitemap-cards.xml, the cards whose members let search engines find them (checkCardUpgrades.js holds that route).
   // NAMED (Nov 21 2026, P3-1B): BEFORE the index ended at sitemap-cards.xml. AFTER it also lists sitemap-posts.xml, members'
   // public posts with Show in Google on (checkPublicPostPage.js holds that route and robots.txt's line for it).
-  check("E. sitemap.xml is a sitemap index listing exactly sitemap-pages.xml, sitemap-blog.xml, sitemap-support.xml, sitemap-campaigns.xml, sitemap-cards.xml and sitemap-posts.xml", !!INDEX && wellFormed(INDEX) === null &&
+  // NAMED (Nov 25 2026, LR-4): BEFORE the index ended at sitemap-posts.xml. AFTER it also lists sitemap-profiles.xml and
+  // sitemap-listings.xml, members' profiles and active listings with Show my profile and listings in Google on (checkGetFound.js
+  // holds those routes, robots.txt's lines and the _redirects proxies).
+  check("E. sitemap.xml is a sitemap index listing exactly sitemap-pages.xml, sitemap-blog.xml, sitemap-support.xml, sitemap-campaigns.xml, sitemap-cards.xml, sitemap-posts.xml, sitemap-profiles.xml and sitemap-listings.xml", !!INDEX && wellFormed(INDEX) === null &&
     /<sitemapindex xmlns="http:\/\/www\.sitemaps\.org\/schemas\/sitemap\/0\.9">/.test(INDEX) &&
-    JSON.stringify(locs(INDEX)) === JSON.stringify(["https://bizforceai.net/sitemap-pages.xml", "https://bizforceai.net/sitemap-blog.xml", "https://bizforceai.net/sitemap-support.xml", "https://bizforceai.net/sitemap-campaigns.xml", "https://bizforceai.net/sitemap-cards.xml", "https://bizforceai.net/sitemap-posts.xml"]), INDEX);
+    JSON.stringify(locs(INDEX)) === JSON.stringify(["https://bizforceai.net/sitemap-pages.xml", "https://bizforceai.net/sitemap-blog.xml", "https://bizforceai.net/sitemap-support.xml", "https://bizforceai.net/sitemap-campaigns.xml", "https://bizforceai.net/sitemap-cards.xml", "https://bizforceai.net/sitemap-posts.xml", "https://bizforceai.net/sitemap-profiles.xml", "https://bizforceai.net/sitemap-listings.xml"]), INDEX);
   // NAMED (Oct 27 2026, launch item #12): BEFORE the five pages ended at /suppressed.html. AFTER the four legal pages
   // follow it, /terms, /privacy, /refund and /contact, each public and canonical (checkLaunchBlockB section 12).
   // NAMED (Nov 23 2026, LR-1): BEFORE /suppressed.html was listed after /xxl-xtreme; AFTER it is removed from sitemap-pages.xml

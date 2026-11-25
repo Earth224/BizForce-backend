@@ -474,7 +474,16 @@ const ADDED = [
   ["get", "/api/inbound"],                                   // members: the member's Inbound items (563 -> 564)
   ["get", "/api/inbound/summary"],                           // members: the counts and the won total (564 -> 565)
   ["post", "/api/inbound/:id/status"],                       // members: move an item New, Talking, Won or Lost (565 -> 566)
-  ["post", "/api/inbound/:id/customer"]                      // members: Add to my customers, once (566 -> 567)
+  ["post", "/api/inbound/:id/customer"],                     // members: Add to my customers, once (566 -> 567)
+  // NAMED (Nov 25 2026, LR-4): BEFORE 567 routes; AFTER 575: Get found's eight (lib/getFoundRoutes.js; checkGetFound).
+  ["get", "/@:handle"],                                      // PUBLIC: a profile with its head filled in on the server (567 -> 568)
+  ["get", "/listing/:id"],                                   // PUBLIC: a listing with its head filled in on the server (568 -> 569)
+  ["get", "/api/sitemap/profiles.xml"],                      // PUBLIC: the indexable profiles (569 -> 570)
+  ["get", "/api/sitemap/listings.xml"],                      // PUBLIC: the indexable listings (570 -> 571)
+  ["get", "/api/indexnow/key.txt"],                          // PUBLIC: the IndexNow key, only while IndexNow is on (571 -> 572)
+  ["get", "/api/leads/found"],                               // members: the Found score (572 -> 573)
+  ["get", "/api/me/google"],                                 // members: the Google switch (573 -> 574)
+  ["put", "/api/me/google"]                                  // members: set the Google switch (574 -> 575)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
