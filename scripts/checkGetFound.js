@@ -11,7 +11,8 @@
 
    A. migration 206: 206a (user_preferences.show_in_google) and 206b (indexnow_sent), paste-safe
    B. the robots rule: member, free, not public, suspended, hidden, switch off, a paused or hidden listing
-   C. the heads and the JSON-LD: Person or LocalBusiness, Product, offers only with a USD price, never BizCash
+   C. the heads and the JSON-LD: Person or LocalBusiness, Product with no offers (NAMED (Nov 25 2026, LR-4B): BEFORE offers
+      with a USD price; AFTER none, even for an old price_usd, since listings are priced in BizCash only), never BizCash
    D. every string escaped: user text cannot leave the JSON-LD script, a tag or an attribute
    E. the pages: /@handle and /listing/:id answer 200, 404 or 503 with the right head; the shells are the frontend's
    F. the sitemaps list only indexable pages, are cached, and the switch takes a page out at once
@@ -56,10 +57,10 @@ const MUTATIONS = {
   "local-no-listings": [[PPF, "var local = !!clean(p.place_city) && listingCount > 0;", "var local = !!clean(p.place_city);"]],
   "no-region": [[PPF, "    if (clean(p.place_region)) data.address.addressRegion = clean(p.place_region);\n", ""]],
   "no-same-as": [[PPF, "  if (same.length) data.sameAs = same;\n", ""]],
-  "offers-always": [[PPF, "  if (usd !== null) {\n    data.offers", "  if (true) {\n    data.offers"]],
-  "offers-bfc": [[PPF, "var n = l ? l.price_usd : null;", "var n = l ? (l.price_usd || l.price_bfc) : null;"]],
-  "offers-currency": [[PPF, "priceCurrency: \"USD\"", "priceCurrency: \"BFC\""]],
-  "offers-fraction": [[PPF, "typeof n === \"number\" && Number.isInteger(n) && n > 0", "typeof n === \"number\" && n > 0"]],
+  // NAMED (Nov 25 2026, LR-4B): BEFORE four offers mutations (always, BizCash, currency, fraction); AFTER there is no offers code,
+  // so the mutants put an Offer back, from an old price_usd or from the BizCash price
+  "offers-legacy-usd": [[PPF, "  if (image) data.image = image;\n", "  if (image) data.image = image;\n  if (l.price_usd) data.offers = { \"@type\": \"Offer\", price: String(l.price_usd), priceCurrency: \"USD\" };\n"]],
+  "offers-bfc": [[PPF, "  if (image) data.image = image;\n", "  if (image) data.image = image;\n  if (l.price_bfc) data.offers = { \"@type\": \"Offer\", price: String(l.price_bfc), priceCurrency: \"BFC\" };\n"]],
   "no-brand": [[PPF, ",\n    brand: { \"@type\": \"Brand\", name: sellerName(s) } };", " };"]],
   "no-category": [[PPF, "  if (clean(categoryName || l.category)) data.category = clean(categoryName || l.category);\n", ""]],
   "canonical-handle-case": [[PPF, "function profileUrl(handle) { return SITE + \"/@\" + handle; }", "function profileUrl(handle) { return SITE + \"/seller.html?u=\" + handle; }"]],
@@ -109,7 +110,7 @@ const MUTATIONS = {
   "profile-done-when-free": [[FSF, "if (f.profileIndexable === true && handle) {", "if (handle) {"]],
   "listing-no-photo-ok": [[FSF, "  if (!PP.firstPhoto(l.media)) miss.push(\"a photo\");\n", ""]],
   "listing-no-category-ok": [[FSF, "  if (!filled(l.category_slug) && !filled(l.category)) miss.push(\"a category\");\n", ""]],
-  "listing-price-or-desc": [[FSF, "if (PP.usdPrice(l) === null && !filled(l.description)) miss.push(\"a description\");", "if (!filled(l.description)) miss.push(\"a description\");"]],
+  "listing-price-or-desc": [[FSF, "  if (!filled(l.description)) miss.push(\"a description\");", "  if (!l.price_usd && !filled(l.description)) miss.push(\"a description\");"]],   // NAMED (Nov 25 2026, LR-4B): the mutant lets a USD price stand in again
   "posts-some-is-done": [[FSF, "  } else if (!off.length) {", "  } else if (on.length) {"]],
   "posts-none-done": [[FSF, "  if (!posts.length) {\n    items.posts = { status: \"todo\"", "  if (!posts.length) {\n    items.posts = { status: \"done\""]],
   "connected-youtube-counts": [[FSF, "var named = [c.bluesky ? \"Bluesky\" : null, c.threads ? \"Threads\" : null].filter(Boolean);", "var named = [c.bluesky ? \"Bluesky\" : null, c.threads ? \"Threads\" : null, c.youtube ? \"YouTube\" : null].filter(Boolean);"]],
@@ -352,16 +353,17 @@ const headOf = html => html.slice(html.indexOf("<head>"), html.indexOf("</head>"
     check("C5. the listing: title \"Garden design by Ana Rivera | BizForce\", its description, canonical, og:image the first photo, og:type product",
       /<title>Garden design by Ana Rivera \| BizForce<\/title>/.test(l1) && metaOf(l1, "name", "description") === "A plan for your garden, drawn by hand." &&
       l1.indexOf('<link rel="canonical" href="https://bizforceai.net/listing/garden-design"/>') !== -1 && metaOf(l1, "property", "og:image") === PHOTO && metaOf(l1, "property", "og:type") === "product");
-    check("C6. Product: name, description, image, category (the category's name), the seller as brand; NO offers without a USD price, and BizCash never appears",
+    check("C6. Product: name, description, image, category (the category's name), the seller as brand; NO offers, and BizCash never appears",
       lld["@type"] === "Product" && lld.name === "Garden design" && lld.image === PHOTO && lld.category === "Services" && J(lld.brand) === J({ "@type": "Brand", name: "Ana Rivera" }) &&
       !("offers" in lld) && !/BFC|BizCash|500/.test(J(lld)), J(lld));
     const usd = PP.listingStructuredData({ id: L6, slug: "lawn-plan", title: "Lawn plan", price_usd: 25, price_bfc: 900, status: "active", media: [] }, { username: "ana", display_name: "Ana Rivera" }, "d", null);
     const paused = PP.listingStructuredData({ id: L6, slug: "lawn-plan", title: "Lawn plan", price_usd: 25, status: "paused", media: [] }, { username: "ana" }, "d", null);
-    check("C7. with a USD price: offers { price \"25\", priceCurrency USD, availability from the status, the seller }; never the BizCash price",
-      J(usd.offers) === J({ "@type": "Offer", url: "https://bizforceai.net/listing/lawn-plan", price: "25", priceCurrency: "USD", availability: "https://schema.org/InStock", seller: { "@type": "Person", name: "Ana Rivera", url: "https://bizforceai.net/@ana" } }) &&
-      paused.offers.availability === "https://schema.org/OutOfStock" && J(usd).indexOf("900") === -1, J(usd.offers));
-    check("C8. no offers for a BizCash-only, zero, fractional, negative or text price",
-      [{ price_bfc: 500 }, { price_usd: 0 }, { price_usd: 9.5 }, { price_usd: -3 }, { price_usd: "25" }, { price_usd: null }].every(x =>
+    // NAMED (Nov 25 2026, LR-4B): BEFORE C7 expected an Offer from price_usd 25; AFTER an old price_usd gives no Offer (the live
+    // proof found price_usd 7500 on a listing from before BizCash only), and neither does the BizCash price
+    check("C7. an old USD price (price_usd 25, from before BizCash only) gives no offers, active or paused; never the BizCash price",
+      !("offers" in usd) && !("offers" in paused) && J(usd).indexOf("900") === -1 && J(usd).indexOf("\"25\"") === -1, J(usd));
+    check("C8. no offers for any price: BizCash only, zero, fractional, negative, text, null, or 7500",
+      [{ price_bfc: 500 }, { price_usd: 0 }, { price_usd: 9.5 }, { price_usd: -3 }, { price_usd: "25" }, { price_usd: null }, { price_usd: 7500, price_bfc: 7500 }].every(x =>
         !("offers" in PP.listingStructuredData(Object.assign({ id: L1, title: "t", status: "active", media: [] }, x), { username: "ana" }, "d", null))));
   }
 
@@ -569,10 +571,11 @@ const headOf = html => html.slice(html.indexOf("<head>"), html.indexOf("</head>"
       byKey(FS.compute(Object.assign({}, all, { connections: { youtube: true, instagram: true, facebook: true } })), "connected").status === "todo" &&
       byKey(FS.compute(Object.assign({}, all, { connections: { threads: true } })), "connected").title === "Threads connected");
     const L = x => FS.compute(Object.assign({}, all, { listings: [Object.assign({ id: L1, title: "Garden design", description: "d", category_slug: "services", media: [{ url: PHOTO }], indexable: true }, x)] }));
-    check("H7. a listing needs a photo, a category, and a USD price or a description: Fix names what is missing and opens that listing's edit",
+    // NAMED (Nov 25 2026, LR-4B): BEFORE a USD price stood in for the description; AFTER it does not
+    check("H7. a listing needs a photo, a category and a description (a USD price is no substitute): Fix names what is missing and opens that listing's edit",
       byKey(L({ media: [] }), "listings").detail === "“Garden design” needs a photo" && byKey(L({ media: [] }), "listings").action.href === "/marketplace.html?edit=" + L1 &&
       byKey(L({ category_slug: null }), "listings").detail === "“Garden design” needs a category" &&
-      byKey(L({ description: "" }), "listings").detail === "“Garden design” needs a description" && byKey(L({ description: "", price_usd: 40 }), "listings").status === "done" &&
+      byKey(L({ description: "" }), "listings").detail === "“Garden design” needs a description" && byKey(L({ description: "", price_usd: 40 }), "listings").detail === "“Garden design” needs a description" &&
       byKey(L({ description: "", media: [], category_slug: null }), "listings").detail === "“Garden design” needs a photo, a category and a description");
     check("H8. the profile: done only while indexable; the switch off says so and opens Settings, Privacy; no handle asks for one",
       byKey(FS.compute(Object.assign({}, all, { profileIndexable: false, profileWhy: "switch_off" })), "profile").action.href === "/settings.html#privacy" &&
