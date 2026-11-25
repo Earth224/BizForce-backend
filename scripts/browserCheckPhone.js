@@ -285,6 +285,10 @@
                            account (the members panel, no lead request), signed out (the sign-in page), and
                            Threads waiting for Meta; fixtures only, nothing is ever sent; at 360, 390 and 430;
                            screenshots at 390 x 844 to PHONE_LR2_OUT (default Downloads\lr2)
+     PHONE_COMPARE=record  NAMED (Nov 25 2026, HOTFIX-G1): the phone baselines, every page of the batch at 360, 390
+                           and 430 (from BIZFORCE_FRONTEND_DIR) to PHONE_COMPARE_DIRphone-baseline-<page>-<width>.json
+     PHONE_COMPARE=1       the batch's pages compared, element by element, with those baselines (or a named override
+                           phone-override-<tag>--<page>-<width>.json); see compareRun at the end of this file
      PHONE_LR4=1           only LR-4's Get found, the Google switch, /@handle and /listing/:id with the server's head, privacy and
                            music-popout's width, and Edit post's audience (lr4Run; NAMED (Nov 25 2026, LR-4)); at 360, 390 and 430;
                            screenshots and the two heads to PHONE_LR4_OUT (default Downloads\lr4).
@@ -324,6 +328,10 @@ const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const OUT = process.env.PHONE_OUT || path.join(os.homedir(), "Downloads", "phone1");
 const MODE = process.env.PHONE_MODE === "before" ? "before" : "check";
+// NAMED (Nov 25 2026, HOTFIX-G1): PHONE_COMPARE=record or 1, the phone baselines (compareRun, at the end of this file)
+const COMPARE = /^(record|override|1)$/.test(process.env.PHONE_COMPARE || "") ? process.env.PHONE_COMPARE : "";
+const SHOTS = process.env.PHONE_SHOTS || "";   // NAMED (Nov 25 2026, HOTFIX-G1): shotsRun, at the end of this file
+const COMPARE_DIR = process.env.PHONE_COMPARE_DIR || path.join(os.homedir(), "Downloads", "phone1");
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 const ONLY = process.env.PHONE_ONLY || "";   // "desktop" or "phone": one half of the run (a loaded machine runs fewer pages a minute)
 const PHONES = ONLY === "desktop" ? [] : [[360, 780], [390, 844], [430, 932]];
@@ -554,6 +562,9 @@ function api(method, u, request) {
   const p = u.pathname;
   if (LR2) { const a = lr2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 23 2026, LR-2)
   if (LR3) { const a = lr3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 24 2026, LR-3)
+  // NAMED (Nov 25 2026, HOTFIX-G1): PHONE_COMPARE also opens seller.html?u=ana, the real-seller storefront (LR-3's Ana's Ink),
+  // so the Message button and the "..." menu are compared at phone widths; only that one answer, so no other page changes
+  if ((COMPARE || GUIDE_SCAN || SHOTS) && !LR3 && p === "/api/bfp/seller/ana") return lr3Api(method, u, request);   // and PHONE_GUIDE
   if (LR4) { const a = lr4Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 25 2026, LR-4)
   if (FX3) { const a = fx3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 22 2026, FX3)
   if (P23 && FX2S.on && !FX2S.inner) { const a = fx2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, FX2)
@@ -842,6 +853,7 @@ const GUIDE_CLEAR = String.raw`(function(){
 })()`;
 const guideSeen = new Set();
 let guideTabs = 0;
+const guideHits = {};   // NAMED (Nov 25 2026, HOTFIX-G1): page@width -> every hit
 async function guideRule(cdp, page, w) {
   const key = page + "@" + w;
   if (guideSeen.has(key)) return;
@@ -849,8 +861,17 @@ async function guideRule(cdp, page, w) {
   const g = await evaluate(cdp, GUIDE_CLEAR);
   if (!g || g.open) return;   // no Guide on this page (or it is open: its own sheet)
   guideTabs++;
-  check(page + " at " + w + ": nothing to tap under the Guide tab (" + g.tab.join(",") + ")", g.hits.length === 0, g.hits.length + " " + J(g.hits.slice(0, 8)));
+  if (g.hits.length) guideHits[key] = g.hits;   // NAMED (Nov 25 2026, HOTFIX-G1)
+  // NAMED (Nov 25 2026, HOTFIX-G1): LISTED, NOT MOVED. Three tab panels (role="tabpanel", tabindex="0": a keyboard focus stop,
+  // not a tap target) are as wide as their card, so they cannot clear the tab without moving a container, which HOTFIX-G1
+  // forbids. They are listed in the HOTFIX-G1 report for the owner to decide; each run prints them and does not count them.
+  // Every control inside them, and every other control on every page, is still held to the rule.
+  const LISTED = /^div#(agPanel-run|ccPanel-command|edPanel-text)\.deck-panel[. ]/;
+  const listed = g.hits.filter(x => LISTED.test(x)), hits = g.hits.filter(x => !LISTED.test(x));
+  if (listed.length) { guideListed++; console.log("    listed  " + page + " at " + w + ": a tab panel under the Guide tab, not moved (HOTFIX-G1 report): " + J(listed)); }
+  check(page + " at " + w + ": nothing to tap under the Guide tab (" + g.tab.join(",") + ")", hits.length === 0, hits.length + " " + J(hits.slice(0, 8)));
 }
+let guideListed = 0;   // NAMED (Nov 25 2026, HOTFIX-G1)
 
 /* ── open a page at a size ── */
 async function open(cdp, origin, page, w, h, phone) {
@@ -862,7 +883,7 @@ async function open(cdp, origin, page, w, h, phone) {
   await cdp.send("Page.navigate", { url: origin + "/" + page });
   for (let i = 0; i < 80; i++) { try { if (await evaluate(cdp, "document.readyState === 'complete'")) break; } catch (e) { /* navigating */ } await sleep(100); }
   await sleep(phone ? 1600 : 1800);
-  if (phone && MODE === "check") await guideRule(cdp, page, w);   // NAMED (Nov 24 2026, LR-3B): every phone mode
+  if (phone && MODE === "check" && !COMPARE && !SHOTS) await guideRule(cdp, page, w);   // NAMED (Nov 24 2026, LR-3B): every phone mode. NAMED (Nov 25 2026, HOTFIX-G1): but PHONE_COMPARE
 }
 async function shotPage(cdp, file, w) {
   const hgt = await evaluate(cdp, "Math.min(document.documentElement.scrollHeight, 9000)");
@@ -963,11 +984,15 @@ const ORBIT = String.raw`(function(){
     else if (LR2) { await lr2Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, LR-2)
     else if (LR3) { await lr3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 24 2026, LR-3)
     else if (LR4) { await lr4Run(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, LR-4)
+    else if (COMPARE) { await compareRun(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, HOTFIX-G1)
+    else if (SHOTS) { await shotsRun(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, HOTFIX-G1)
     else if (GUIDE_SCAN) {   // NAMED (Nov 24 2026, LR-3B): only the Guide-tab rule, every listed page at 360, 390 and 430
       for (const page of PAGES) { currentPage = page; for (const [w, h] of PHONES) { await open(cdp, origin, page, w, h, true);
         if (!(await evaluate(cdp, "!!document.getElementById('tmx-guide-tab')"))) continue;   // the sideways check judges the room the Guide adds
         const sw = await evaluate(cdp, "document.documentElement.scrollWidth"); check(page + " at " + w + ": no horizontal scroll (" + sw + ")", sw <= w + 1, sw > w + 1 ? J(await evaluate(cdp, "[].slice.call(document.querySelectorAll('body, body *')).filter(function(n){var r=n.getBoundingClientRect();if(r.right<=" + (w + 1) + ")return false;for(var e=n.parentElement;e;e=e.parentElement)if(e.getBoundingClientRect().right>" + (w + 1) + "&&e!==document.body&&e!==document.documentElement)return false;return !n.closest('#tmx-presence-root,#tmx-chat,#tmx-chat-glow-wrap');}).slice(0,6).map(function(n){var r=n.getBoundingClientRect();return n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).split(' ')[0]+' '+Math.round(r.left)+'..'+Math.round(r.right);})")) : ""); } }
-      console.log("  PHONE_GUIDE: " + PAGES.length + " pages, " + guideTabs + " page-widths draw the Guide tab");
+      console.log("  PHONE_GUIDE: " + PAGES.length + " pages, " + guideTabs + " page-widths draw the Guide tab, " + guideListed + " with a listed tab panel (HOTFIX-G1)");
+      // NAMED (Nov 25 2026, HOTFIX-G1): every hit, uncut (the check's detail stops at 900 characters), to guide-hits-<batch>.json
+      fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, "guide-hits-" + BATCH + ".json"), J(guideHits, null, 1));
       PAGES = [];
     }
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
@@ -1017,7 +1042,7 @@ const ORBIT = String.raw`(function(){
     if (MODE === "before") {
       if (ONLY !== "desktop") fs.writeFileSync(path.join(OUT, "defects-before-" + BATCH + ".json"), J(defects, null, 1));
       if (ONLY !== "phone") fs.writeFileSync(baselineFile(BATCH), J(boxes));
-    } else if (ONLY !== "desktop" && !HQ1 && !P21 && !P23) fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
+    } else if (ONLY !== "desktop" && !HQ1 && !P21 && !P23 && !COMPARE && !SHOTS) fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
   } finally {
     try { cdp && cdp.close(); } catch (e) { /* gone */ }
     try { chrome.proc.kill(); } catch (e) { /* gone */ }
@@ -4153,4 +4178,173 @@ async function lr4Run(cdp, origin) {
     const pub = P23S.db.t.posts.find(x => x.id === P23_POST.own) || {};
     check(at + "once confirmed, Save makes it Public", pub.audience === "public", pub.audience);
   }
+}
+
+/* ══ HOTFIX-G1 (Nov 25 2026): PHONE_COMPARE ═════════════════════════════════════════════════════════════════════
+   NAMED (Nov 25 2026, HOTFIX-G1): THE PHONE BASELINES. LR-3B shifted every phone page 40 px to the right (the Guide's
+   "room") and no check noticed, because only 1440 had a baseline. PHONE_COMPARE gives every page of lib/appMap.json a
+   baseline at 360, 390 and 430, measured like the 1440 one (animations paused from the first paint; every visible
+   element's box measured twice 700 ms apart, an element that moved between the two set aside as moving).
+     PHONE_COMPARE=record  writes <PHONE_COMPARE_DIR>/phone-baseline-<page>-<width>.json for the batch's pages, from the
+                           frontend in BIZFORCE_FRONTEND_DIR (the baselines were recorded from frontend f73aec1, the last
+                           before LR-3B, exported read-only with git archive, with this file's own fixtures)
+     PHONE_COMPARE=1       compares the batch's pages at the three widths, element by element, with the baseline: every
+                           element's box within 1 px (same tag, id and own text), nothing new, and the page height equal.
+                           A change made on purpose has a named override, phone-override-<tag>--<page>-<width>.json,
+                           which replaces the baseline for that page and width (the last tag in name order wins); each
+                           override is written with its element-by-element proof (phone-proof-<tag>.json).
+   The Guide-tab rule (guideRule) is not run in this mode: it judges the controls, PHONE_GUIDE runs it.
+   PHONE_COMPARE_DIR defaults to Downloads\phone1. */
+// a page with a query (seller.html?u=ana) is seller-u-ana
+function compareKey(page, w) { return page.replace(/\.html(?=$|\?)/, "").replace(/[\/?=&]+/g, "-") + "-" + w; }
+function compareBaseFile(page, w) { return path.join(COMPARE_DIR, "phone-baseline-" + compareKey(page, w) + ".json"); }
+function compareOverrideFile(page, w) {
+  const tail = "--" + compareKey(page, w) + ".json";
+  const f = fs.readdirSync(COMPARE_DIR).filter(n => n.indexOf("phone-override-") === 0 && n.endsWith(tail)).sort();
+  return f.length ? path.join(COMPARE_DIR, f[f.length - 1]) : null;
+}
+// the key of an element, with what is random about it masked: bf-support.js's two amount inputs ("sup" + six random
+// characters), and Termaximus's shooting star (div#tmx-shoot), drawn at random moments over any page, is left out
+function compareList(b) {
+  return b.list.filter(x => !/^div\|tmx-shoot\|/.test(String(x[0]))).map(x => [String(x[0]).replace(/^input\|sup[a-z0-9]{6}([AN])\|/, (m, k) => "input|sup*" + k + "|"), x[1], x[2]]);
+}
+function phoneDiff(base, now) {
+  const B = compareList(base), N = compareList(now);
+  const movingKeys = new Set(B.filter(x => x[2]).map(x => x[0]).concat(N.filter(x => x[2]).map(x => x[0])));
+  const pool = new Map();
+  N.filter(x => !movingKeys.has(x[0])).forEach(x => { if (!pool.has(x[0])) pool.set(x[0], []); pool.get(x[0]).push(x[1]); });
+  const missing = [];
+  B.filter(x => !movingKeys.has(x[0])).forEach(x => {
+    const list = pool.get(x[0]) || [];
+    const i = list.findIndex(bx => bx.every((v, k) => Math.abs(v - x[1][k]) <= 1));
+    if (i < 0) missing.push(x[0] + " " + x[1].join(","));
+    else list.splice(i, 1);
+  });
+  const extra = [];
+  pool.forEach((list, k) => list.forEach(bx => extra.push(k + " " + bx.join(","))));
+  return { missing, extra, moving: movingKeys.size, n: B.length, hBase: base.h, hNow: now.h };
+}
+function phoneCompare(page, w, base, now, ovName) {
+  const at = page + " at " + w + ": ";
+  if (!base) { check(at + "a phone baseline exists", false, "none recorded"); return; }
+  const d = phoneDiff(base, now), missing = d.missing, extra = d.extra;
+  check(at + "every element's box equals the phone baseline" + (ovName ? " (" + path.basename(ovName) + ")" : " (f73aec1)") + " within 1 px (" + d.n + " elements, " + d.moving + " moving set aside), page height " + base.h + " = " + now.h,
+    missing.length === 0 && extra.length === 0 && Math.abs(base.h - now.h) <= 1, J({ missing: missing.slice(0, 8), extra: extra.slice(0, 8), missingCount: missing.length, extraCount: extra.length }));
+}
+async function compareRun(cdp, origin) {
+  fs.mkdirSync(COMPARE_DIR, { recursive: true });
+  console.log("browserCheckPhone PHONE_COMPARE=" + COMPARE + " (frontend " + FRONTEND + "), batch " + BATCH + ", " + PAGES.length + " pages at " + PHONES.map(p => p[0]).join(", "));
+  const { identifier } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: PAUSE });
+  let n = 0;
+  // the last batch also takes the real-seller storefront (the appMap's seller.html has no seller, so draws no Message or menu)
+  const last = String(Math.ceil(ALL.length / 15));
+  for (const page of BATCH === last ? PAGES.concat(["seller.html?u=ana"]) : PAGES) {
+    for (const [w, h] of PHONES) {
+      await open(cdp, origin, page, w, h, true);
+      await evaluate(cdp, "scrollTo(0,0),true");
+      const b = await evaluate(cdp, BOXES);
+      if (COMPARE === "record") { fs.writeFileSync(compareBaseFile(page, w), J({ [page]: b })); n++; console.log("    " + page + " at " + w + ": " + b.list.length + " elements recorded (" + b.list.filter(x => x[2]).length + " moving), height " + b.h); }
+      else if (COMPARE === "override") {
+        // NAMED (Nov 25 2026, HOTFIX-G1): a change made on purpose. PHONE_COMPARE_TAG names it and PHONE_COMPARE_ALLOW is a
+        // regular expression over element keys (tag|id|own text): the override is written ONLY if every element that differs
+        // from what came before matches it (and the page height is equal, unless PHONE_COMPARE_HEIGHT=1 allows it); the
+        // differences, element by element, are the proof (phone-proof-<tag>.json). What came before is the latest earlier
+        // override of that page and width (by name: an lr3-/lr4- change, then an s4- Guide-tab fix), else the f73aec1 baseline.
+        // an entry is "<key> <left,top,width,height>"; a key's own text may hold spaces, so the box is the last token
+        const keyPart = x => x.slice(0, x.lastIndexOf(" ")), boxPart = x => x.slice(x.lastIndexOf(" ") + 1);
+        // PHONE_COMPARE_SPEC=<file>: {"<page>": {tag, allow, inside, shift, height}} gives each page of the batch its own
+        // settings (so one browser batch writes many pages' overrides); otherwise the PHONE_COMPARE_* settings
+        const SPECF = process.env.PHONE_COMPARE_SPEC, spec = SPECF ? JSON.parse(fs.readFileSync(SPECF, "utf8"))[page] : null;
+        if (SPECF && !spec) throw new Error("PHONE_COMPARE_SPEC has no entry for " + page);
+        const opt = k => spec ? (spec[k] === undefined ? "" : String(spec[k])) : (process.env["PHONE_COMPARE_" + k.toUpperCase()] || "");
+        const tag = opt("tag"), allow = new RegExp(opt("allow") || "^$");
+        if (!/^[a-z0-9-]+$/.test(tag || "")) throw new Error("PHONE_COMPARE_TAG: lower-case letters, digits and dashes");
+        const tail = "--" + compareKey(page, w) + ".json";
+        const prior = fs.readdirSync(COMPARE_DIR).filter(f => f.indexOf("phone-override-") === 0 && f.endsWith(tail) && f < "phone-override-" + tag + tail).sort().pop();
+        const baseFile = prior ? path.join(COMPARE_DIR, prior) : compareBaseFile(page, w);
+        const base = JSON.parse(fs.readFileSync(baseFile, "utf8"))[page], d = phoneDiff(base, b);
+        // PHONE_COMPARE_INSIDE=<key prefix> (e.g. div|bfMusicPopout|): a changed element whose box lies inside that element's
+        // box (the earlier box for one gone, the new box for one new) is inside the change; the element itself must be allowed
+        // Several prefixes may be given, separated by ";", and every element with such a key counts (each link of a list).
+        const insideKey = opt("inside"), insideKeys = insideKey ? insideKey.split(";") : [];
+        const boxesOf = list => compareList(list).filter(e => insideKeys.some(k => String(e[0]).indexOf(k) === 0)).map(e => e[1]);
+        const inBefore = boxesOf(base), inNow = boxesOf(b);
+        const within = (s, boxes) => { const v = boxPart(s).split(",").map(Number);
+          return boxes.some(box => v[0] >= box[0] - 1 && v[1] >= box[1] - 1 && v[0] + v[2] <= box[0] + box[2] + 1 && v[1] + v[3] <= box[1] + box[3] + 1); };
+        // PHONE_COMPARE_SHIFT=1: an element gone and an element new with the same key, the same left, width and height
+        // is the same element moved straight down or up (text added above it); it is listed as shifted, never as allowed.
+        // A sideways move (the 40 px room) or a resize is never a shift.
+        // PHONE_COMPARE_SHIFT=v: the same, but the height may change too (text added inside it): same key, left and width.
+        // Either way nothing that moved sideways or changed width is ever a shift. Pairs are taken in page order.
+        const shifted = [], gone = d.missing.slice(), nu = d.extra.slice(), SH = opt("shift");
+        const boxIn = x => boxPart(x).split(",").map(Number);
+        if (SH === "1" || SH === "v") for (let i = 0; i < gone.length; i++) {
+          const k = keyPart(gone[i]), bx = boxIn(gone[i]);
+          const j = nu.findIndex(x => keyPart(x) === k && (y => Math.abs(y[0] - bx[0]) <= 1 && Math.abs(y[2] - bx[2]) <= 1 && (SH === "v" || Math.abs(y[3] - bx[3]) <= 1))(boxIn(x)));
+          if (j >= 0) { shifted.push(gone[i] + " -> " + boxIn(nu[j]).join(",")); gone.splice(i, 1); nu.splice(j, 1); i--; }
+        }
+        const insideGone = gone.filter(x => !allow.test(keyPart(x)) && within(x, inBefore)), insideNew = nu.filter(x => !allow.test(keyPart(x)) && within(x, inNow));
+        const outside = gone.filter(x => !allow.test(keyPart(x)) && insideGone.indexOf(x) < 0).concat(nu.filter(x => !allow.test(keyPart(x)) && insideNew.indexOf(x) < 0));
+        const hOk = Math.abs(d.hBase - d.hNow) <= 1 || opt("height") === "1";
+        // nothing differs at this width: no override is needed (and none is written: what came before still holds)
+        const same = d.missing.length + d.extra.length === 0 && Math.abs(d.hBase - d.hNow) <= 1;
+        if (same) check(page + " at " + w + ": override " + tag + ": unchanged from " + (prior || "f73aec1") + ", no override written", true);
+        else check(page + " at " + w + ": override " + tag + ": only the named elements differ from " + (prior || "f73aec1") + " (" + d.missing.length + " gone, " + d.extra.length + " new, " + shifted.length + " shifted straight down or up, height " + d.hBase + " -> " + d.hNow + ")", outside.length === 0 && hOk, J({ outside: outside.slice(0, 8), hOk }));
+        const ok = outside.length === 0 && hOk && !same;
+        const ovFile = path.join(COMPARE_DIR, "phone-override-" + tag + "--" + compareKey(page, w) + ".json");
+        if (ok) fs.writeFileSync(ovFile, J({ [page]: b }));
+        else if (fs.existsSync(ovFile)) fs.unlinkSync(ovFile);   // a refused override never stands
+        // the proof is written either way (ok false: what fell outside), so a refusal can be read
+        const pf = path.join(COMPARE_DIR, "phone-proof-" + tag + ".json"), proof = fs.existsSync(pf) ? JSON.parse(fs.readFileSync(pf, "utf8")) : {};
+        proof[compareKey(page, w)] = { ok, against: prior || "f73aec1 baseline", allow: allow.source, inside: insideKey || null, insideCount: insideGone.length + insideNew.length,
+          outside, gone, new: nu, shifted, height: [d.hBase, d.hNow] };
+        fs.writeFileSync(pf, J(proof, null, 1));
+      }
+      else {
+        const ov = compareOverrideFile(page, w), file = ov || compareBaseFile(page, w);
+        const base = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8"))[page] : null;
+        phoneCompare(page, w, base, b, ov);
+      }
+    }
+  }
+  await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+  if (COMPARE === "record") console.log("  recorded " + n + " page-widths to " + COMPARE_DIR);
+}
+
+/* NAMED (Nov 25 2026, HOTFIX-G1): PHONE_SHOTS=<spec.json> takes viewport screenshots: [{file, page, w, h, at}], where "at" is a
+   selector scrolled to the Guide tab's height (so the control the fix moved is shown beside the tab), or none for the top of
+   the page. On dashboard.html it also writes the HQ facts: each orbit portal's disc (its left edge against the tab's right
+   edge), the orbit's centre against the screen's, and the header card and the hero's right edges against the screen's. */
+async function shotsRun(cdp, origin) {
+  const list = JSON.parse(fs.readFileSync(SHOTS, "utf8")), facts = [];
+  for (const s of list) {
+    await open(cdp, origin, s.page, s.w, s.h, true);
+    await evaluate(cdp, "(function(){var t=document.getElementById('tmx-guide-tab'),e=" + J(s.at || "") + "&&document.querySelector(" + J(s.at || "") + ");" +
+      "if(!e){scrollTo(0,0);return true;}var tr=t?t.getBoundingClientRect():{top:innerHeight*0.4};" +
+      "scrollTo(0,Math.max(0,e.getBoundingClientRect().top+scrollY-tr.top-8));return true;})()");
+    await sleep(500);
+    const sy = await evaluate(cdp, "scrollY");   // the clip is in page coordinates: the screen as scrolled
+    const r = await cdp.send("Page.captureScreenshot", { format: "png", clip: { x: 0, y: sy, width: s.w, height: s.h, scale: 1 } });
+    fs.mkdirSync(path.dirname(s.file), { recursive: true });
+    fs.writeFileSync(s.file, Buffer.from(r.data, "base64"));
+    if (/^dashboard\.html/.test(s.page) && !s.at) {
+      const f = await evaluate(cdp, String.raw`(function(){
+        var t = document.getElementById("tmx-guide-tab"), tr = t ? t.getBoundingClientRect() : null;
+        var discs = [].slice.call(document.querySelectorAll(".orbit-portal[data-portal]")).map(function(b){ var r = b.getBoundingClientRect(); return [b.getAttribute("data-portal"), Math.round(r.left * 10) / 10]; });
+        var st = document.getElementById("orbitStage"), sr = st ? st.getBoundingClientRect() : null;
+        var top = document.querySelector("header.topbar"), hero = document.querySelector("header.hq-hero");
+        return { w: innerWidth, tabRight: tr ? Math.round(tr.right * 10) / 10 : null, portals: discs,
+          orbitCentre: sr ? Math.round((sr.left + sr.width / 2) * 10) / 10 : null, screenCentre: innerWidth / 2,
+          topbarRight: top ? Math.round(top.getBoundingClientRect().right * 10) / 10 : null,
+          heroRight: hero ? Math.round(hero.getBoundingClientRect().right * 10) / 10 : null };
+      })()`);
+      facts.push(f);
+      const at = "dashboard at " + s.w + ": ";
+      check(at + "every orbit portal is clear of the Guide tab (left edge >= " + f.tabRight + ")", f.portals.length === 5 && f.portals.every(p => p[1] >= f.tabRight - 0.5), J(f.portals));
+      check(at + "the orbit is centred on the screen (within 1 px)", Math.abs(f.orbitCentre - f.screenCentre) <= 1, J([f.orbitCentre, f.screenCentre]));
+      check(at + "the header card and the hero end inside the screen", f.topbarRight <= f.w + 0.5 && f.heroRight <= f.w + 0.5, J([f.topbarRight, f.heroRight, f.w]));
+    }
+    console.log("    " + path.basename(s.file) + "  " + s.page + " at " + s.w + "x" + s.h + (s.at ? " (" + s.at + " beside the tab)" : " (top)"));
+  }
+  if (facts.length) fs.writeFileSync(path.join(path.dirname(list[0].file), "hq-facts.json"), J(facts, null, 1));
 }
