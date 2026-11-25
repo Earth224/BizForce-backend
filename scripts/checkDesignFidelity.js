@@ -94,8 +94,8 @@ const MUTATIONS = {
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter): the anchor "p33", the mutant "fx3b"
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment. Mutant "p33".
-  // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
-  "shell-rev": [[SW, "var SHELL_REV = \"lr2b\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
+  // NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "shell-rev": [[SW, "var SHELL_REV = \"lr3b\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
     // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
@@ -177,6 +177,20 @@ const MUTATIONS = {
   "lr2-quote-line": [[LRP, "border-left: 3px solid var(--bf-accent-b, #8b5cf6);", "border-left: 2px solid var(--bf-accent-b, #8b5cf6);"]],
   "lr2-draft-box": [[LRP, "min-height: 132px; padding: 12px; border-radius: 14px;", "min-height: 100px; padding: 12px; border-radius: 14px;"]],
   "lr2-check-words": [[LRP, "c.no_hard_sell, \"No hard sell, no promises\"]", "c.no_hard_sell, \"No hard sell\"]"]],
+  // NAMED (Nov 24 2026, LR-3): LeadsInbound
+  "lr3-pipe-pad": [[LRP, ".lr-pipe { padding: 10px 12px; gap: 8px; }", ".lr-pipe { padding: 12px; gap: 8px; }"]],
+  "lr3-bar-h": [[LRP, ".lr-bar { display: flex; height: 10px;", ".lr-bar { display: flex; height: 8px;"]],
+  "lr3-talking-count": [[LRP, ".lr-pc-talking { color: #b79cfa; }", ".lr-pc-talking { color: #8b5cf6; }"]],
+  "lr3-bar-static": [[LRP, "bar[0].style.flex = String(n);", "bar[0].style.flex = \"1\";"]],
+  "lr3-chip-lost": [[LRP, ', ["lost", "Lost"]];', "];"]],
+  "lr3-icon-radius": [[LRP, "width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 12px;", "width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 20px;"]],
+  "lr3-summary-line": [[LRP, ".lr-is { font-size: 13.5px; line-height: 1.35;", ".lr-is { font-size: 13.5px; line-height: 1.5;"]],
+  "lr3-won-pill": [[LRP, ".lr-s-won { background: #f5c46b;", ".lr-s-won { background: #6ee7b7;"]],
+  "lr3-card-icon": [[LRP, ".lr-ico-card_lead { background: #14302a;", ".lr-ico-card_lead { background: #0f2a3a;"]],
+  "lr3-heart": [[LRP, "M12 21s-7-4.5-7-10", "M12 20s-7-4.5-7-10"]],
+  "lr3-no-tip-icon": [[LRP, "      tip: '", "      coin: '"]],
+  "lr3-kind-weight": [[LRP, ".lr-ik { flex: none; font: 600 13px", ".lr-ik { flex: none; font: 700 13px"]],
+  "lr3-tab-gone": [[LRP, '<span class="lr-tbf">Inbound</span>', '<span class="lr-tbf">Inbox</span>']],
   "lr2-link-on": [[LRP, "S.sheetLead = l; S.sheetLink = false;", "S.sheetLead = l; S.sheetLink = true;"]],
   "lr2-knob": [[LRP, "right: 3px; top: 3px; width: 20px; height: 20px;", "right: 3px; top: 3px; width: 18px; height: 18px;"]],
   "lr2-fp-pad": [[LRP, ".lr-fp { gap: 12px; padding: 0 16px; }", ".lr-fp { gap: 12px; padding: 0 12px; }"]],
@@ -381,8 +395,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
 // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
 // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-// NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
-check("E1. sw.js SHELL_REV is \"lr2b\"", /\nvar SHELL_REV = "lr2b";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
+// NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+check("E1. sw.js SHELL_REV is \"lr3b\"", /\nvar SHELL_REV = "lr3b";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
@@ -669,6 +683,31 @@ check("E1. sw.js SHELL_REV is \"lr2b\"", /\nvar SHELL_REV = "lr2b";[ \t]*(?:\/\/
     holds(r(".lr-swf::after"), { right: px(SWC.INSET), top: px(SWC.INSET), width: px(SWC.KNOB), height: px(SWC.KNOB), background: SWC.KNOB_ON }) &&
     holds(r('.lr-sw[aria-checked="false"] .lr-swf'), { background: SWC.OFF }) && holds(r('.lr-sw[aria-checked="false"] .lr-swf::after'), { left: px(SWC.INSET), background: SWC.KNOB_OFF }) &&
     holds(r(".lr-sw"), { width: px(LD.HIT), height: px(LD.HIT), margin: lift(LD.HIT, SWC.H) }) && SWC.ON === C.ACCENT, J([r(".lr-swf"), r(".lr-swf::after")]));
+  /* NAMED (Nov 24 2026, LR-3): LeadsInbound, measured from its board (designSpec LEADS.INBOUND) */
+  const IB = LD.INBOUND, PI = IB.PIPE, IT = IB.ITEM;
+  check("I18. LeadsInbound: the pipeline card (padded " + PI.PAD + ", " + PI.GAP + " px apart), \"" + PI.LABEL + "\", a " + PI.BAR_H + " px bar (radius " + PI.BAR_RADIUS + ") of New cyan, Talking violet, Won " + PI.WON + ", and its counts " + PI.COUNTS_FONT + " px (" + PI.COUNT_TALKING + " for Talking)",
+    holds(r(".lr-pipe"), { padding: PI.PAD, gap: px(PI.GAP) }) && has('<p class="lr-lbl lr-plbl">Your pipeline</p>') && "Your pipeline".toUpperCase() === PI.LABEL &&
+    holds(r(".lr-bar"), { display: "flex", height: px(PI.BAR_H), "border-radius": px(PI.BAR_RADIUS) }) &&
+    PI.NEW === C.ACCENT && PI.TALKING === C.VIOLET && holds(r(".lr-bar-new"), { background: ACC }) && holds(r(".lr-bar-talking"), { background: VIO }) && holds(r(".lr-bar-won"), { background: PI.WON }) &&
+    holds(r(".lr-pcounts"), { display: "flex", "justify-content": "space-between", "font-size": px(PI.COUNTS_FONT) }) &&
+    holds(r(".lr-pc-new"), { color: ACC }) && holds(r(".lr-pc-talking"), { color: PI.COUNT_TALKING }) && holds(r(".lr-pc-won"), { color: PI.COUNT_WON }) &&
+    has('bar[0].style.flex = String(n); bar[1].style.flex = String(t); bar[2].style.flex = String(w);') &&
+    has('$("lrPcNew").textContent = "New " + n; $("lrPcTalking").textContent = "Talking " + t; $("lrPcWon").textContent = "Won " + w;'), J([r(".lr-pipe"), r(".lr-bar"), r(".lr-pc-talking")]));
+  check("I19. ...the chips " + IB.CHIPS.join(", ") + " (the Leads chips' faces); an item: a row " + IT.GAP + " px apart, the " + IT.ICON + " px icon (radius " + IT.ICON_RADIUS + ", " + IT.SVG + " px drawing), the kind " + IT.KIND_WEIGHT + " " + IT.KIND_FONT + " px, the summary " + IT.SUM_FONT + "/" + IT.SUM_LINE + " " + IT.SUM_COLOR + ", the NEW and WON pills",
+    has('var STAGES = [["new", "' + IB.CHIPS[0] + '"], ["talking", "' + IB.CHIPS[1] + '"], ["won", "' + IB.CHIPS[2] + '"], ["lost", "' + IB.CHIPS[3] + '"]];') &&
+    has("return chip(x[0], x[1], x[0] === IN.status);") &&
+    holds(r(".lr-item"), { "flex-direction": "row", "align-items": "flex-start", gap: px(IT.GAP) }) &&
+    holds(r(".lr-ico"), { width: px(IT.ICON), height: px(IT.ICON), "border-radius": px(IT.ICON_RADIUS) }) && has('<svg width="' + IT.SVG + '" height="' + IT.SVG + '" viewBox="0 0 24 24"') &&
+    holds(r(".lr-ix"), { gap: px(IT.MID_GAP) }) && holds(r(".lr-ik"), { font: IT.KIND_WEIGHT + " " + px(IT.KIND_FONT) + " " + F0 }) &&
+    holds(r(".lr-is"), { "font-size": px(IT.SUM_FONT), "line-height": String(IT.SUM_LINE), color: IT.SUM_COLOR }) &&
+    IB.PILLS.NEW.BG === C.ACCENT && holds(r(".lr-s-new"), { background: ACC, color: IB.PILLS.NEW.COLOR }) && holds(r(".lr-s-won"), { background: IB.PILLS.WON.BG, color: IB.PILLS.WON.COLOR }) &&
+    has("lr-badge lr-s-' + esc(it.status) + '"), J([r(".lr-item"), r(".lr-ico"), r(".lr-is")]));
+  const icoRule = k => { const hit = lr.match(new RegExp("\\n    ([^{\\n]*\\.lr-ico-" + k + "\\b[^{\\n]*) \\{([^}]*)\\}")); return hit ? rule("\n" + hit[1] + " {" + hit[2] + "}", hit[1] + " ") : null; };
+  check("I20. ...each drawn kind's icon: " + Object.keys(IB.ICONS).join(", ") + " (its colours and its drawing); " + IB.NOT_DRAWN.join(" and ") + " (not drawn) have one too",
+    Object.keys(IB.ICONS).every(k => { const I = IB.ICONS[k], d = icoRule(k) || {};
+      const line = lr.split("\n").find(l => l.indexOf("      " + k + ": '") === 0) || "";
+      return d.background === I.BG && (d.color === I.COLOR || (I.COLOR === C.ACCENT && d.color === ACC)) && line.indexOf('d="' + I.PATH + '"') !== -1; }) &&
+    IB.NOT_DRAWN.every(k => !!icoRule(k) && has("      " + k + ": '")), J(Object.keys(IB.ICONS).map(k => [k, icoRule(k)])));
   const lbls = [...lr.matchAll(/<p class="lr-lbl">([^<]+)<\/p>/g)].map(m => m[1].toUpperCase());
   check("I12. LeadsFingerprint: " + px(FP.PAD_X) + " sides, " + FP.GAP + " px apart; the intro (" + FP.INTRO_FONT + "/" + FP.INTRO_LINE + " " + FP.INTRO_COLOR + "); the labels " + FP.LABELS.join(", ") + " (" + LB.WEIGHT + " " + LB.FONT + " px, spaced " + LB.SPACING + ", " + LB.COLOR + "); " + FP.REACH.join(", ") + "; \"" + FP.ADD + "\"; Where to look's rows (" + FP.LOOK.PAD + ", " + FP.LOOK.TITLE_WEIGHT + " " + FP.LOOK.TITLE_FONT + " px over " + FP.LOOK.SUB_FONT + " px) and Threads' \"" + FP.LOOK.THREADS_WAITING + "\"",
     holds(r(".lr-fp"), { gap: px(FP.GAP), padding: "0 " + px(FP.PAD_X) }) && holds(r(".lr-intro"), { "font-size": px(FP.INTRO_FONT), "line-height": String(FP.INTRO_LINE), color: FP.INTRO_COLOR }) &&

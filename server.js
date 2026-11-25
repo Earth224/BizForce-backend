@@ -8747,6 +8747,9 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
 
     var messageNotification = await supabase.from("notifications").insert(IN.messageNotice(receiverId, req.user.id, data.id));
     await policyQueue(screened, "message", data.id, req.user.id);   // P2-2
+    // NAMED (Nov 24 2026, LR-3): the receiver's Inbound item (the first message of a conversation someone else began, or an
+    // I can help on their Need), not awaited: it never delays or fails the message (lib/inbound.js).
+    require("./lib/inbound").fire(require("./lib/inbound").fromMessage(supabase, data, { categoryName: inboundCategoryName }));
 
     if (messageNotification.error) {
       console.warn("[notifications] insert failed for POST /api/messages — the route still succeeded, the user simply was not notified:", messageNotification.error.message || messageNotification.error);
@@ -33580,6 +33583,9 @@ async function executeUpdateBlueskyProfile(proposal) {
    the member presses "Show my mentions". Nothing it returns is written to any
    table, and nothing marks the notifications seen: updateSeen and every other
    call that changes the account's Bluesky state are never made.
+   NAMED (Nov 24 2026, LR-3): BEFORE nothing at all was written. AFTER one thing is: a reply to a reply the member
+   posted through Lead Radar becomes a lead_reply Inbound item (lib/inbound.js fromMentions) holding the replier's
+   handle and that it replied, never the text of their post; the posts themselves are still never stored.
 
    THE ACCOUNT is decided as posts are (blueskyPostingAccount): a member with a
    connection reads and replies from their own session; the owner with no
@@ -33729,6 +33735,9 @@ app.get("/api/social/bluesky/mentions", requireAuth, requireActiveSubscription, 
         .map(function (n) { return mb.mentionItem(n); })
         .filter(Boolean);
       var nextCursor = typeof data.cursor === "string" && data.cursor && data.cursor.length <= 512 ? data.cursor : null;
+      // NAMED (Nov 24 2026, LR-3): a reply to one of the member's own Lead Radar replies (member_lead_replies.platform_uri)
+      // becomes a lead_reply Inbound item; only the replier's handle is kept, never their post. Not awaited.
+      if (account.kind === "member") require("./lib/inbound").fire(require("./lib/inbound").fromMentions(supabase, userId, data.notifications));
       return res.json({ items: items, cursor: nextCursor, posts_as: account.kind === "member" ? "member" : "platform" });
     } catch (error) {
       console.error("[social/bluesky/mentions] Error:", (error && error.message) || error);
@@ -49365,6 +49374,7 @@ app.post("/api/wallet/support", requireAuth, requireActiveSubscription, bfcSuppo
           if (notice.error) {
             console.warn("[notifications] insert failed for POST /api/wallet/support — the support was sent, the member simply was not notified:", notice.error.message || notice.error);
           }
+          inboundAfterTip(req.user.id, member.user_id, me.data.username);   // NAMED (Nov 24 2026, LR-3): the member's Inbound item; not awaited
           return res.json({
             balance: balance,
             bfcDisclaimer: BFC_NOTICE,
@@ -50086,6 +50096,7 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
       return res.status(400).json({ error: error.message });
     }
 
+    inboundAfterSale(req.user.id, listingId);   // NAMED (Nov 24 2026, LR-3): the seller's notice, push and Inbound item; not awaited
     return res.json({ balance: data });
   } catch (error) { next(error); }
 });
@@ -50826,6 +50837,7 @@ app.post("/api/crowdfunding/campaigns/:id/donate", requireAuth, requireActiveSub
       });
     }
 
+    inboundAfterDonation(req.user.id, campaign.id);   // NAMED (Nov 24 2026, LR-3): the owner's notice, push and Inbound item; not awaited
     return res.json({ balance: data });
   } catch (error) { next(error); }
 });
@@ -53736,6 +53748,7 @@ app.post("/api/cards/lead", cardLeadLimiter, async function (req, res) {
     });
     if (storedLead.error) throw storedLead.error;
     await noticeCardLead(leadCard.user_id, leadNowMs);
+    inboundAfterCardLead(leadCard.id, leadCard.user_id, new Date(leadNowMs).toISOString());   // NAMED (Nov 24 2026, LR-3): the owner's Inbound item; not awaited
     return res.status(200).json(leadSuccess);
   } catch (leadErr) {
     console.error("[card lead] not saved: " + ((leadErr && leadErr.code) || "error"));
@@ -56570,6 +56583,57 @@ require("./lib/leadRoutes").mountLeadRoutes(app, {
   sendLive: function () { return process.env.SALES_SEND_LIVE === "true"; },
   threads: { state: function (userId) { return leadRadarThreads().state(userId); }, reply: function (userId, id, text) { return leadRadarThreads().reply(userId, id, text); } }
 });
+
+/* ── INBOUND (LR-3, Nov 24 2026): everything coming to a member (lib/inbound.js, lib/inboundRoutes.js, migration 205) ──
+   The routes are M. The helpers below run after an action has succeeded and are never awaited by its route: each reads
+   the row the action just wrote, writes the Inbound item, and for a sale or a donation the in-app notice and its push
+   (no email, no SMS). Each never throws. */
+require("./lib/inboundRoutes").mountInboundRoutes(app, { sb: supabase, requireAuth: requireAuth, requireActiveSubscription: requireActiveSubscription, now: nowIso });
+async function inboundCategoryName(slug) { var c = await require("./lib/categories").find(supabase, slug); return c ? c.name : null; }
+function inboundAfterSale(buyerId, listingId) {
+  var IB = require("./lib/inbound");
+  return IB.fire((async function () {
+    var o = await supabase.from("marketplace_orders").select("id, buyer_id, seller_id, listing_title, amount_bfc, created_at")
+      .eq("buyer_id", buyerId).eq("listing_id", listingId).order("created_at", { ascending: false }).limit(1);
+    if (o.error || !(o.data || []).length) { console.warn("[inbound] the order just made could not be read; no notice or item."); return; }
+    var order = o.data[0];
+    if (order.seller_id === buyerId) return;
+    await IB.notify(supabase, sendPushToUser, IB.saleNotice(order));
+    await IB.fromOrder(supabase, order);
+  })());
+}
+function inboundAfterDonation(donorId, campaignId) {
+  var IB = require("./lib/inbound");
+  return IB.fire((async function () {
+    var d = await supabase.from("campaign_donations").select("id, campaign_id, donor_id, owner_id, amount_bfc, created_at")
+      .eq("donor_id", donorId).eq("campaign_id", campaignId).order("created_at", { ascending: false }).limit(1);
+    if (d.error || !(d.data || []).length) { console.warn("[inbound] the donation just made could not be read; no notice or item."); return; }
+    var donation = d.data[0];
+    if (donation.owner_id === donorId) return;
+    var c = await supabase.from("crowdfunding_campaigns").select("title").eq("id", campaignId).maybeSingle();
+    var title = c && !c.error && c.data ? c.data.title : null;
+    await IB.notify(supabase, sendPushToUser, IB.donationNotice(donation, title));
+    await IB.fromDonation(supabase, donation, title);
+  })());
+}
+function inboundAfterTip(senderId, recipientId, username) {
+  var IB = require("./lib/inbound");
+  return IB.fire((async function () {
+    var t = await supabase.from("bfc_transfers").select("id, sender_id, recipient_id, amount_bfc, note, created_at")
+      .eq("sender_id", senderId).eq("recipient_id", recipientId).eq("kind", "support").order("created_at", { ascending: false }).limit(1);
+    if (t.error || !(t.data || []).length) { console.warn("[inbound] the support just sent could not be read; no item."); return; }
+    await IB.fromTip(supabase, t.data[0], username);
+  })());
+}
+function inboundAfterCardLead(cardId, ownerId, atIso) {
+  var IB = require("./lib/inbound");
+  return IB.fire((async function () {
+    var l = await supabase.from("card_leads").select("id, user_id, name, email, phone, message, created_at")
+      .eq("card_id", cardId).eq("user_id", ownerId).eq("created_at", atIso).limit(1);
+    if (l.error || !(l.data || []).length) { console.warn("[inbound] the card lead just saved could not be read; no item."); return; }
+    await IB.fromCardLead(supabase, l.data[0]);
+  })());
+}
 
 
 

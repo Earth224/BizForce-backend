@@ -210,6 +210,28 @@
                        tab, closed at 1440), privacy.html, dashboard.html and
                        integrations.html are unchanged at 1440. The proof is
                        Downloads\phone1\lr2b-desktop-proof.json.
+                       NAMED (Nov 24 2026, LR-3): two more in
+                       desktop-baseline-pplr3-<page>.json (the names sort after pplr2b):
+                       agents/lead-radar.html (the Inbound tab: 2 new, the Fingerprint
+                       tab and its face 85.8 px along, 60 the same, none gone, height
+                       900) and privacy.html (Your data names the Inbound list, and the
+                       Mentions line names what Inbound keeps: 1 new, 6 boxes grew, 287
+                       below moved down 79.1 to 105.6 px, 116 the same, none gone, the
+                       page 106 px taller). seller.html (its 1440 recording is "Seller
+                       not found", so the Message button is never drawn there; PHONE_LR3
+                       measures it) and
+                       dashboard.html are unchanged at 1440. The proof is
+                       Downloads\phone1\lr3-desktop-proof.json.
+                       NAMED (Nov 24 2026, LR-3B): one more, a real seller's storefront
+                       (PHONE_LR3's step 10, key "seller.html?u=ana", Ana's Ink, a
+                       member signed in) in desktop-baseline-pplr3b-seller-ana.json:
+                       recorded from frontend f73aec1 and from LR-3, the same fixture:
+                       the Message button new (100 x 44, before Follow), the name,
+                       tagline and meta column 119.6 px narrower beside it, 45 the
+                       same, none gone, height 1008 = 1008 (bf-support.js's two amount
+                       inputs carry a random id, matched by their box). Every other
+                       page is unchanged at 1440: the Guide's 40 px of left room is
+                       phone only. The proof is Downloads\phone1\lr3b-desktop-proof.json.
      PHONE_P21=1        only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
@@ -248,6 +270,15 @@
                            account (the members panel, no lead request), signed out (the sign-in page), and
                            Threads waiting for Meta; fixtures only, nothing is ever sent; at 360, 390 and 430;
                            screenshots at 390 x 844 to PHONE_LR2_OUT (default Downloads\lr2)
+     PHONE_LR3=1           only LR-3's Inbound and the storefront's Message (lr3Run; NAMED (Nov 24 2026, LR-3)):
+                           the board LeadsInbound measured, the chips filtering, a tap opening the source, the
+                           menu's status moves, Add to my customers, and the storefront's Message button for a
+                           member, a free account, signed out and the member's own; fixtures only, nothing is
+                           ever sent; at 360, 390 and 430; screenshots at 390 x 844 to PHONE_LR3_OUT (default
+                           Downloads\lr3)
+     PHONE_GUIDE=1         only the Guide-tab rule (NAMED (Nov 24 2026, LR-3B)): each page of the batch
+                           at 360, 390 and 430, no button, link or input under the Guide tab at any
+                           scroll; every other phone mode runs the same rule on each page it opens
      PHONE_P32=1           only P3-2's own screens (p32Run): the Verified badge on the
                            Following feed, Talk, the profile, a storefront and the public
                            post page /p/; its tap sheet ("Verified: [kind]. This is not an
@@ -301,7 +332,7 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && process.env.PHONE_LR2 !== "1" && PAGES.length > 15) {   // NAMED (Nov 23 2026, P3-3): and PHONE_P33. NAMED (Nov 23 2026, LR-2): and PHONE_LR2   // HQ1 and P2-1: their own runs, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && process.env.PHONE_LR2 !== "1" && process.env.PHONE_LR3 !== "1" && PAGES.length > 15) {   // NAMED (Nov 23 2026, P3-3): and PHONE_P33. NAMED (Nov 23 2026, LR-2): and PHONE_LR2   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -500,6 +531,7 @@ const TONE = (() => { const n = 160000, b = Buffer.alloc(44 + n * 2); b.write("R
 function api(method, u, request) {
   const p = u.pathname;
   if (LR2) { const a = lr2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 23 2026, LR-2)
+  if (LR3) { const a = lr3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 24 2026, LR-3)
   if (FX3) { const a = fx3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 22 2026, FX3)
   if (P23 && FX2S.on && !FX2S.inner) { const a = fx2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, FX2)
   // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
@@ -749,6 +781,46 @@ const BOXES = String.raw`new Promise(function(done){
     done({ w: innerWidth, h: document.documentElement.scrollHeight, list: list }); }, 700);
 })`;
 
+/* NAMED (Nov 24 2026, LR-3B): NOTHING TO TAP UNDER THE GUIDE TAB. The Guide's tab is fixed at the left edge, 32 px wide and
+   centred top to bottom, over the page at every scroll. A button, link, input or other control whose box meets the tab's box
+   at ANY reachable scroll (a fixed control: where it is) is under the tab, and fails. Measured with the panel closed; the
+   Guide's own controls are its own. Every phone open() runs it once per page and width, in every phone mode (guideRule). */
+const GUIDE_CLEAR = String.raw`(function(){
+  var tab = document.getElementById("tmx-guide-tab"), root = document.getElementById("tmx-guide-root");
+  if (!tab || !root) return null;
+  var t = tab.getBoundingClientRect(), tc = getComputedStyle(tab);
+  if (t.width < 1 || t.height < 1 || tc.display === "none" || tc.visibility === "hidden") return null;
+  if (root.classList.contains("tmx-guide-open")) return { open: true };
+  var maxS = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+  function shown(n){ for (var e = n; e && e.nodeType === 1; e = e.parentElement) { var c = getComputedStyle(e); if (c.display === "none" || c.visibility === "hidden" || c.opacity === "0") return false; } return true; }
+  function fixedUp(n){ for (var e = n; e && e.nodeType === 1; e = e.parentElement) if (getComputedStyle(e).position === "fixed") return true; return false; }
+  function name(n){ var c = n.className && n.className.baseVal !== undefined ? n.className.baseVal : n.className; return n.tagName.toLowerCase() + (n.id ? "#" + n.id : "") + (c ? "." + String(c).trim().split(/\s+/).slice(0, 2).join(".") : ""); }
+  var SEL = "a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=tab],[role=switch],summary,[tabindex]:not([tabindex='-1'])";
+  var hits = [];
+  [].forEach.call(document.querySelectorAll(SEL), function(n){
+    if (root.contains(n)) return;
+    var r = n.getBoundingClientRect(); if (r.width < 2 || r.height < 2 || !shown(n)) return;
+    if (r.left >= t.right - 0.5 || r.right <= t.left + 0.5) return;
+    var under;
+    if (fixedUp(n)) under = r.top < t.bottom - 0.5 && r.bottom > t.top + 0.5;
+    else { var a = r.top + scrollY - t.bottom, b = r.bottom + scrollY - t.top; under = a < maxS && b > 0 && a < b; }
+    if (under) hits.push(name(n) + " \"" + (n.innerText || n.getAttribute("aria-label") || n.value || "").replace(/\s+/g, " ").trim().slice(0, 24) + "\" " +
+      Math.round(r.left) + "," + Math.round(r.top + scrollY) + " " + Math.round(r.width) + "x" + Math.round(r.height));
+  });
+  return { tab: [Math.round(t.left), Math.round(t.top), Math.round(t.width), Math.round(t.height)], hits: hits };
+})()`;
+const guideSeen = new Set();
+let guideTabs = 0;
+async function guideRule(cdp, page, w) {
+  const key = page + "@" + w;
+  if (guideSeen.has(key)) return;
+  guideSeen.add(key);
+  const g = await evaluate(cdp, GUIDE_CLEAR);
+  if (!g || g.open) return;   // no Guide on this page (or it is open: its own sheet)
+  guideTabs++;
+  check(page + " at " + w + ": nothing to tap under the Guide tab (" + g.tab.join(",") + ")", g.hits.length === 0, g.hits.length + " " + J(g.hits.slice(0, 8)));
+}
+
 /* ── open a page at a size ── */
 async function open(cdp, origin, page, w, h, phone) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: phone ? 2 : 1, mobile: phone, screenWidth: w, screenHeight: h });
@@ -759,6 +831,7 @@ async function open(cdp, origin, page, w, h, phone) {
   await cdp.send("Page.navigate", { url: origin + "/" + page });
   for (let i = 0; i < 80; i++) { try { if (await evaluate(cdp, "document.readyState === 'complete'")) break; } catch (e) { /* navigating */ } await sleep(100); }
   await sleep(phone ? 1600 : 1800);
+  if (phone && MODE === "check") await guideRule(cdp, page, w);   // NAMED (Nov 24 2026, LR-3B): every phone mode
 }
 async function shotPage(cdp, file, w) {
   const hgt = await evaluate(cdp, "Math.min(document.documentElement.scrollHeight, 9000)");
@@ -857,6 +930,14 @@ const ORBIT = String.raw`(function(){
     else if (FX3) { await fx3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 22 2026, FX3)
     else if (P33) { await p33Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, P3-3)
     else if (LR2) { await lr2Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, LR-2)
+    else if (LR3) { await lr3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 24 2026, LR-3)
+    else if (GUIDE_SCAN) {   // NAMED (Nov 24 2026, LR-3B): only the Guide-tab rule, every listed page at 360, 390 and 430
+      for (const page of PAGES) { currentPage = page; for (const [w, h] of PHONES) { await open(cdp, origin, page, w, h, true);
+        if (!(await evaluate(cdp, "!!document.getElementById('tmx-guide-tab')"))) continue;   // the sideways check judges the room the Guide adds
+        const sw = await evaluate(cdp, "document.documentElement.scrollWidth"); check(page + " at " + w + ": no horizontal scroll (" + sw + ")", sw <= w + 1, sw > w + 1 ? J(await evaluate(cdp, "[].slice.call(document.querySelectorAll('body, body *')).filter(function(n){var r=n.getBoundingClientRect();if(r.right<=" + (w + 1) + ")return false;for(var e=n.parentElement;e;e=e.parentElement)if(e.getBoundingClientRect().right>" + (w + 1) + "&&e!==document.body&&e!==document.documentElement)return false;return !n.closest('#tmx-presence-root,#tmx-chat,#tmx-chat-glow-wrap');}).slice(0,6).map(function(n){var r=n.getBoundingClientRect();return n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).split(' ')[0]+' '+Math.round(r.left)+'..'+Math.round(r.right);})")) : ""); } }
+      console.log("  PHONE_GUIDE: " + PAGES.length + " pages, " + guideTabs + " page-widths draw the Guide tab");
+      PAGES = [];
+    }
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -3197,7 +3278,8 @@ async function lr2Run(cdp, origin) {
     let r = await ev(READ_HOME);
     check(at + "the header: \"" + L.HEADER.TITLE + "\", 44 px buttons (Back, " + L.HEADER.SETTINGS + "), the " + L.HEADER.MARK + " px mark", r.title === L.HEADER.TITLE && r.hbtn.length === 2 && r.hbtn.every(b => b.w === L.HEADER.BUTTON && b.h === L.HEADER.BUTTON) &&
       !!r.mark && r.mark.w === L.HEADER.MARK && r.mark.h === L.HEADER.MARK && r.mark.rad === px(L.HEADER.MARK_RADIUS), J([r.title, r.hbtn, r.mark]));
-    check(at + "two tabs only (" + L.TABS.ITEMS.join(", ") + "): faces " + L.TABS.H + " px, radius " + L.TABS.RADIUS + ", hit 44; Leads chosen", r.tabs.length === 2 && r.tabs.map(t => t.f.txt).join() === L.TABS.ITEMS.join() &&
+    // NAMED (Nov 24 2026, LR-3): BEFORE "two tabs only" (r.tabs.length === 2). AFTER the tabs designSpec names (Leads, Inbound, Fingerprint).
+    check(at + "the tabs " + L.TABS.ITEMS.join(", ") + " only: faces " + L.TABS.H + " px, radius " + L.TABS.RADIUS + ", hit 44; Leads chosen", r.tabs.length === L.TABS.ITEMS.length && r.tabs.map(t => t.f.txt).join() === L.TABS.ITEMS.join() &&
       r.tabs.every(t => t.f.h === L.TABS.H && t.f.rad === px(L.TABS.RADIUS) && t.hit.h >= 44) && r.tabs[0].on === "true", J(r.tabs));
     check(at + "the stats 12 / 4 / 2: " + L.STATS.LABELS.join(", "), r.stats.join("|") === ["12 " + L.STATS.LABELS[0], "4 " + L.STATS.LABELS[1], "2 " + L.STATS.LABELS[2]].join("|"), J(r.stats));
     check(at + "the chips " + L.CHIP.SOURCES.join(", ") + " (no Threads while it is off): faces " + L.CHIP.H + " px, radius " + L.CHIP.RADIUS + ", hit 44; All pressed", r.chips.map(c => c.f.txt).join() === L.CHIP.SOURCES.join() &&
@@ -3351,5 +3433,305 @@ async function lr2Run(cdp, origin) {
     const out = await ev("({p:location.pathname,pw:!!document.querySelector('input[type=password]')})");
     check(at + "the page goes to the sign-in page (/app.html, a password box), and no lead request was made", out.p === "/app.html" && out.pw && LR2S.calls.length === 0, J([out, LR2S.calls]));
     await ev("(function(){try{sessionStorage.removeItem('phone_check_out');}catch(e){}return true;})()");
+  }
+}
+
+/* ══ LR-3 (Nov 24 2026): PHONE_LR3=1 ═════════════════════════════════════════════════════════════════════
+   NAMED (Nov 24 2026, LR-3): Lead Radar's Inbound tab (agents/lead-radar.html#inbound) and the storefront's Message button
+   (seller.html) at PHONE_LR3_WIDTHS (default 360, 390, 430), fixtures only: no request leaves the browser; GET /api/inbound,
+   POST /api/inbound/:id/status and /customer, and POST /api/messages are answered here as lib/inboundRoutes.js and the
+   server answer them, so nothing is ever sent. The items are the owner's board copy (LeadsInbound) with the pipeline at New 5,
+   Talking 3, Won 2. Measured against scripts/designSpec.js LEADS.INBOUND: the pipeline card, its bar and counts, the chips,
+   each item's icon, kind, who, age, summary and pill. The chips filter (?status=); a tap opens the source; the menu moves an
+   item Talking, Lost and back to New; a Won item's "Add to my customers" (once). The storefront: a member writes and sends
+   (POST /api/messages, then the conversation); a free account gets the members panel and sends nothing; signed out, the
+   sign-in prompt; on the member's own storefront no Message button. Four screenshots at 390 x 844 (DPR 2). */
+const LR3 = process.env.PHONE_LR3 === "1";
+const GUIDE_SCAN = process.env.PHONE_GUIDE === "1";   // NAMED (Nov 24 2026, LR-3B)
+const LR3_WIDTHS = String(process.env.PHONE_LR3_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const LR3_OUT = process.env.PHONE_LR3_OUT || path.join(os.homedir(), "Downloads", "lr3");
+const LR3_ANA = uid(8301), LR3_DION = uid(8302);
+const LR3S = { member: true, items: [], calls: [], moves: [], customers: [], messages: [] };
+function lr3Items() {
+  const it = (n, kind, kind_label, who, h, summary, status, open, extra) => Object.assign({ id: "eeeeeeee-0000-4000-8000-00000000030" + n, kind, kind_label, who, summary, amount_bfc: null, status,
+    status_label: { new: "New", talking: "Talking", won: "Won", lost: "Lost" }[status], created_at: ago(h), updated_at: ago(h), open, customer_added: false, can_add_customer: status === "won" }, extra || {});
+  return [
+    it(1, "message", "Message", "Ana P.", 0.2, "Do you have openings next Friday for a small wrist piece?", "new", { href: "/inbox.html?with=" + LR3_ANA, external: false }),
+    it(2, "i_can_help", "I can help", "Dion K.", 1, "Replied to your Need for a photographer.", "new", { href: "/inbox.html?with=" + LR3_DION, external: false }),
+    it(3, "card_lead", "Card lead", "your digital card", 5, "Left a phone number and asked for prices.", "new", { href: "/digital-cards.html#cardLeadsTitle", external: false }),
+    it(4, "lead_reply", "Reply", "@sam.bsky.social", 7, "Replied to your reply on Bluesky.", "new", { href: "https://bsky.app/profile/did:plc:check/post/3lr3", external: true }),
+    it(5, "tip", "Tip", "@lee", 9, "Sent you 10 BFC: thank you!", "new", { href: "/wallet.html", external: false }),
+    it(6, "message", "Message", "Kim L.", 26, "Can you do a gift card for my sister?", "talking", { href: "/inbox.html?with=" + uid(8303), external: false }),
+    it(7, "i_can_help", "I can help", "Joe M.", 30, "Replied to your Need in Photography.", "talking", { href: "/inbox.html?with=" + uid(8304), external: false }),
+    it(8, "card_lead", "Card lead", "your digital card", 50, "Left an email: is Saturday open?", "talking", { href: "/digital-cards.html#cardLeadsTitle", external: false }),
+    it(9, "sale", "Sale", "a buyer", 3, "Bought: Aftercare Kit \u00b7 40 BFC", "won", { href: "/receipts.html", external: false }, { amount_bfc: 40 }),
+    it(0, "campaign", "Campaign", "a supporter", 24, "Gave 25 BFC to New Studio Chairs.", "won", { href: "/campaigns.html", external: false }, { amount_bfc: 25 }),
+    Object.assign(it(1, "message", "Message", "Pat Q.", 80, "Never mind, found someone.", "lost", { href: "/inbox.html?with=" + uid(8305), external: false }), { id: "eeeeeeee-0000-4000-8000-000000000311" })
+  ];
+}
+function lr3Api(method, u, request) {
+  const p = u.pathname;
+  let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; }
+  if (/^\/api\/(inbound|messages)/.test(p)) LR3S.calls.push(method + " " + p + u.search);
+  const panel = require("../lib/membership").membersPanelFromCode();
+  if (p === "/api/auth/me") return { user: Object.assign({}, ROSE, { role: "user", email_verified_at: ago(24) }),
+    access: LR3S.member ? { active: true, exempt: false, access_reason: "subscription", inactive_reason: null, tier: "member", email_verified: true, members_panel: panel }
+      : { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: true, members_panel: panel },
+    subscription: null, profile: { username: "rose" } };
+  if (/^\/api\/inbound/.test(p) && !LR3S.member) return { __status: 402, __body: { error: "Lead Radar is for members.", code: "members_only", members_panel: panel } };
+  const counts = () => ({ new: 0, talking: 0, won: 0, lost: 0, ...LR3S.items.reduce((o, i) => (o[i.status] = (o[i.status] || 0) + 1, o), {}) });
+  if (p === "/api/inbound" && method === "GET") {
+    const st = u.searchParams.get("status") || "all";
+    return { items: LR3S.items.filter(i => st === "all" || i.status === st), counts: counts(), next_before: null };
+  }
+  let m = /^\/api\/inbound\/([^/]+)\/status$/.exec(p);
+  if (m && method === "POST") {
+    const i = LR3S.items.find(x => x.id === m[1]);
+    if (!i) return { __status: 404, __body: { error: "That item is not one of yours." } };
+    LR3S.moves.push({ id: m[1], status: b.status });
+    Object.assign(i, { status: b.status, status_label: { new: "New", talking: "Talking", won: "Won", lost: "Lost" }[b.status], can_add_customer: b.status === "won" && !i.customer_added });
+    return { item: i };
+  }
+  m = /^\/api\/inbound\/([^/]+)\/customer$/.exec(p);
+  if (m && method === "POST") {
+    const i = LR3S.items.find(x => x.id === m[1]);
+    if (!i) return { __status: 404, __body: { error: "That item is not one of yours." } };
+    if (i.status !== "won") return { __status: 409, __body: { error: "Mark it Won first, then add them to your customers.", code: "not_won" } };
+    if (i.customer_added) return { created: false, customer: { id: uid(8390) }, item: i };
+    LR3S.customers.push(m[1]); Object.assign(i, { customer_added: true, can_add_customer: false });
+    return { __status: 201, __body: { created: true, customer: { id: uid(8390), name: "A buyer" }, item: i } };
+  }
+  if (p === "/api/leads" && method === "GET") return { leads: [], stats: { new_this_week: 0, replied: 0, won: 2 }, sources_on: { bizforce: true, bluesky: true, youtube: false, threads: false }, weaker_hidden: 0 };
+  if (p === "/api/leads/summary") return { new_this_week: 0 };
+  if (p === "/api/bfp/seller/ana") return { seller: { user_id: LR3_ANA, username: "ana", display_name: "Ana's Ink", tagline: "Fine line and lettering", avatar_url: null }, products: [], services: [], support_links: [] };
+  if (p === "/api/bfp/seller/rose") return { seller: { user_id: ROSE.id, username: "rose", display_name: "Rose", tagline: "My own storefront", avatar_url: null }, products: [], services: [], support_links: [] };
+  m = /^\/api\/follows\/([^/]+)\/counts$/.exec(p);
+  if (m) return { followers: 3, following: 1, i_follow: false, self: m[1] === ROSE.id };
+  if (p === "/api/messages" && method === "POST") {
+    LR3S.messages.push(b);
+    if (!LR3S.member) return { __status: 403, __body: { error: "Starting a conversation is for members.", reason: "members_only", members_panel: panel } };
+    return { id: uid(8399), sender_id: ROSE.id, receiver_id: b.receiver_id, content: b.content };
+  }
+  return undefined;
+}
+async function lr3Run(cdp, origin) {
+  fs.mkdirSync(LR3_OUT, { recursive: true });
+  console.log("browserCheckPhone LR-3 (Inbound: the board, the chips, a tap, the menu's moves, Add to my customers; the storefront's Message for a member, a free account, signed out and your own) at " + LR3_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const L = require("./designSpec").LEADS, IB = L.INBOUND;
+  const ALLOW = /^div#(sfDlg|bf-members-panel) /;
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    check(at + "no text cut off", m.clipped.length === 0, J(m.clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const ok = x => !!(opts && opts.cover) && ALLOW.test(x);
+    const deco = m.deco.filter(x => !ok(x));
+    check(at + "decoration is under the text", deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar) /.test(x) && !ok(x));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.cover ? " (the dialog or the panel is meant to cover the page)" : ""), over.length === 0, J(over));
+  };
+  const BOX = "function bx(e){if(!e)return null;var r=e.getBoundingClientRect(),c=getComputedStyle(e);return {w:Math.round(r.width*10)/10,h:Math.round(r.height),l:Math.round(r.left),r:Math.round(r.right),t:Math.round(r.top),b:Math.round(r.bottom),rad:c.borderTopLeftRadius,pad:c.padding,fs:c.fontSize,fw:c.fontWeight,lh:c.lineHeight,bg:c.backgroundColor,col:c.color,txt:(e.innerText||'').replace(/\\s+/g,' ').trim()};}";
+  const READ_IN = "(function(){" + BOX + "var q=function(s){return document.querySelector(s);},qa=function(s){return [].slice.call(document.querySelectorAll(s));};var bar=q('#lrBar');" +
+    "return {tabOn:(q('.lr-tb[aria-selected=true] .lr-tbf')||{}).textContent,tabs:qa('.lr-tb .lr-tbf').map(function(t){return t.textContent;}),panel:!q('#lrIn').hidden,pipe:bx(q('.lr-pipe')),lbl:bx(q('.lr-plbl')),bar:bx(bar)," +
+    "segs:bar?[].map.call(bar.children,function(x){return bx(x).w;}):[],counts:qa('.lr-pcounts span').map(function(x){return [x.textContent,getComputedStyle(x).color];}),cfs:bx(q('.lr-pcounts'))," +
+    "chips:qa('#lrInChips .lr-chip').map(function(c){return {v:c.getAttribute('data-v'),on:c.getAttribute('aria-pressed'),f:bx(c.querySelector('.lr-chipf')),hit:bx(c)};})," +
+    "items:qa('#lrInList .lr-item').map(function(c){var a=c.querySelector('.lr-open');return {id:c.getAttribute('data-item'),kind:c.getAttribute('data-kind'),status:c.getAttribute('data-status'),card:bx(c),ico:bx(c.querySelector('.lr-ico')),svg:bx(c.querySelector('.lr-ico svg')),k:bx(c.querySelector('.lr-ik')),meta:(c.querySelector('.lr-meta')||{}).textContent,sum:bx(c.querySelector('.lr-is')),pill:bx(c.querySelector('.lr-pill .lr-badge')),pillHit:bx(c.querySelector('.lr-pill')),href:a&&a.getAttribute('href'),target:a&&a.getAttribute('target'),add:(c.querySelector('[data-act=customer]')||{}).textContent||null,added:(c.querySelector('.lr-added')||{}).textContent||null};})," +
+    "empty:(q('#lrInList .lr-empty')||{}).textContent||null,msg:q('#lrInMsg').hidden?null:q('#lrInMsg').textContent};})()";
+  const tap = sel => ev("(function(){var e=document.querySelector(" + J(sel) + ");if(!e)return false;e.scrollIntoView({block:'center'});e.click();return true;})()");
+  const waitFor = async (expr, n) => { for (let i = 0; i < (n || 40); i++) { if (await ev(expr)) return true; await sleep(100); } return false; };
+  const px = n => n + "px";
+  const rgb = hex => { const v = parseInt(hex.slice(1), 16); return "rgb(" + (v >> 16) + ", " + ((v >> 8) & 255) + ", " + (v & 255) + ")"; };
+  const ID = n => "eeeeeeee-0000-4000-8000-00000000030" + n;
+  for (const w of LR3_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(LR3_OUT, name + ".png"), Buffer.from(r.data, "base64")); } };
+    Object.assign(LR3S, { member: true, items: lr3Items(), calls: [], moves: [], customers: [], messages: [] });
+
+    // 1. LeadsInbound, a member
+    await open(cdp, origin, "agents/lead-radar.html#inbound", w, h, true);
+    await waitFor("document.querySelectorAll('#lrInList .lr-item').length>0");
+    let at = "LR3 Inbound at " + w + ": ";
+    let r = await ev(READ_IN);
+    check(at + "the tabs " + L.TABS.ITEMS.join(", ") + ", Inbound chosen and shown", J(r.tabs) === J(L.TABS.ITEMS) && r.tabOn === "Inbound" && r.panel, J([r.tabs, r.tabOn]));
+    check(at + "the pipeline card padded " + IB.PIPE.PAD + ", \"" + IB.PIPE.LABEL + "\", a " + IB.PIPE.BAR_H + " px bar (radius " + IB.PIPE.BAR_RADIUS + ") split 5 : 3 : 2",
+      !!r.pipe && r.pipe.pad === IB.PIPE.PAD && r.lbl.txt === IB.PIPE.LABEL && r.bar.h === IB.PIPE.BAR_H && r.bar.rad === px(IB.PIPE.BAR_RADIUS) &&
+      r.segs.length === 3 && Math.abs(r.segs[0] / r.bar.w - 0.5) < 0.02 && Math.abs(r.segs[1] / r.bar.w - 0.3) < 0.02 && Math.abs(r.segs[2] / r.bar.w - 0.2) < 0.02, J([r.pipe, r.lbl, r.bar, r.segs]));
+    check(at + "the counts " + IB.PIPE.COUNTS_FONT + " px: New 5 cyan, Talking 3 " + IB.PIPE.COUNT_TALKING + ", Won 2 " + IB.PIPE.COUNT_WON,
+      J(r.counts) === J([["New 5", rgb(IB.PIPE.COUNT_NEW)], ["Talking 3", rgb(IB.PIPE.COUNT_TALKING)], ["Won 2", rgb(IB.PIPE.COUNT_WON)]]) && r.cfs.fs === px(IB.PIPE.COUNTS_FONT), J([r.counts, r.cfs.fs]));
+    check(at + "the chips " + IB.CHIPS.join(", ") + ": faces " + L.CHIP.H + " px, hit 44; New pressed", r.chips.map(c => c.f.txt).join() === IB.CHIPS.join() &&
+      r.chips.every(c => c.f.h === L.CHIP.H && c.hit.h >= 44) && r.chips[0].on === "true" && r.chips.slice(1).every(c => c.on === "false"), J(r.chips));
+    const first = r.items[0] || {};
+    check(at + "five New items, newest first, each inside the screen (card radius " + L.CARD.RADIUS + ")", r.items.length === 5 && r.items.map(i => i.id).join() === [1, 2, 3, 4, 5].map(ID).join() &&
+      r.items.every(i => i.card.rad === px(L.CARD.RADIUS) && i.card.l >= 0 && i.card.r <= w), J(r.items.map(i => [i.id, i.card])));
+    check(at + "an item: the " + IB.ITEM.ICON + " px icon (radius " + IB.ITEM.ICON_RADIUS + ", a " + IB.ITEM.SVG + " px drawing), the kind " + IB.ITEM.KIND_WEIGHT + " " + IB.ITEM.KIND_FONT + " px, the summary " + IB.ITEM.SUM_FONT + " px " + IB.ITEM.SUM_COLOR + ", the " + L.BADGE.H + " px pill",
+      r.items.every(i => i.ico.w === IB.ITEM.ICON && i.ico.h === IB.ITEM.ICON && i.ico.rad === px(IB.ITEM.ICON_RADIUS) && i.svg.w === IB.ITEM.SVG && i.k.fs === px(IB.ITEM.KIND_FONT) && i.k.fw === String(IB.ITEM.KIND_WEIGHT) &&
+        i.sum.fs === px(IB.ITEM.SUM_FONT) && i.sum.col === rgb(IB.ITEM.SUM_COLOR) && i.pill.h === L.BADGE.H && i.pillHit.h >= 44 && i.pillHit.w >= 44), J(r.items.map(i => [i.ico, i.k.fs, i.sum.fs, i.pill, i.pillHit])));
+    check(at + "the board's first item: Message \u00b7 Ana P. \u00b7 12m, its words, a NEW pill (cyan on " + IB.PILLS.NEW.COLOR + "), the message icon's colours",
+      first.k && first.k.txt === "Message" && first.meta === " \u00b7 Ana P. \u00b7 12m" && first.sum.txt === "Do you have openings next Friday for a small wrist piece?" && first.pill.txt === "NEW" &&
+      first.pill.col === rgb(IB.PILLS.NEW.COLOR) && first.pill.bg === rgb(IB.PILLS.NEW.BG) && first.ico.bg === rgb(IB.ICONS.message.BG) && first.ico.col === rgb(IB.ICONS.message.COLOR), J(first));
+    const byKind = k => r.items.find(i => i.kind === k) || {};
+    check(at + "each kind's icon colours: I can help, Card lead (the board's), Reply and Tip (named deviations)",
+      byKind("i_can_help").ico.bg === rgb(IB.ICONS.i_can_help.BG) && byKind("card_lead").ico.bg === rgb(IB.ICONS.card_lead.BG) && byKind("card_lead").ico.col === rgb(IB.ICONS.card_lead.COLOR) &&
+      byKind("lead_reply").ico.bg === rgb("#1b2350") && byKind("tip").ico.bg === rgb("#2a2410") && byKind("i_can_help").meta === " \u00b7 Dion K. \u00b7 1h", J(r.items.map(i => [i.kind, i.ico.bg, i.ico.col, i.meta])));
+    check(at + "a tap opens the source: the conversation, the card leads, the reply on Bluesky in a new tab, the wallet",
+      first.href === "/inbox.html?with=" + LR3_ANA && byKind("card_lead").href === "/digital-cards.html#cardLeadsTitle" && byKind("lead_reply").href === "https://bsky.app/profile/did:plc:check/post/3lr3" &&
+      byKind("lead_reply").target === "_blank" && byKind("tip").href === "/wallet.html" && first.target === null, J(r.items.map(i => [i.kind, i.href, i.target])));
+    await ev("window.scrollTo(0,0),true"); await sleep(150);
+    await pageChecks(at);
+    await shot("inbound");
+
+    // 2. the chips filter
+    for (const [v, n, all] of [["talking", 3, "TALKING"], ["won", 2, "WON"], ["lost", 1, "LOST"], ["new", 5, "NEW"]]) {
+      await tap('#lrInChips .lr-chip[data-v="' + v + '"]');
+      await waitFor("document.querySelector('#lrInChips .lr-chip[data-v=" + v + "]').getAttribute('aria-pressed')==='true'&&[].every.call(document.querySelectorAll('#lrInList .lr-item'),function(c){return c.getAttribute('data-status')===" + J(v) + ";})&&document.querySelectorAll('#lrInList .lr-item').length===" + n);
+      r = await ev(READ_IN);
+      check(at + "the " + v + " chip: GET /api/inbound?status=" + v + ", " + n + " item" + (n === 1 ? "" : "s") + ", every pill " + all,
+        LR3S.calls.indexOf("GET /api/inbound?status=" + v) !== -1 && r.items.length === n && r.items.every(i => i.pill.txt === all) && (r.chips.find(c => c.v === v) || {}).on === "true", J([LR3S.calls, r.items.map(i => i.pill.txt)]));
+    }
+
+    // 3. a tap opens the source (the conversation), then back
+    await tap('#lrInList .lr-item[data-item="' + ID(1) + '"] .lr-open'); await sleep(900);
+    const went = await ev("location.pathname+location.search");
+    check(at + "tapping the message opens its conversation", went === "/inbox.html?with=" + LR3_ANA, went);
+    await open(cdp, origin, "agents/lead-radar.html#inbound", w, h, true);
+    await waitFor("document.querySelectorAll('#lrInList .lr-item').length===5");
+
+    // 4. the menu: Talking, Lost, back to New
+    await tap('#lrInList .lr-item[data-item="' + ID(1) + '"] .lr-pill');
+    await waitFor("!document.querySelector('#lrInList .lr-item[data-item=\"" + ID(1) + "\"] .lr-menu').hidden", 20);
+    at = "LR3 the menu at " + w + ": ";
+    const menu = await ev("(function(){var c=document.querySelector('#lrInList .lr-item[data-item=\"" + ID(1) + "\"]'),m=c.querySelector('.lr-menu'),p=c.querySelector('.lr-pill'),r=m.getBoundingClientRect();" +
+      "return {open:!m.hidden,exp:p.getAttribute('aria-expanded'),items:[].map.call(m.querySelectorAll('.lr-mi'),function(x){var b=x.getBoundingClientRect();return [x.textContent,Math.round(b.height)];}),r:Math.round(r.right),l:Math.round(r.left),focus:document.activeElement&&document.activeElement.className};})()");
+    check(at + "the pill opens a small menu: Talking, Won, Lost (it is New), each 44 px, inside the screen, focus on the first",
+      menu.open && menu.exp === "true" && J(menu.items) === J([["Talking", 44], ["Won", 44], ["Lost", 44]]) && menu.l >= 0 && menu.r <= w && menu.focus === "lr-mi", J(menu));
+    await shot("inbound-menu");
+    await tap('#lrInList .lr-item[data-item="' + ID(1) + '"] .lr-mi[data-to="talking"]');
+    await waitFor("document.querySelectorAll('#lrInList .lr-item').length===4");
+    r = await ev(READ_IN);
+    check(at + "Talking: POST /api/inbound/:id/status talking; it leaves New; the pipeline reads New 4, Talking 4",
+      J(LR3S.moves) === J([{ id: ID(1), status: "talking" }]) && r.items.length === 4 && !r.items.some(i => i.id === ID(1)) && r.counts[0][0] === "New 4" && r.counts[1][0] === "Talking 4", J([LR3S.moves, r.counts]));
+    await tap('#lrInChips .lr-chip[data-v="talking"]'); await waitFor("document.querySelectorAll('#lrInList .lr-item').length===4");
+    await tap('#lrInList .lr-item[data-item="' + ID(1) + '"] .lr-pill'); await sleep(200);
+    const tMenu = await ev("[].map.call(document.querySelectorAll('#lrInList .lr-item[data-item=\"" + ID(1) + "\"] .lr-mi'),function(x){return x.textContent;})");
+    await tap('#lrInList .lr-item[data-item="' + ID(1) + '"] .lr-mi[data-to="lost"]'); await waitFor("document.querySelectorAll('#lrInList .lr-item').length===3");
+    await tap('#lrInChips .lr-chip[data-v="lost"]'); await waitFor("document.querySelectorAll('#lrInList .lr-item').length===2");
+    await tap('#lrInList .lr-item[data-item="' + ID(1) + '"] .lr-pill'); await sleep(200);
+    const lMenu = await ev("[].map.call(document.querySelectorAll('#lrInList .lr-item[data-item=\"" + ID(1) + "\"] .lr-mi'),function(x){return x.textContent;})");
+    await tap('#lrInList .lr-item[data-item="' + ID(1) + '"] .lr-mi[data-to="new"]'); await waitFor("document.querySelectorAll('#lrInList .lr-item').length===1");
+    r = await ev(READ_IN);
+    check(at + "Lost, then Back to New: each saved; the menus offer the other three (Back to New once it has left New); the pipeline is New 5 again",
+      J(LR3S.moves.map(x => x.status)) === J(["talking", "lost", "new"]) && J(tMenu) === J(["Back to New", "Won", "Lost"]) && J(lMenu) === J(["Back to New", "Talking", "Won"]) && r.counts[0][0] === "New 5", J([LR3S.moves, tMenu, lMenu, r.counts]));
+    await ev("(function(){document.querySelector('.lr-pill').click();return true;})()"); await sleep(150);
+    await ev("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})),true"); await sleep(150);
+    check(at + "Escape closes the menu and gives focus back to its pill", await ev("!document.querySelector('.lr-menu:not([hidden])')&&document.activeElement&&document.activeElement.classList.contains('lr-pill')") === true);
+
+    // 5. Won: Add to my customers, once
+    await tap('#lrInChips .lr-chip[data-v="won"]'); await waitFor("document.querySelectorAll('#lrInList .lr-item').length===2");
+    at = "LR3 Won at " + w + ": ";
+    r = await ev(READ_IN);
+    check(at + "each Won item offers \"Add to my customers\" (a 44 px button), the sale \"Bought: Aftercare Kit \u00b7 40 BFC\" with a WON pill (gold on " + IB.PILLS.WON.COLOR + ")",
+      r.items.length === 2 && r.items.every(i => i.add === "Add to my customers") && (r.items.find(i => i.kind === "sale") || {}).sum.txt === "Bought: Aftercare Kit \u00b7 40 BFC" &&
+      r.items.every(i => i.pill.txt === "WON" && i.pill.bg === rgb(IB.PILLS.WON.BG) && i.pill.col === rgb(IB.PILLS.WON.COLOR)), J(r.items.map(i => [i.add, i.sum.txt, i.pill])));
+    await tap('#lrInList .lr-item[data-item="' + ID(9) + '"] [data-act="customer"]');
+    await waitFor("!!document.querySelector('#lrInList .lr-item[data-item=\"" + ID(9) + "\"] .lr-added')");
+    r = await ev(READ_IN);
+    const sale = r.items.find(i => i.id === ID(9)) || {};
+    check(at + "Add to my customers: POST /api/inbound/:id/customer once; the item now says \"Added to your customers\" and offers no second add",
+      J(LR3S.customers) === J([ID(9)]) && sale.added === "Added to your customers" && sale.add === null && LR3S.calls.filter(c => /\/customer$/.test(c)).length === 1, J([LR3S.customers, sale]));
+    await ev("(function(){var e=document.querySelector('#lrInList .lr-item[data-item=\"" + ID(9) + "\"]');e.scrollIntoView({block:'center'});return true;})()"); await sleep(200);
+    await pageChecks(at);
+    await shot("inbound-won-customer");
+
+    // 6. the storefront: a member
+    LR3S.messages = []; LR3S.calls = [];
+    await open(cdp, origin, "seller.html?u=ana", w, h, true);
+    await waitFor("!!document.getElementById('sfMessage')&&!!document.getElementById('sfFollow')");
+    at = "LR3 storefront (a member) at " + w + ": ";
+    const sf = await ev("(function(){var b=document.getElementById('sfMessage'),f=document.getElementById('sfFollow');if(!b)return null;var r=b.getBoundingClientRect();return {text:b.textContent,hidden:b.hidden,w:Math.round(r.width),h:Math.round(r.height),l:Math.round(r.left),r:Math.round(r.right),beforeFollow:!!f&&b.nextElementSibling===f};})()");
+    check(at + "a Message button, 44 px or more, inside the screen, just before Follow", !!sf && sf.text === "Message" && !sf.hidden && sf.h >= 44 && sf.w >= 44 && sf.l >= 0 && sf.r <= w && sf.beforeFollow, J(sf));
+    await pageChecks(at);
+    await ev("(function(){var b=document.getElementById('sfMessage');b.scrollIntoView({block:'center'});return true;})()"); await sleep(200);
+    await shot("storefront-message");   // the button beside Follow
+    await tap("#sfMessage");
+    await waitFor("!!document.getElementById('sfDlgBody')");
+    await ev("(function(){var t=document.getElementById('sfDlgBody');t.value='Hi Ana, do you have time for a small wrist piece next Friday?';return true;})()");
+    const dlg = await ev("(function(){var d=document.querySelector('#sfDlg .sf-dlg'),r=d.getBoundingClientRect(),t=document.getElementById('sfDlgBody');return {title:(document.getElementById('sfDlgTitle')||{}).textContent,l:Math.round(r.left),r:Math.round(r.right),fs:getComputedStyle(t).fontSize,focus:document.activeElement&&document.activeElement.id,btns:[].map.call(d.querySelectorAll('.sf-dlg-acts button'),function(x){return [x.textContent,Math.round(x.getBoundingClientRect().height)];})};})()");
+    check(at + "it opens a writing box: \"Message Ana's Ink\", 16 px type, focus in the box, Send and Cancel 44 px, inside the screen",
+      dlg.title === "Message Ana's Ink" && dlg.fs === "16px" && dlg.focus === "sfDlgBody" && J(dlg.btns) === J([["Send", 44], ["Cancel", 44]]) && dlg.l >= 0 && dlg.r <= w, J(dlg));
+    await pageChecks(at + "(the box open) ", { cover: true });
+    await tap("#sfDlgSend"); await sleep(1000);
+    const sent = await ev("location.pathname+location.search");
+    check(at + "Send: one POST /api/messages to the seller with the words, then the conversation opens",
+      J(LR3S.messages) === J([{ receiver_id: LR3_ANA, content: "Hi Ana, do you have time for a small wrist piece next Friday?" }]) && sent === "/inbox.html?with=" + LR3_ANA, J([LR3S.messages, sent]));
+
+    // 7. your own storefront
+    await open(cdp, origin, "seller.html?u=rose", w, h, true);
+    await waitFor("!!document.getElementById('sfFollow')&&document.getElementById('sfFollow').hidden");
+    at = "LR3 your own storefront at " + w + ": ";
+    const own = await ev("({msg:!!document.getElementById('sfMessage')&&!document.getElementById('sfMessage').hidden,follow:!document.getElementById('sfFollow').hidden})");
+    check(at + "no Message button (and no Follow)", own.msg === false && own.follow === false, J(own));
+
+    // 8. a free account: the members panel, nothing sent
+    await cdp.send("Page.navigate", { url: "about:blank" }); await sleep(300);
+    LR3S.member = false; LR3S.messages = [];
+    await open(cdp, origin, "seller.html?u=ana", w, h, true);
+    await waitFor("!!document.getElementById('sfMessage')");
+    await sleep(500);
+    await tap("#sfMessage");
+    await waitFor("!!document.getElementById('bf-members-panel')", 30);
+    at = "LR3 storefront (a free account) at " + w + ": ";
+    const fr = await ev("({panel:!!document.getElementById('bf-members-panel'),box:!!document.getElementById('sfDlgBody')})");
+    check(at + "Message opens the members panel, no writing box, and nothing is sent", fr.panel && !fr.box && LR3S.messages.length === 0, J([fr, LR3S.messages]));
+    await pageChecks(at, { cover: true });
+    LR3S.member = true;
+
+    // 9. signed out: the sign-in prompt, coming back here
+    await ev("(function(){try{sessionStorage.setItem('phone_check_out','1');localStorage.removeItem('bf_token');localStorage.removeItem('bf_user');localStorage.removeItem('bf_return_to');}catch(e){}return true;})()");
+    LR3S.messages = [];
+    await open(cdp, origin, "seller.html?u=ana", w, h, true);
+    await waitFor("!!document.getElementById('sfMessage')");
+    at = "LR3 storefront (signed out) at " + w + ": ";
+    await tap("#sfMessage");
+    await waitFor("!!document.getElementById('sfDlgSignIn')");
+    const so = await ev("(function(){var a=document.getElementById('sfDlgSignIn');return {title:(document.getElementById('sfDlgTitle')||{}).textContent,href:a&&a.getAttribute('href'),h:a?Math.round(a.getBoundingClientRect().height):0};})()");
+    check(at + "Message shows \"Sign in to message Ana's Ink\" with Sign in (/app.html, 44 px)", so.title === "Sign in to message Ana's Ink" && so.href === "/app.html" && so.h >= 44, J(so));
+    await pageChecks(at, { cover: true });
+    await ev("(function(){var a=document.getElementById('sfDlgSignIn');a.addEventListener('click',function(e){e.preventDefault();});a.click();return true;})()"); await sleep(150);
+    const back = await ev("localStorage.getItem('bf_return_to')");
+    check(at + "Sign in remembers this storefront to come back to, and nothing is sent", back === "/seller.html?u=ana" && LR3S.messages.length === 0, J([back, LR3S.messages]));
+    await ev("(function(){try{sessionStorage.removeItem('phone_check_out');localStorage.removeItem('bf_return_to');}catch(e){}return true;})()");
+  }
+
+  // 10. NAMED (Nov 24 2026, LR-3B): the storefront at 1440 with a real seller (Ana's Ink, the member signed in), so the Message
+  // button is drawn on the desktop too. Animations paused, every element's box against the merged baselines in PHONE_OUT
+  // (key "seller.html?u=ana"), as every other 1440 page is. PHONE_LR3_RECORD=<file> writes the recording there instead (the
+  // baseline was recorded from frontend f73aec1, before the button, and the proof is Downloads\phone1\lr3b-desktop-proof.json).
+  if (process.env.PHONE_LR3_DESK !== "0") {
+    LR3S.member = true;
+    const KEY = "seller.html?u=ana";
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: PAUSE }).then(async ({ identifier }) => {
+      await open(cdp, origin, KEY, DESK[0], DESK[1], false);
+      for (let i = 0; i < 40; i++) { if (await ev("!!document.getElementById('sfFollow')&&!document.getElementById('sfFollow').hidden")) break; await sleep(100); }
+      await ev("scrollTo(0,0),true");
+      const b = await ev(BOXES);
+      const sf = await ev("(function(){var b=document.getElementById('sfMessage'),f=document.getElementById('sfFollow');if(!b||!f)return {msg:!!b,follow:!!f};var r=b.getBoundingClientRect(),q=f.getBoundingClientRect();return {msg:true,text:b.textContent,hidden:b.hidden,w:Math.round(r.width),h:Math.round(r.height),l:Math.round(r.left),fr:Math.round(q.left),sameRow:Math.abs(r.top-q.top)<2,beforeFollow:!!(b.compareDocumentPosition(f)&Node.DOCUMENT_POSITION_FOLLOWING)};})()");
+      await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+      if (process.env.PHONE_LR3_RECORD) {
+        fs.writeFileSync(process.env.PHONE_LR3_RECORD, J({ [KEY]: b }));
+        console.log("  recorded " + KEY + " at 1440: " + b.list.length + " elements, Message " + J(sf) + " -> " + process.env.PHONE_LR3_RECORD);
+        return;
+      }
+      check("LR3 storefront at 1440 (a real seller, a member): Message is drawn just before Follow, on its row, at least 44 px tall",
+        sf.msg && sf.text === "Message" && !sf.hidden && sf.h >= 44 && sf.beforeFollow && sf.sameRow && sf.l < sf.fr, J(sf));
+      const base = {};
+      fs.readdirSync(OUT).filter(x => /^desktop-baseline-.*\.json$/.test(x)).forEach(x => Object.assign(base, JSON.parse(fs.readFileSync(path.join(OUT, x), "utf8"))));
+      if (!base[KEY]) check("LR3 storefront at 1440: a baseline for " + KEY + " is in " + OUT, false, "none");
+      // bf-support.js names its two amount inputs "sup" + Math.random() (six characters), so the id changes with how many draws
+      // ran first; those two are matched by their box, the random part of the id masked in both.
+      else { const mask = x => ({ w: x.w, h: x.h, list: x.list.map(e => [String(e[0]).replace(/^input\|sup[a-z0-9]{6}([AN])\|/, "input|sup*$1|"), e[1], e[2]]) }); desktopCompare(KEY, mask(base[KEY]), mask(b)); }
+    });
   }
 }

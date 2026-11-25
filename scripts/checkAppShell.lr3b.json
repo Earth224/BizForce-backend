@@ -1,0 +1,12 @@
+[
+ [
+  "scripts/termaximus-guide.js",
+  "    \"  #tmx-guide-tab { min-width: 32px; }\",\n    /* NAMED (Nov 24 2026, LR-3B): NOTHING TO TAP UNDER THE TAB. BEFORE the page's own controls began 16 to 25 px from the\n       left edge, under the 32 px tab (the storefront's Message and Follow, every agent's Refresh and Run, the HQ links...).\n       AFTER, while the tab is drawn, the page's body keeps 40 px on the left (the tab and an 8 px gap) on the phone.\n       Above 760 px nothing changes. browserCheckPhone's guideRule holds every phone page to it. */\n    \"  html.tmx-guide-room body { padding-left: 40px !important; }\",\n",
+  "    \"  #tmx-guide-tab { min-width: 32px; }\",\n"
+ ],
+ [
+  "scripts/termaximus-guide.js",
+  "  document.body.appendChild(root);\n  // NAMED (Nov 24 2026, LR-3B): the phone's left room (the CSS above), only while the tab is drawn: a page that hides the\n  // Guide (the profile and the storefront designs) keeps its own edges. The Oracle's own pages (oracle, mychart, calendar,\n  // synastry) are kept exactly as they are: no room is added there.\n  function syncRoom() {\n    var on = !/^\\/(oracle|mychart|calendar|synastry|the-third)\\.html$/.test(location.pathname) && tab.getClientRects().length > 0;\n    document.documentElement.classList.toggle(\"tmx-guide-room\", on);\n  }\n  syncRoom();\n  setTimeout(syncRoom, 0);\n  window.addEventListener(\"load\", syncRoom);\n  window.addEventListener(\"resize\", syncRoom);\n",
+  "  document.body.appendChild(root);\n"
+ ]
+]

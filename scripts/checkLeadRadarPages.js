@@ -194,8 +194,10 @@ const removedCalls = (seen) => seen.fetched.filter(f => REMOVED.some(r => f.ends
     const cards = d.querySelectorAll("#lrList .lr-card[data-lead]");
     check("the leads tab shows: the tabs, the three stats as served (7 new this week, 2 replied, 1 won)",
       !d.getElementById("lrTabs").hidden && textOf(d.getElementById("lrStatNew")) === "7" && textOf(d.getElementById("lrStatReplied")) === "2" && textOf(d.getElementById("lrStatWon")) === "1");
-    check("only the Leads and Fingerprint tabs (no empty Inbound or Get found tab)",
-      d.querySelectorAll("#lrTabs [role=tab]").length === 2 && !/Inbound|Get found/.test(textOf(d.getElementById("lrTabs"))), textOf(d.getElementById("lrTabs")));
+    // NAMED (Nov 24 2026, LR-3): BEFORE "only the Leads and Fingerprint tabs (no empty Inbound or Get found tab)". AFTER Inbound is
+    // built (LeadsInbound; checkInbound), so three tabs; Get found (LR-4) is still not shown.
+    check("only the Leads, Inbound and Fingerprint tabs (no empty Get found tab)",
+      d.querySelectorAll("#lrTabs [role=tab]").length === 3 && textOf(d.getElementById("lrTabs")).replace(/\s+/g, " ").trim() === "Leads Inbound Fingerprint" && !/Get found/.test(textOf(d.getElementById("lrTabs"))), textOf(d.getElementById("lrTabs")));
     const chips = Array.prototype.map.call(d.querySelectorAll("#lrChips .lr-chip"), c => textOf(c));
     check("chips: All and each source that is on (Threads is off, so no Threads chip)", JSON.stringify(chips) === JSON.stringify(["All", "Inside BizForce", "Bluesky", "YouTube"]), JSON.stringify(chips));
     check("a card for each lead, each with its badge and its text", cards.length === 3 &&

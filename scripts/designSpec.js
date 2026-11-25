@@ -285,15 +285,22 @@ const NEEDPOST = {
        the boards' sizes inside 44 px buttons, with negative margins so the layout keeps the boards' spacing;
      the draft box's type is 16 px on a phone (css/bf-phone.css: no field under 16 px, so iOS never zooms into it), 15 px above;
      the source chips swipe (overflow-x auto) where the board clips them (overflow hidden), so a Threads chip is never cut;
-     the sheet sits under the site's bar (z-index below 90), as the board draws its bar over the sheet. */
+     the sheet sits under the site's bar (z-index below 90), as the board draws its bar over the sheet.
+   NAMED (Nov 24 2026, LR-3): + LeadsInbound ("Inbound: everything coming to you"), measured from its .dc.html (INBOUND). The tabs
+   are now Leads, Inbound and Fingerprint (Get found is LR-4). KEPT, and named in the report as deviations from that board:
+     the board draws five kinds; tip (the site's own coin, gold on #2a2410) and lead_reply (a reply arrow, violet on #1b2350)
+       are not drawn, so they take the nearest drawn kind's colours;
+     the board draws the NEW and WON pills; TALKING (#b79cfa on #070b18) and LOST (#c9d1e6 on #2b3a6b) are not drawn;
+     the pill is a 44 px button (HIT) that opens the small menu (Talking, Won, Lost, Back to New), which the board does not draw;
+     a won item carries "Add to my customers" under it (not drawn). */
 const LEADS = {
-  BOARDS: ["LeadsHome", "LeadsReply", "LeadsFingerprint"],
+  BOARDS: ["LeadsHome", "LeadsReply", "LeadsFingerprint", "LeadsInbound"],
   FONT: 'system-ui, -apple-system, "Segoe UI", Arial, sans-serif',
   PAGE: { BG: "#070b18", TEXT: "#e6eaf5" },
   HIT: 44,
   HEADER: { PAD: "12px 8px 4px", GAP: 6, BUTTON: 44, MARK: 34, MARK_RADIUS: 10, MARK_BG: "#0f2a3a", TITLE: "Lead Radar", TITLE_FONT: 18, TITLE_WEIGHT: 700,
     SETTINGS: "Radar settings" },
-  TABS: { ITEMS: ["Leads", "Fingerprint"], NOT_DRAWN: ["Inbound", "Get found"], PAD: "0 12px 10px", GAP: 4, H: 40, PAD_X: 14, RADIUS: 20, FONT: 14, WEIGHT: 600,
+  TABS: { ITEMS: ["Leads", "Inbound", "Fingerprint"], NOT_DRAWN: ["Get found"], PAD: "0 12px 10px", GAP: 4, H: 40, PAD_X: 14, RADIUS: 20, FONT: 14, WEIGHT: 600,
     COLOR: "#a9b3cc", ON_BG: "#0f2a3a" },
   CONTENT: { PAD_X: 12, GAP: 10 },
   CARD: { RADIUS: 16, BORDER: "#1e2848", BG: "#0b1022", PAD: 12, GAP: 8 },
@@ -325,8 +332,21 @@ const LEADS = {
     LABELS: ["WHAT YOU DO", "WHERE", "WORDS PEOPLE USE", "NOT FOR ME", "WHERE TO LOOK"], REACH: ["My city", "25 miles", "Online, anywhere"], ADD: "+ Add",
     LOOK: { PAD: "8px 0", TITLE_FONT: 13.5, TITLE_WEIGHT: 600, SUB_FONT: 12,
       ROWS: [["Inside BizForce", "Needs posted by people near you"], ["Bluesky", "Public posts that ask the room"], ["YouTube", "Comments asking for help, limited each day"]],
-      THREADS_WAITING: "Waiting for Meta's approval" } }
+      THREADS_WAITING: "Waiting for Meta's approval" } },
+  INBOUND: {
+    PIPE: { PAD: "10px 12px", GAP: 8, LABEL: "YOUR PIPELINE", BAR_H: 10, BAR_RADIUS: 5, NEW: "#22d3ee", TALKING: "#8b5cf6", WON: "#f5c46b",
+      COUNTS_FONT: 12, COUNT_NEW: "#22d3ee", COUNT_TALKING: "#b79cfa", COUNT_WON: "#f5c46b" },
+    CHIPS: ["New", "Talking", "Won", "Lost"],
+    ITEM: { GAP: 10, ICON: 40, ICON_RADIUS: 12, SVG: 20, MID_GAP: 3, KIND_FONT: 13, KIND_WEIGHT: 600, SUM_FONT: 13.5, SUM_LINE: 1.35, SUM_COLOR: "#c9d1e6" },
+    ICONS: {
+      message: { BG: "#0f2a3a", COLOR: "#22d3ee", PATH: "M4 5h16v11H9l-5 4z" },
+      i_can_help: { BG: "#1b2350", COLOR: "#b79cfa", PATH: "M7 11V6a2 2 0 0 1 4 0v5M11 10V5a2 2 0 0 1 4 0v6M15 9a2 2 0 0 1 4 0v5a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-3l-2-4a2 2 0 0 1 3-2l1 2" },
+      sale: { BG: "#2a2410", COLOR: "#f5c46b", PATH: "M5 8h14l-1 12H6z" },
+      card_lead: { BG: "#14302a", COLOR: "#6ee7b7", PATH: "M14 10h4M14 14h3" },
+      campaign: { BG: "#2a2410", COLOR: "#f5c46b", PATH: "M12 21s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.5-7 10-7 10z" } },
+    NOT_DRAWN: ["tip", "lead_reply"],
+    PILLS: { NEW: { BG: "#22d3ee", COLOR: "#070b18" }, WON: { BG: "#f5c46b", COLOR: "#070b18" } } }
 };
 
-// NAMED (Nov 23 2026, LR-2): + LEADS. NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
+// NAMED (Nov 24 2026, LR-3): + LEADS.INBOUND. NAMED (Nov 23 2026, LR-2): + LEADS. NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
 module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX, COMPOSER, NEEDPOST, LEADS };

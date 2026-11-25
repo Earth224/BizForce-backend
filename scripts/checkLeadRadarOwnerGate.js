@@ -110,8 +110,14 @@ const J = JSON.stringify;
   const stmts = [];
   let at = -1;
   while ((at = src.indexOf('.from("member_leads")', at + 1)) !== -1) stmts.push(src.slice(at, src.indexOf(";", at)));
-  const unscoped = stmts.filter(t => !/\.eq\("user_id", (userId|req\.user\.id)\)/.test(t));
-  check("every member_leads query in lib/leadRoutes.js (" + stmts.length + ") is scoped to the caller's user_id", stmts.length >= 8 && unscoped.length === 0, J(unscoped.map(t => t.slice(0, 120))));
+  // NAMED (Nov 24 2026, LR-3): BEFORE lib/leadRoutes.js alone, at least 8. AFTER the won stat's query moved to lib/inbound.js
+  // (wonCount, which also counts Inbound's won items), so both files are read: at least 7 here and 3 there, every one scoped.
+  const ibSrc = require("fs").readFileSync(require("path").join(__dirname, "..", "lib", "inbound.js"), "utf8").replace(/\r\n/g, "\n");
+  let atIb = -1;
+  const ibStmts = [];
+  while ((atIb = ibSrc.indexOf('.from("member_leads")', atIb + 1)) !== -1) ibStmts.push(ibSrc.slice(atIb, ibSrc.indexOf(";", atIb)));
+  const unscoped = stmts.concat(ibStmts).filter(t => !/\.eq\("user_id", (userId|req\.user\.id)\)/.test(t));
+  check("every member_leads query in lib/leadRoutes.js (" + stmts.length + ") and lib/inbound.js (" + ibStmts.length + ") is scoped to the caller's user_id", stmts.length >= 7 && ibStmts.length >= 3 && unscoped.length === 0, J(unscoped.map(t => t.slice(0, 120))));
 
   console.log("\n══ 4. one owner ══");
   console.log("    lib/ownerAccount.js      : " + OWNER_ACCOUNT_ID);

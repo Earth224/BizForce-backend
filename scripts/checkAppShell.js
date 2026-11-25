@@ -60,6 +60,10 @@ const FX3B_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShel
 // read from GET /api/leads/summary by a member) and the Guide's Lead Radar and Sales tips. [file, now, was]; undone before LR-1's
 // (they are the newest), each found exactly once, they return both files to frontend 968b529 exactly.
 const LR2_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.lr2.json"), "utf8"));
+// NAMED (Nov 24 2026, LR-3B): nothing to tap under the Guide tab: the Guide keeps 40 px of left room on the phone (its CSS rule
+// and the class that turns it on). [file, now, was]; undone before LR-2's (they are the newest), each found exactly once, they
+// return termaximus-guide.js to frontend f73aec1 exactly.
+const LR3B_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.lr3b.json"), "utf8"));
 const PRESENCE = "scripts/termaximus-presence.js", GUIDE = "scripts/termaximus-guide.js";
 // NAMED (Nov 20 2026, P2-2): the only lines P2-2 added to dashboard.html (see U1).
 const P22_DASH_LINES = [
@@ -115,8 +119,8 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
-  "sw-old-rev": [[SW, "var SHELL_REV = \"lr2b\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+  // NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "sw-old-rev": [[SW, "var SHELL_REV = \"lr3b\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
     "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
@@ -284,8 +288,8 @@ async function page(pathname, opts) {
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
-  check("W1. SHELL_REV \"lr2b\" in the cache's name", /var SHELL_REV = "lr2b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
+  // NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  check("W1. SHELL_REV \"lr3b\" in the cache's name", /var SHELL_REV = "lr3b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
@@ -299,6 +303,8 @@ async function page(pathname, opts) {
     // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
     let now = FILES[f];
     if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    // NAMED (Nov 24 2026, LR-3B): LR-3B's hunks undone before all the others, the same way
+    LR3B_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " lr3b hunk missing"; });
     // NAMED (Nov 23 2026, LR-2): LR-2's hunks undone before all the others, the same way
     LR2_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " lr2 hunk missing"; });
     // NAMED (Nov 23 2026, LR-1): LR-1's two hunks undone first, the same way

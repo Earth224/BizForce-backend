@@ -469,7 +469,12 @@ const ADDED = [
   ["post", "/api/leads/fingerprint/spare/swap"],             // members: a spare word into the Fingerprint (559 -> 560)
   ["post", "/api/social/threads/deauthorize"],               // PUBLIC: Meta's Uninstall Callback, refused without a valid signed_request (560 -> 561)
   ["post", "/api/social/threads/data-deletion"],             // PUBLIC: Meta's Delete Callback, the same signature check (561 -> 562)
-  ["get", "/api/social/threads/deletion-status"]             // PUBLIC: what threads-deletion.html shows for a confirmation code (562 -> 563)
+  ["get", "/api/social/threads/deletion-status"],            // PUBLIC: what threads-deletion.html shows for a confirmation code (562 -> 563)
+  // NAMED (Nov 24 2026, LR-3): BEFORE 563 routes; AFTER 567: Inbound's four, all members only (lib/inboundRoutes.js; checkInbound).
+  ["get", "/api/inbound"],                                   // members: the member's Inbound items (563 -> 564)
+  ["get", "/api/inbound/summary"],                           // members: the counts and the won total (564 -> 565)
+  ["post", "/api/inbound/:id/status"],                       // members: move an item New, Talking, Won or Lost (565 -> 566)
+  ["post", "/api/inbound/:id/customer"]                      // members: Add to my customers, once (566 -> 567)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

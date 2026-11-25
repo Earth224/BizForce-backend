@@ -385,7 +385,32 @@ Threads in Lead Radar (`lib/threadsAuth.js`, `lib/threadsApi.js`, `lib/threadsRo
 - **Credentials:** the Threads app id in `THREADS_APP_ID` and its secret in `THREADS_APP_SECRET`. The secret is kept only on Railway.
 - **Before the public can connect:** until the app is live only Threads Testers added to it can connect. `threads_keyword_search` needs Meta App Review; until it is approved a search sees only the member's own posts, and Lead Radar shows "Waiting for Meta's approval" on the Threads chip and in the Fingerprint instead of empty results.
 
-Until both variables are set, Connect Threads answers 503 "Threads is not set up yet".
+- **Uninstall Callback URL:** exactly `https://dynamic-prosperity-production-5382.up.railway.app/api/social/threads/deauthorize`. It deletes the member's Threads connection.
+- **Delete Callback URL:** exactly `https://dynamic-prosperity-production-5382.up.railway.app/api/social/threads/data-deletion`. It deletes the member's Threads leads, Threads replies and connection, then answers Meta with a confirmation code and the status page `https://bizforceai.net/threads-deletion.html?code=<code>`.
+- **The signed_request check:** both callbacks take Meta's `signed_request` (`<signature>.<payload>`, both base64url). The signature must be HMAC-SHA256 of the payload part under `THREADS_APP_SECRET`, compared in constant time. The request is refused with 400 and nothing is deleted when the signature is missing or wrong, the algorithm is not HMAC-SHA256, the user id is not digits, or `issued_at` is too old or more than 5 minutes ahead. A request issued before the member's current connection was made deletes nothing, so a replay cannot remove a newer connection.
+
+Until both variables are set, Connect Threads answers 503 "Threads is not set up yet", and so do the two callbacks.
+
+## Inbound
+
+Lead Radar's Inbound tab (`lib/inbound.js`, `lib/inboundRoutes.js`, migration 205) lists everything that came to a member, in one place. Each of these makes one item:
+
+- the first message in a conversation someone else started;
+- an "I can help" on the member's Need;
+- a Market sale;
+- a digital card lead;
+- a donation to the member's campaign;
+- a BizCash support tip;
+- a reply on Bluesky to a reply the member posted through Lead Radar.
+
+The member moves each item New, Talking, Won or Lost. A sale, a donation and a tip arrive as Won. A Won item offers "Add to my customers", which makes one crm_customers row.
+
+- **Once only.** The unique key (user, kind, source) and a one-per-conversation index make every writer safe to run twice. An item is never made for the member's own action.
+- **Never in the way.** The writers run after their action succeeds, are never awaited, and never throw.
+- **Members only.** The routes are M: GET /api/inbound, GET /api/inbound/summary, POST /api/inbound/:id/status and POST /api/inbound/:id/customer.
+- **Notices.** A sale and a donation each send an in-app notice and a push. No email and no SMS.
+- **The won stat.** The Leads tab's "won" counts won leads plus won Inbound items. A Bluesky reply item whose lead is also won counts once.
+- **Backfill.** `node scripts/oneoff/lr3Backfill.js` is a dry run that prints counts only. `--apply` writes the last 90 days and is safe to run again.
 
 ## Google Wallet setup
 

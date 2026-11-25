@@ -93,13 +93,15 @@ const MUTATIONS = {
   "radar-draft-sends": [[RADAR, `        $("lrSheetBody").innerHTML = draftHtml(l, res.data);\n`, `        $("lrSheetBody").innerHTML = draftHtml(l, res.data); send();\n`]],
   "radar-console": [[RADAR, `Sign in to see Lead Radar.`, `Failed to load leads. Check console.`]],
   "sales-sends": [[SALES, `archiveRead = fetch(API_URL + "/api/leads/archive", { headers: { "Authorization": "Bearer " + token } })`, `archiveRead = fetch(API_URL + "/api/agents/sales/send-approved", { method: "POST", headers: { "Authorization": "Bearer " + token } })`]],
-  "sfmessage-back": [[BFA, `"#pfsMessage", ".btn-message", "[data-members-only]"]`, `"#pfsMessage", ".btn-message", "#sfMessage", "[data-members-only]"]`]],
+  // NAMED (Nov 24 2026, LR-3): BEFORE "sfmessage-back" (the dead selector returning). AFTER the selector is wired to seller.html's
+  // real Message button, so the mutation takes the button's id away and leaves the selector dead again.
+  "sfmessage-dead": [["seller.html", `btn.id = "sfMessage";`, `btn.id = "sfMsg";`]],
   "suppressed-back": [[SITEMAP, `</urlset>`, `  <url><loc>https://bizforceai.net/suppressed.html</loc></url>\n</urlset>`]]
 };
 
 const T = H.setup(__filename, MUTATIONS, [SERVER, LR, YR, JOBS, ACCESS, RT, LRP, MR, "@lib/leadFingerprint.js", "@lib/memberMastodon.js", "@lib/yourData.js", "@README.md",
   "@supabase/migrations/203_lr1_archived_and_sms_pending.sql", "@scripts/oneoff/lr1Archive.js", "@lib/triggerRunner.js", "@lib/agentSignatures.js",
-  SALES, RADAR, BFA, SITEMAP, SMS, "sw.js", "privacy.html"]);
+  SALES, RADAR, BFA, SITEMAP, SMS, "sw.js", "privacy.html", "seller.html"]);   // NAMED (Nov 24 2026, LR-3): + seller.html
 const { FILES, check, finish, J, has, count } = T;
 const SRC = FILES[SERVER];
 const code = t => S.stripComments ? S.stripComments(t) : String(t || "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
@@ -417,10 +419,12 @@ function sendWorld(lead, opts) {
     const draft = fnBody(rp, "function draft(") || "";
     check("G4. Write it again and the first draft only ask for a draft; nothing posts until Post my reply", /\/draft"/.test(draft) && !/\/send"|send\(\)/.test(draft) && />Post my reply<\/button>/.test(rp) && /<textarea class="lr-draft" id="lrDraft"/.test(rp));
     check("G5. lead-radar.html: never \"Check console\"; signed out it asks for sign-in", !/Check console/.test(rp) && /Sign in to see Lead Radar\./.test(rp));
-    check("G6. bf-access.js no longer names \"#sfMessage\"", !/#sfMessage/.test(code(FILES[BFA])));
+    // NAMED (Nov 24 2026, LR-3): BEFORE "bf-access.js no longer names #sfMessage" (LR-1: no button carried it). AFTER the storefront's
+    // Message button carries it again (checkInbound S holds the button), so the selector is named once and is never dead.
+    check("G6. bf-access.js names \"#sfMessage\" once, and seller.html draws a button with that id", count(code(FILES[BFA]), "#sfMessage") === 1 && /btn.id = "sfMessage";/.test(FILES["seller.html"] || ""));
     check("G7. sitemap-pages.xml no longer lists /suppressed.html", !/suppressed\.html/.test(FILES[SITEMAP]));
-    // NAMED (Nov 24 2026, LR-2B): BEFORE "lr2"; AFTER "lr2b" (spare words, threads-deletion.html, the Terms). LR-2: BEFORE "lr1b".
-    check("G8. sw.js SHELL_REV is \"lr2b\"", /var SHELL_REV = "lr2b";/.test(FILES["sw.js"]));
+    // NAMED (Nov 24 2026, LR-3B): BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+    check("G8. sw.js SHELL_REV is \"lr3b\"", /var SHELL_REV = "lr3b";/.test(FILES["sw.js"]));
     check("G9. the Privacy Policy no longer says Mastodon receives outreach replies", !/Bluesky and Mastodon: replies sent through outreach/.test(FILES["privacy.html"]));
     const smsPage = FILES[SMS] || "";
     check("G10. sms.html sends where and when consent was given, or no consent", /consent_source: source, consent_at: day \+ "T00:00:00\.000Z"/.test(smsPage) && /id="sms-add-source"/.test(smsPage) && /id="sms-bulk-source"/.test(smsPage));
