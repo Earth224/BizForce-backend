@@ -827,9 +827,14 @@ async function oracleChecks() {
   check("O1. on every Oracle page the bottom-right glow is 0, with a member's theme (both corners lit) and without; the top-left glow is exactly what it was, both ways",
     wrong.length === 0, wrong.join(" | "));
   // NAMED (Nov 19 2026, LOGO2): LOGO1 set aside bf-marks.js and the Agent Network mark on oracle.html here; LOGO2 put oracle.html back to 8d29b93, so every line is held to BEFORE again, as before LOGO1.
+  // NAMED (Nov 26 2026, FX4A): the owner asked for the Oracle pages to be fixed on phones. FX4A's own hunks
+  // (checkAppShell.fx4a.json, [file, now, was], each found exactly once) are undone first; every other line is held as before.
+  const FX4A_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4a.json"), "utf8"));
   const drift = ORACLE_PAGES.filter(f => {
-    const was = gitShow(BEFORE, f), now = FILES[f];
+    const was = gitShow(BEFORE, f);
+    let now = FILES[f];
     if (was === null || now === null) return true;
+    FX4A_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4a hunk missing"; });
     // NAMED (Nov 19 2026, PH1): two named phone edits on every page are set aside, each exactly once: the viewport meta
     // gains ", viewport-fit=cover", and the phone layout's stylesheet (css/bf-phone.css) is linked last in the head.
     const PH1_LINK = /^<link rel="stylesheet" href="\/css\/bf-phone\.css"><!-- NAMED \(Nov 19 2026, PH1\)/;

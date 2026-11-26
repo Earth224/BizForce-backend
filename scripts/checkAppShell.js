@@ -67,6 +67,11 @@ const LR2_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell
 // @media (max-width: 760px) block). [file, now, was]; undone before all the others (it is the newest), found exactly once, it
 // returns bf-phone.css to frontend 63e9b7a (and f73aec1) exactly.
 const G1_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.g1.json"), "utf8"));
+// NAMED (Nov 26 2026, FX4A): the owner asked for the Oracle pages to be fixed on phones, so oracle.html, mychart.html and
+// calendar.html change, with dashboard.html (AI Agent Tasks on a phone) and css/bf-phone.css (the boombox's controls out of
+// the 44 px rule; the Oracle chat row and sync card). FX4A's hunks: [file, now, was]; undone before all the others (they are
+// the newest), each found exactly once, they return the five files to frontend 44daec4 exactly (checkHqViews U1 reads them too).
+const FX4A_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4a.json"), "utf8"));
 // NAMED (Nov 25 2026, LR-4): music-popout.html scrolled sideways on a phone (401 px at 360; LR-4 PART E asks for none): its
 // boombox is drawn smaller on a phone (a rule inside @media (max-width: 760px) and the script that sets its scale). [file, now,
 // was]; undone before LR-3B's (they are the newest), each found exactly once, they return music-popout.html to frontend 5f560dd
@@ -88,6 +93,10 @@ const UNCHANGED = ["oracle.html", "mychart.html", "calendar.html", "synastry.htm
 const MUTATIONS = {
   // NAMED (Nov 25 2026, HOTFIX-G1): the Guide's page-wide 40 px room put back, and HOTFIX-G1's bf-phone.css hunk changed
   "g1-room-back": [["scripts/termaximus-guide.js", "    \"  #tmx-guide-tab { min-width: 32px; }\",\n", "    \"  #tmx-guide-tab { min-width: 32px; }\",\n    \"  html.tmx-guide-room body { padding-left: 40px !important; }\",\n"]],
+  // NAMED (Nov 26 2026, FX4A): an Oracle page changed outside FX4A's hunks (calendar.html's phone rule widened)
+  "fx4a-hunk-changed": [["calendar.html", "      .cal-nav-row > .cal-agent-runs-btn { max-width: 66px; }\n", "      .cal-nav-row > .cal-agent-runs-btn { max-width: 96px; }\n"]],
+  // NAMED (Nov 26 2026, FX4A): synastry.html, not one of FX4A's pages, edited
+  "fx4a-synastry-edited": [["synastry.html", "</head>", "<!-- x --></head>"]],
   "g1-hunk-changed": [["css/bf-phone.css", "  #toggleAiMailbox { margin-left: 16px; }\n", "  #toggleAiMailbox { margin-left: 18px; }\n"]],
   // NAMED (Nov 25 2026, LR-4): music-popout.html changed outside LR-4's two hunks (the music script), and a hunk no longer found
   "lr4-popout-player-changed": [["music-popout.html", "<script src=\"/scripts/bf-music.js\"></script>\n<script>\n", "<script src=\"/scripts/bf-music.js?v=2\"></script>\n<script>\n"]],
@@ -133,8 +142,8 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 25 2026, H1B): BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  "sw-old-rev": [[SW, "var SHELL_REV = \"h1b\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+  // NAMED (Nov 26 2026, FX4A): BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "sw-old-rev": [[SW, "var SHELL_REV = \"fx4a\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
     "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
@@ -302,8 +311,8 @@ async function page(pathname, opts) {
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 25 2026, H1B): BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  check("W1. SHELL_REV \"h1b\" in the cache's name", /var SHELL_REV = "h1b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
+  // NAMED (Nov 26 2026, FX4A): BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  check("W1. SHELL_REV \"fx4a\" in the cache's name", /var SHELL_REV = "fx4a";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
@@ -317,6 +326,8 @@ async function page(pathname, opts) {
     // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
     let now = FILES[f];
     if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    // NAMED (Nov 26 2026, FX4A): FX4A's hunks undone before all the others, the same way
+    FX4A_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4a hunk missing"; });
     // NAMED (Nov 25 2026, HOTFIX-G1): HOTFIX-G1's hunk undone before all the others, the same way
     G1_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " g1 hunk missing"; });
     // NAMED (Nov 25 2026, LR-4): LR-4's hunks undone before all the others, the same way
@@ -343,7 +354,10 @@ async function page(pathname, opts) {
   let addedFonts = "";
   try { addedFonts = execFileSync("git", ["-C", FE, "diff", P20_COMMIT, "--", "*.html", "*.css", "*.js"], { encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "ignore"] }).split("\n").filter(l => /^\+/.test(l) && /@font-face|fonts\.googleapis|fonts\.gstatic|font-family:\s*["']?(?!system-ui|inherit|var\()/i.test(l)).join("\n"); } catch (e) { addedFonts = "git failed"; }
   check("U2. no font is added or changed by any edited page (new rules use the system stack or inherit)", addedFonts === "", addedFonts.slice(0, 300));
-  check("U3. no Oracle page is among the edited files", !diffNames.some(f => /^(oracle|mychart|calendar|synastry|the-third)\.html$/.test(f)), diffNames.join(","));
+  // NAMED (Nov 26 2026, FX4A): BEFORE no Oracle page might be edited; AFTER oracle.html, mychart.html and calendar.html may, by FX4A's
+  // hunks alone (U1 holds them to that, byte for byte), and synastry.html and the-third.html still may not.
+  check("U3. no Oracle page is among the edited files but FX4A's three (oracle, mychart, calendar; their hunks alone, U1)", !diffNames.some(f => /^(synastry|the-third)\.html$/.test(f)) &&
+    diffNames.filter(f => /^(oracle|mychart|calendar)\.html$/.test(f)).every(f => FX4A_SWAPS.some(x => x[0] === f)), diffNames.join(","));
 
   T.finish();
 })().catch(e => { console.log("    FAIL  the check itself threw: " + (e && e.stack || e)); process.exit(1); });

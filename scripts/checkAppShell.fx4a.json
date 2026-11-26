@@ -1,0 +1,197 @@
+[
+ [
+  "oracle.html",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      }, renderTodayEventsBusy)   // NAMED (Nov 26 2026, FX4A): a 429 says so in the Today strip while it waits to ask again\n        .then(function (r) {",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      })\n        .then(function (r) {"
+ ],
+ [
+  "oracle.html",
+  "\n      return window.bfBusyFetch(API_URL + \"/api/calendar/events?startJdn=\" + todayJdn + \"&endJdn=\" + todayJdn, {\n        headers: { \"Authorization\": \"Bearer \" + token }",
+  "\n      return fetch(API_URL + \"/api/calendar/events?startJdn=\" + todayJdn + \"&endJdn=\" + todayJdn, {\n        headers: { \"Authorization\": \"Bearer \" + token }"
+ ],
+ [
+  "oracle.html",
+  "       empty day renders nothing; a failed one says so. */\n    // NAMED (Nov 26 2026, FX4A): the busy line (a 429), in the same place as the failure below\n    function renderTodayEventsBusy(msg) {\n      var el = document.getElementById(\"celTodayEvents\");\n      if (!el) return;\n      el.innerHTML = '<div class=\"cel-today-events-heading\">Today</div><div class=\"cel-today-events-more\"></div>';\n      el.lastChild.textContent = msg;\n    }\n    function renderTodayEventsFailure(detail) {",
+  "       empty day renders nothing; a failed one says so. */\n    function renderTodayEventsFailure(detail) {"
+ ],
+ [
+  "oracle.html",
+  "      var terminatorPath = buildMoonTerminatorPath(cx, cy, r, phaseAngleDeg, waxing);\n      var drawnPaths = container.querySelectorAll(\"svg mask path\");\n      if (drawnPaths.length === 2 && container.querySelector(\"svg image\")) {\n        drawnPaths[0].setAttribute(\"d\", terminatorPath);\n        drawnPaths[1].setAttribute(\"d\", terminatorPath);\n        return;\n      }\n",
+  "      var terminatorPath = buildMoonTerminatorPath(cx, cy, r, phaseAngleDeg, waxing);\n"
+ ],
+ [
+  "oracle.html",
+  "\n      /* NAMED (Nov 26 2026, FX4A): BEFORE every call (renderClock, once a second) rebuilt the whole SVG: its filters, its\n         masks and a new <image> of the moon photo, which the browser decoded again each second (oracle.html's stutter).\n         AFTER the moon is drawn once; a later call draws again only when what it shows changes (the phase name, the\n         rounded illumination, waxing or waning, or a new live phase angle), and then moves the terminator in place, so\n         the same <image> is kept and never decoded again. */\n      var moonKey = (waxing ? \"waxing\" : \"waning\") + \"|\" + (isNow && cachedRealMoonPhase\n        ? \"live \" + phaseAngleDeg + \" \" + Math.round(cachedRealMoonPhase.illuminatedFraction * 100) + \" \" + (cachedRealMoonPhase.phaseName || moon.phaseName)\n        : \"calc \" + moon.illumPercent + \" \" + moon.phaseName);\n      if (moonKey === abyssMoonKey && container.querySelector(\"svg\")) return;\n      abyssMoonKey = moonKey;\n\n      var size = 200;",
+  "\n      var size = 200;"
+ ],
+ [
+  "oracle.html",
+  "    }\n    var smallMoonKey = null;\n    var abyssMoonKey = null;\n",
+  "    }\n"
+ ],
+ [
+  "oracle.html",
+  "\n      /* NAMED (Nov 26 2026, FX4A): BEFORE the small Celestial-panel moon was rebuilt on every call (once a second, open or\n         not). AFTER it is drawn only while the panel is open, and again only when what it shows changes (the phase name,\n         the rounded illumination, waxing or waning, or a new live phase angle). */\n      var smallMoonEl = document.getElementById(\"celMoonSvg\");\n      var smallKey = (waxing ? \"waxing\" : \"waning\") + \"|\" + illumPercent + \"|\" + phaseName + \"|\" + (isNow && cachedRealMoonPhase ? \"live \" + phaseAngleDeg : \"calc\");\n      if (smallMoonEl && smallMoonEl.closest && smallMoonEl.closest(\".is-open\") && smallKey !== smallMoonKey) {\n        smallMoonKey = smallKey;\n        drawSmallMoonSVG(smallMoonEl, phaseAngleDeg, illumPercent / 100, waxing);\n      }\n    }",
+  "\n      drawSmallMoonSVG(document.getElementById(\"celMoonSvg\"), phaseAngleDeg, illumPercent / 100, waxing);\n    }"
+ ],
+ [
+  "oracle.html",
+  "      requestLocationOnce();\n      renderMoon();   // NAMED (Nov 26 2026, FX4A): the small moon is drawn only while the panel is open, so draw it as it opens\n    }",
+  "      requestLocationOnce();\n    }"
+ ],
+ [
+  "oracle.html",
+  "          headers: { \"Authorization\": \"Bearer \" + token }\n        }, function (msg) {   // NAMED (Nov 26 2026, FX4A): a 429 says so where a failed load would, while it waits to ask again\n          var box = document.getElementById(\"numerologyLoadFail\"), sect = document.getElementById(\"oracleProfileNumerology\");\n          if (!box) return;\n          box.innerHTML = '<div class=\"num-sys-empty\"></div>';\n          box.firstChild.textContent = msg;\n          box.style.display = \"block\";\n          if (sect) sect.style.display = \"block\";\n        });",
+  "          headers: { \"Authorization\": \"Bearer \" + token }\n        });"
+ ],
+ [
+  "oracle.html",
+  "      numerologyFetchPromise = Promise.resolve().then(function () {\n        return window.bfBusyFetch(API_URL + \"/api/oracle/numerology\", {\n          headers: { \"Authorization\": \"Bearer \" + token }",
+  "      numerologyFetchPromise = Promise.resolve().then(function () {\n        return fetch(API_URL + \"/api/oracle/numerology\", {\n          headers: { \"Authorization\": \"Bearer \" + token }"
+ ],
+ [
+  "oracle.html",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      }, function (msg) {   // NAMED (Nov 26 2026, FX4A): a 429 says so where a failed load would, while it waits to ask again\n        var el = document.getElementById(\"oracleProfileLoadError\"); if (!el) return;\n        el.textContent = msg; el.hidden = false;\n      })",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      })"
+ ],
+ [
+  "oracle.html",
+  "      profilePrefillState = \"loading\";\n      return window.bfBusyFetch(API_URL + \"/api/oracle/sync\", {\n        headers: { \"Authorization\": \"Bearer \" + token }",
+  "      profilePrefillState = \"loading\";\n      return fetch(API_URL + \"/api/oracle/sync\", {\n        headers: { \"Authorization\": \"Bearer \" + token }"
+ ],
+ [
+  "oracle.html",
+  "    var birthName = \"\", birthDate = \"\", chatHistory = [];\n    /* NAMED (Nov 26 2026, FX4A): BUSY IS NOT BROKEN. A 429 from the API (its rate limit) waits as long as the server's\n       Retry-After says (at most 60 s), says so, and asks once more; if that fails too, the caller's own failure message\n       and its Try again button follow, as before. */\n    window.bfBusyFetch = window.bfBusyFetch || function (url, opts, show) {\n      return fetch(url, opts).then(function (r) {\n        if (r.status !== 429) return r;\n        var n = parseInt(r.headers.get(\"Retry-After\"), 10);\n        n = Math.min(60, n > 0 ? n : 60);\n        try { if (show) show(\"Busy for a moment. Trying again in \" + n + \" seconds.\"); } catch (e) {}\n        return new Promise(function (ok) { setTimeout(ok, n * 1000); }).then(function () { return fetch(url, opts); });\n      });\n    };\n    var ORACLE_THINKING_PHRASES = [",
+  "    var birthName = \"\", birthDate = \"\", chatHistory = [];\n    var ORACLE_THINKING_PHRASES = ["
+ ],
+ [
+  "mychart.html",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      }, renderTodayEventsBusy)   // NAMED (Nov 26 2026, FX4A): a 429 says so in the Today strip while it waits to ask again\n        .then(function (r) {",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      })\n        .then(function (r) {"
+ ],
+ [
+  "mychart.html",
+  "\n      return window.bfBusyFetch(API_URL + \"/api/calendar/events?startJdn=\" + todayJdn + \"&endJdn=\" + todayJdn, {\n        headers: { \"Authorization\": \"Bearer \" + token }",
+  "\n      return fetch(API_URL + \"/api/calendar/events?startJdn=\" + todayJdn + \"&endJdn=\" + todayJdn, {\n        headers: { \"Authorization\": \"Bearer \" + token }"
+ ],
+ [
+  "mychart.html",
+  "       empty day renders nothing; a failed one says so. */\n    // NAMED (Nov 26 2026, FX4A): the busy line (a 429), in the same place as the failure below\n    function renderTodayEventsBusy(msg) {\n      var el = document.getElementById(\"mcTodayEvents\");\n      if (!el) return;\n      el.innerHTML = '<div class=\"cal-today-events-heading\">Today</div><div class=\"cal-today-events-more\"></div>';\n      el.lastChild.textContent = msg;\n    }\n    function renderTodayEventsFailure(detail) {",
+  "       empty day renders nothing; a failed one says so. */\n    function renderTodayEventsFailure(detail) {"
+ ],
+ [
+  "mychart.html",
+  "          appendChartRetry(freshStage.firstChild);\n          // NAMED (Nov 26 2026, FX4A): BEFORE a failed numerology request left the natal chart unasked, so neither the\n          // orbit nor the sigil drew. AFTER natal is asked anyway: the orbit and the sigil draw from it on their own.\n          loadAndRenderOrbit();\n        } else {",
+  "          appendChartRetry(freshStage.firstChild);\n        } else {"
+ ],
+ [
+  "mychart.html",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      }, function (msg) {   // NAMED (Nov 26 2026, FX4A): a 429 says so under the sigil while it waits to ask again\n        var cap = document.getElementById(\"mychartSigilCaption\"); if (cap) cap.textContent = msg;\n      })",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      })"
+ ],
+ [
+  "mychart.html",
+  "      natalFailed = false;\n      natalFetchPromise = window.bfBusyFetch(API_URL + \"/api/oracle/natal\", {\n        headers: { \"Authorization\": \"Bearer \" + token }",
+  "      natalFailed = false;\n      natalFetchPromise = fetch(API_URL + \"/api/oracle/natal\", {\n        headers: { \"Authorization\": \"Bearer \" + token }"
+ ],
+ [
+  "mychart.html",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      }, function (msg) {   // NAMED (Nov 26 2026, FX4A): a 429 says so in the stage while it waits to ask again\n        var ph = document.querySelector(\"#myChartStage .my-chart-placeholder\"); if (ph) ph.textContent = msg;\n      })",
+  "        headers: { \"Authorization\": \"Bearer \" + token }\n      })"
+ ],
+ [
+  "mychart.html",
+  "      numerologyFailed = false;\n      numerologyFetchPromise = window.bfBusyFetch(API_URL + \"/api/oracle/numerology\", {\n        headers: { \"Authorization\": \"Bearer \" + token }",
+  "      numerologyFailed = false;\n      numerologyFetchPromise = fetch(API_URL + \"/api/oracle/numerology\", {\n        headers: { \"Authorization\": \"Bearer \" + token }"
+ ],
+ [
+  "mychart.html",
+  "                   '\" fill=\"none\" stroke=\"' + stroke + '\" stroke-opacity=\"0.85\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/>';\n            // NAMED (Nov 26 2026, FX4A): BEFORE one 14-wide polygon band; AFTER its edges in pieces, clear of the planets and the midpoints\n            cycle.forEach(function (vi, k) { svg += sigilHitLines(verts[vi], verts[cycle[(k + 1) % cycle.length]], 14, bandHoles); });\n          });",
+  "                   '\" fill=\"none\" stroke=\"' + stroke + '\" stroke-opacity=\"0.85\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/>';\n            svg += '<polygon class=\"sigil-hit-line\" points=\"' + cyclePts +\n                   '\" fill=\"none\" stroke=\"transparent\" stroke-width=\"14\" stroke-linejoin=\"round\"/>';\n          });"
+ ],
+ [
+  "mychart.html",
+  "                 '\" fill=\"none\" stroke=\"' + stroke + '\" stroke-opacity=\"0.85\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/>';\n          // NAMED (Nov 26 2026, FX4A): BEFORE one 14-wide polygon band; AFTER its edges in pieces, clear of the planets and the midpoints\n          verts.forEach(function (v, k) { svg += sigilHitLines(v, verts[(k + 1) % verts.length], 14, bandHoles); });\n        } else {",
+  "                 '\" fill=\"none\" stroke=\"' + stroke + '\" stroke-opacity=\"0.85\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/>';\n          svg += '<polygon class=\"sigil-hit-line\" points=\"' + polyPts +\n                 '\" fill=\"none\" stroke=\"transparent\" stroke-width=\"14\" stroke-linejoin=\"round\"/>';\n        } else {"
+ ],
+ [
+  "mychart.html",
+  "                 ' stroke=\"' + stroke + '\" stroke-opacity=\"0.85\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>';\n          svg += sigilHitLines(verts[0], verts[1], 18, bandHoles);   // NAMED (Nov 26 2026, FX4A): pieces, clear of the planets and the midpoints\n        } else if (points < 5) {",
+  "                 ' stroke=\"' + stroke + '\" stroke-opacity=\"0.85\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>';\n          svg += '<line class=\"sigil-hit-line\" ' + figCoords +\n                 ' stroke=\"transparent\" stroke-width=\"18\" stroke-linecap=\"round\"/>';\n        } else if (points < 5) {"
+ ],
+ [
+  "mychart.html",
+  "                  perimeter, and transparent for the same reason. */\n               sigilHitLines(a, b, 18, bandHoles) +   // NAMED (Nov 26 2026, FX4A): BEFORE one band; AFTER pieces clear of the planets and the midpoints\n               '</g>';",
+  "                  perimeter, and transparent for the same reason. */\n               '<line class=\"sigil-hit-line\" ' + coords +\n               ' stroke=\"transparent\" stroke-width=\"18\" stroke-linecap=\"round\"/>' +\n               '</g>';"
+ ],
+ [
+  "mychart.html",
+  "                 'stroke-linecap=\"round\"/>';\n          // NAMED (Nov 26 2026, FX4A): BEFORE one 18-wide round-capped band; AFTER the same band in pieces, clear of the\n          // planets' circles and of the OTHER steps' midpoints\n          svg += sigilHitLines(segA.pt, segB.pt, 18, planetHoles.concat(traceMids.filter(function (m, k) { return k !== si && m.r > 0; })));\n          if (si === 0) svg += traceStartMarker(segA.pt);",
+  "                 'stroke-linecap=\"round\"/>';\n          svg += '<line class=\"sigil-hit-line\" ' + segCoords +\n                 ' stroke=\"transparent\" stroke-width=\"18\" stroke-linecap=\"round\"/>';\n          if (si === 0) svg += traceStartMarker(segA.pt);"
+ ],
+ [
+  "mychart.html",
+  "\n      /* NAMED (Nov 26 2026, FX4A): each trace step's midpoint is kept for that step alone: a circle there, up to 9\n         units, clear of the planets' circles and of the other midpoints' circles, which every other band leaves\n         uncovered. */\n      var traceMids = [];\n      for (var mi = 0; mi < tracePts.length - 1; mi++) {\n        traceMids.push({ x: (tracePts[mi].pt.x + tracePts[mi + 1].pt.x) / 2, y: (tracePts[mi].pt.y + tracePts[mi + 1].pt.y) / 2, r: 9 });\n      }\n      traceMids.forEach(function (m) {\n        traceMids.forEach(function (o) { if (o !== m) m.r = Math.min(m.r, sigilDist(m, o) / 2); });\n        planetHoles.forEach(function (h) { m.r = Math.min(m.r, sigilDist(m, h) - h.r); });\n      });\n      traceMids = traceMids.map(function (m) { return { x: m.x, y: m.y, r: Math.max(0, m.r) }; });\n      var bandHoles = planetHoles.concat(traceMids.filter(function (m) { return m.r > 0; }));\n\n      if (tracePts.length >= 2) {",
+  "\n      if (tracePts.length >= 2) {"
+ ],
+ [
+  "mychart.html",
+  "        }\n        // NAMED (Nov 26 2026, FX4A): the glyph's own hit circle (the glyph itself no longer takes the pointer)\n        svg += '<circle class=\"sigil-hit\" cx=\"' + sigilN(gpt.x) + '\" cy=\"' + sigilN(gpt.y) + '\" r=\"' + sigilN(mark.glyphR) + '\" fill=\"transparent\"/>';\n",
+  "        }\n"
+ ],
+ [
+  "mychart.html",
+  "           orbit cards remain the way to reach either. */\n        svg += '<circle class=\"sigil-hit\" cx=\"' + sigilN(pt.x) + '\" cy=\"' + sigilN(pt.y) + '\" r=\"' + sigilN(mark.dotR) + '\" fill=\"transparent\"/>';   // NAMED (Nov 26 2026, FX4A): BEFORE r=\"10\"\n",
+  "           orbit cards remain the way to reach either. */\n        svg += '<circle class=\"sigil-hit\" cx=\"' + sigilN(pt.x) + '\" cy=\"' + sigilN(pt.y) + '\" r=\"10\" fill=\"transparent\"/>';\n"
+ ],
+ [
+  "mychart.html",
+  "        if (p == null || p.longitude == null) return;\n        planetMarks.push({ name: p.name, dot: sigilPoint(p.longitude, 120), glyph: sigilPoint(p.longitude, SIGIL_GLYPH_RADIUS) });\n      });\n      var planetHoles = [];\n      planetMarks.forEach(function (m) {\n        var near = Infinity;\n        planetMarks.forEach(function (o) { if (o !== m) near = Math.min(near, sigilDist(m.dot, o.dot), sigilDist(m.dot, o.glyph)); });\n        m.dotR = Math.min(10, near / 2);\n        near = Infinity;\n        planetMarks.forEach(function (o) { if (o !== m) near = Math.min(near, sigilDist(m.glyph, o.dot), sigilDist(m.glyph, o.glyph)); });\n        m.glyphR = Math.min(6.5, near / 2);\n        planetHoles.push({ x: m.dot.x, y: m.dot.y, r: m.dotR }, { x: m.glyph.x, y: m.glyph.y, r: m.glyphR });\n      });\n      var markIndex = 0;\n\n      planets.forEach(function (p) {\n        if (p == null || p.longitude == null) return;\n        var mark = planetMarks[markIndex++];\n        var pt  = sigilPoint(p.longitude, 120);",
+  "        if (p == null || p.longitude == null) return;\n        var pt  = sigilPoint(p.longitude, 120);"
+ ],
+ [
+  "mychart.html",
+  "\n      /* NAMED (Nov 26 2026, FX4A): the hit circles' sizes. A dot's circle is r=10 and a glyph's r=6.5 (it covers the\n         9-unit glyph box), each cut to half the distance to the nearest dot or glyph of ANOTHER planet, so two planets'\n         circles never overlap. planetHoles is every circle, which the bands drawn later leave uncovered. */\n      var planetMarks = [];\n      planets.forEach(function (p) {",
+  "\n      planets.forEach(function (p) {"
+ ],
+ [
+  "mychart.html",
+  "       draw, so the caller can show the reason instead of an empty ring. */\n    /* NAMED (Nov 26 2026, FX4A): A TAP OPENS THE MARK UNDER IT. BEFORE the trace, axis and figure hit bands (drawn after\n       the planets) lay over the planet dots, so a tap on a dot opened a trace step; a glyph's own box decided its taps,\n       so Mars's thin drawn glyph fell through to the ring, Venus's missed, and in a close conjunction the later planet\n       took the earlier one's taps (Mercury opened Neptune at 360). AFTER each planet has a hit circle on its dot and one\n       on its glyph, sized so no two planets' circles overlap (the nearest planet wins); the trace, axis and figure bands\n       are drawn as pieces that leave those circles, and every other trace step's midpoint, uncovered. Every hit shape is\n       transparent: nothing drawn changes. */\n    /* The band from a to b (its ends carried out by half its width, as a round cap did), walked in 1-unit steps: each\n       step is as wide as the band, or narrower where a hole is near, so it never reaches into a hole; steps of the same\n       width join into one line, and a step with less than 1 unit either side is left out. */\n    function sigilHitPieces(a, b, width, holes) {\n      var dx = b.x - a.x, dy = b.y - a.y, len = Math.sqrt(dx * dx + dy * dy);\n      if (!(len > 0)) return [];\n      var ux = dx / len, uy = dy / len, from = -width / 2, steps = Math.ceil(len + width), pieces = [], run = null;\n      for (var k = 0; k < steps; k++) {\n        var s0 = from + k, s1 = Math.min(from + k + 1, len + width / 2), mid = (s0 + s1) / 2;\n        var p = { x: a.x + ux * mid, y: a.y + uy * mid }, half = width / 2;\n        (holes || []).forEach(function (h) { half = Math.min(half, sigilDist(p, h) - h.r - 0.5); });\n        half = half >= width / 2 ? width / 2 : Math.floor(half);\n        if (half < 1) { run = null; continue; }\n        if (run && run.half === half) { run.s1 = s1; continue; }\n        run = { s0: s0, s1: s1, half: half };\n        pieces.push(run);\n      }\n      return pieces.map(function (r) {\n        return { x1: a.x + ux * r.s0, y1: a.y + uy * r.s0, x2: a.x + ux * r.s1, y2: a.y + uy * r.s1, w: 2 * r.half };\n      });\n    }\n    function sigilHitLines(a, b, width, holes) {\n      return sigilHitPieces(a, b, width, holes).map(function (s) {\n        return '<line class=\"sigil-hit-line\" x1=\"' + sigilN(s.x1) + '\" y1=\"' + sigilN(s.y1) + '\" x2=\"' + sigilN(s.x2) + '\" y2=\"' + sigilN(s.y2) +\n               '\" stroke=\"transparent\" stroke-width=\"' + s.w + '\" stroke-linecap=\"butt\"/>';\n      }).join(\"\");\n    }\n    function sigilDist(p, q) { return Math.sqrt((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y)); }\n\n    function buildSigilSvg(natal, lifePathRaw) {",
+  "       draw, so the caller can show the reason instead of an empty ring. */\n    function buildSigilSvg(natal, lifePathRaw) {"
+ ],
+ [
+  "mychart.html",
+  "    var token = localStorage.getItem(\"bf_token\");\n    /* NAMED (Nov 26 2026, FX4A): BUSY IS NOT BROKEN. A 429 from the API (its rate limit) waits as long as the server's\n       Retry-After says (at most 60 s), says so, and asks once more; if that fails too, the caller's own failure message\n       and its Try again button follow, as before. */\n    window.bfBusyFetch = window.bfBusyFetch || function (url, opts, show) {\n      return fetch(url, opts).then(function (r) {\n        if (r.status !== 429) return r;\n        var n = parseInt(r.headers.get(\"Retry-After\"), 10);\n        n = Math.min(60, n > 0 ? n : 60);\n        try { if (show) show(\"Busy for a moment. Trying again in \" + n + \" seconds.\"); } catch (e) {}\n        return new Promise(function (ok) { setTimeout(ok, n * 1000); }).then(function () { return fetch(url, opts); });\n      });\n    };\n",
+  "    var token = localStorage.getItem(\"bf_token\");\n"
+ ],
+ [
+  "mychart.html",
+  "    }\n    /* NAMED (Nov 26 2026, FX4A): BEFORE the glyph took the pointer itself, so a thin drawn glyph (Mars, Venus) let taps\n       fall through and a neighbour's glyph box took them in a conjunction. AFTER its own transparent hit circle (built in\n       buildSigilSvg) takes them; the group's hover lights the glyph exactly as before. */\n    .sigil-glyph, .sigil-drawn { pointer-events: none; }\n    .mc-tappable:hover .sigil-dot   { fill: #34d399; }",
+  "    }\n    .mc-tappable:hover .sigil-dot   { fill: #34d399; }"
+ ],
+ [
+  "calendar.html",
+  "    }\n    /* NAMED (Nov 26 2026, FX4A): the calendar on a phone. BEFORE a column would not shrink below its longest word, so\n       the Hebrew, Zoroastrian, Egyptian and Chinese grids ran up to 211 px off the screen, and the month row broke\n       into two or three lines. AFTER every column is an equal share of the screen (minmax(0,1fr)) and a long word\n       wraps inside its cell (hyphenated where the language allows); the row stays one row, < month > TODAY AGENT RUNS,\n       the month's name wrapping onto as many lines as it needs (never cut). */\n    @media (max-width: 760px) {\n      .cal-grid { grid-template-columns: repeat(var(--cal-cols, 7), minmax(0, 1fr)); }\n      .cal-day-cell, .cal-grid-weekday { min-width: 0; overflow-wrap: anywhere; hyphens: auto; }\n      .cal-day-cell { padding: 6px 4px; }\n      .cal-nav-row { flex-wrap: nowrap; gap: 4px; }\n      .cal-nav-row > .cal-nav-btn { flex: 0 0 44px; }\n      .cal-month-header { min-width: 0; flex: 1 1 0; }\n      .cal-month-title { font-size: 0.85rem; overflow-wrap: break-word; hyphens: auto; }\n      .cal-nav-row > .cal-today-btn { flex: 0 1 auto; padding: 6px; letter-spacing: 0.02em; }\n      .cal-nav-row > .cal-agent-runs-btn { max-width: 66px; }\n      /* a day's number never splits; the eight- and ten-column traditions (Zoroastrian; Egyptian and Chinese) sit closer, in smaller type */\n      .cal-day-num { overflow-wrap: normal; white-space: nowrap; }\n      .cal-grid[style*=\"--cal-cols:8\"], .cal-grid[style*=\"--cal-cols:10\"] { gap: 3px; }\n      .cal-grid[style*=\"--cal-cols:8\"] .cal-day-cell, .cal-grid[style*=\"--cal-cols:10\"] .cal-day-cell { padding: 5px 2px; }\n      .cal-grid[style*=\"--cal-cols:10\"] .cal-day-num { font-size: 0.85rem; }\n      .cal-grid[style*=\"--cal-cols:8\"] .cal-day-greg, .cal-grid[style*=\"--cal-cols:10\"] .cal-day-greg { font-size: 0.6rem; }\n    }\n  </style>",
+  "    }\n  </style>"
+ ],
+ [
+  "dashboard.html",
+  "  .bf-form-grid{grid-template-columns:minmax(0,1fr)}\n  /* NAMED (Nov 26 2026, FX4A): BEFORE (since e6a8f14) the AI Agent Tasks form folded to one column on a phone, so\n     #agentType and #taskType stacked and the card grew 73 px. AFTER they sit side by side again, in two equal\n     columns that fit the card; the prompt, the Launch button and the status rows still span both. */\n  #aiTaskSection .bf-form-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}\n  #aiTaskSection .bf-form-grid .bf-span-2{grid-column:1/3}\n  #aiTaskSection .bf-form-grid select{padding-left:10px !important;padding-right:4px !important}\n  #aiTaskSection #submitAiTask{white-space:nowrap;padding-left:8px;padding-right:8px}\n  .topbar{flex-wrap:wrap}",
+  "  .bf-form-grid{grid-template-columns:minmax(0,1fr)}\n  .topbar{flex-wrap:wrap}"
+ ],
+ [
+  "css/bf-phone.css",
+  "  .compose-bar > #sendBtn { flex: 0 0 auto; white-space: nowrap; }\n  /* NAMED (Nov 26 2026, FX4A): the Oracle (oracle.html). BEFORE at 360 px the chat field kept its own minimum width\n     and pushed Send 15 px past the screen; AFTER the field gives way and Send stays whole. BEFORE the gold sync card\n     began at 24 px, under the Guide tab (0 to 32 px); AFTER its own left margin is at least 16 px (40 px from the\n     screen's edge), so the card's left edge moves and nothing else does; wider than the card needs, it stays centred. */\n  .oracle-input-bar > .oracle-chat-input { min-width: 0; }\n  .oracle-sync-card { margin-left: max(16px, calc((100% - 480px) / 2)); }\n  /* The music player's \"Play when I open BizForce\": its label (beside the checkbox, for= it) is a 44 px target. */",
+  "  .compose-bar > #sendBtn { flex: 0 0 auto; white-space: nowrap; }\n  /* The music player's \"Play when I open BizForce\": its label (beside the checkbox, for= it) is a 44 px target. */"
+ ],
+ [
+  "css/bf-phone.css",
+  "  :where(button, [role=button], [role=tab], [role=switch], summary, select, a[href], [tabindex]:not([tabindex=\"-1\"]),\n    input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=range]):not([type=color])):where(:not(.bbx *)) { min-height: 44px; }\n  :where(button, [role=button], [role=tab], [role=switch], input[type=color], [tabindex]:not([tabindex=\"-1\"])):where(:not(.bbx *)) { min-width: 44px; }\n  :where(input[type=range], input[type=color]):where(:not(.bbx *)) { min-height: 44px; }\n  :where(summary) { box-sizing: border-box; padding-block: 10px; }",
+  "  :where(button, [role=button], [role=tab], [role=switch], summary, select, a[href], [tabindex]:not([tabindex=\"-1\"]),\n    input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=range]):not([type=color])) { min-height: 44px; }\n  :where(button, [role=button], [role=tab], [role=switch], input[type=color], [tabindex]:not([tabindex=\"-1\"])) { min-width: 44px; }\n  :where(input[type=range], input[type=color]) { min-height: 44px; }\n  :where(summary) { box-sizing: border-box; padding-block: 10px; }"
+ ],
+ [
+  "css/bf-phone.css",
+  "     page rules further down. min-height does nothing to an inline link, so a link in a sentence is left as\n     it is.\n     NAMED (Nov 26 2026, FX4A): BEFORE these three rules also reached the controls inside the opened boombox\n     (.bbx), a fixed 440 x 250 drawing scaled as a whole, and raised its 17-26 px knobs and keys to 44 px, so\n     they overlapped and spilled. AFTER :where(:not(.bbx *)) (no specificity) leaves the drawing's own sizes,\n     as at c792559; the minimised bar (.bfm-tag, outside .bbx) keeps its 44 px. ── */\n  :where(button, [role=button], [role=tab], [role=switch], summary, select, a[href], [tabindex]:not([tabindex=\"-1\"]),",
+  "     page rules further down. min-height does nothing to an inline link, so a link in a sentence is left as\n     it is. ── */\n  :where(button, [role=button], [role=tab], [role=switch], summary, select, a[href], [tabindex]:not([tabindex=\"-1\"]),"
+ ]
+]

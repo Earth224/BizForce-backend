@@ -481,7 +481,11 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
       ".cc-deck .deck-tabs{max-width:100%;min-width:0}\n" +
       "@media (max-width:640px){\n  .bf-form-grid{grid-template-columns:minmax(0,1fr)}\n  .topbar{flex-wrap:wrap}\n  .topbar-actions{min-width:0;flex:1 1 auto}\n}\n</style>"]];
   const basePolished = (() => { try { return POLISH_BELOW.reduce((t, e) => s.replaceOnce(t, e[0], e[1], "polish edit"), below(BASE)); } catch (e) { return "polish edit did not apply: " + e.message; } })();
-  check("everything after the top half, Business Profile down, is BASELINE's byte for byte, but for the two named phone-fit edits", below(BASE).length > 10000 && below(FILES[DASH]) === basePolished &&
+  // NAMED (Nov 26 2026, FX4A): AI Agent Tasks on a phone (the two pickers side by side, the button on one line): FX4A's
+  // hunk in dashboard.html (checkAppShell.fx4a.json, [file, now, was], found exactly once) is undone first.
+  const FX4A_DASH = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4a.json"), "utf8")).filter(x => x[0] === "dashboard.html");
+  const unFx4a = t => FX4A_DASH.reduce((u, [, a, b]) => { const i = u.indexOf(a); return i >= 0 && u.indexOf(a, i + 1) < 0 ? u.slice(0, i) + b + u.slice(i + a.length) : u + " fx4a hunk missing"; }, t);
+  check("everything after the top half, Business Profile down, is BASELINE's byte for byte, but for the two named phone-fit edits (and FX4A's AI Agent Tasks rule)", below(BASE).length > 10000 && below(unFx4a(FILES[DASH])) === basePolished &&
     below(FILES[DASH]).indexOf("<section id=\"businessProfileSection\"") !== -1, basePolished.slice(0, 80));
 
   /* ── O2. badges and beams ── */

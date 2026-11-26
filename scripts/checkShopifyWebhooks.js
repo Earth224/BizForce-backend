@@ -512,9 +512,11 @@ async function limiterProbe() {
   const lim = await limiterProbe();
   check("C1. apiLimiter (its max set to 2 here) never limits POST /api/webhooks/shopify: five deliveries, five 200s", J(lim.hooks) === J([200, 200, 200, 200, 200]), J(lim.hooks));
   check("C2. ... and still limits another /api route: the third request is 429", lim.others[0] === 200 && lim.others[1] === 200 && lim.others[2] === 429 && lim.others[3] === 429, J(lim.others));
-  check("C3. app.use(apiLimiter) is still mounted before the webhook route, unchanged otherwise (300 per 15 minutes)",
+  // NAMED (Nov 26 2026, FX4A): max is now a function, a member by their own id 1200, everyone else by IP 300 (checkApiLimiter proves the keys).
+  check("C3. app.use(apiLimiter) is still mounted before the webhook route, unchanged otherwise (300 per 15 minutes by IP signed out, 1200 per member)",
     FILES.server.indexOf("app.use(apiLimiter);") !== -1 && FILES.server.indexOf("app.use(apiLimiter);") < FILES.server.indexOf("\"/api/webhooks/shopify\",\n  express.raw(") &&
-    /windowMs: 15 \* 60 \* 1000,\n  max: 300,/.test(LIMITER_DEF));
+    /windowMs: 15 \* 60 \* 1000,\n  max: function \(req\) \{ return apiLimitKey\(req\)\.indexOf\("member:"\) === 0 \? API_LIMIT_MEMBER : API_LIMIT_SIGNED_OUT; \},\n/.test(LIMITER_DEF) &&
+    /\nvar API_LIMIT_MEMBER = 1200, API_LIMIT_SIGNED_OUT = 300;\n/.test(LIMITER_DEF));
 
   /* ── D ── */
   console.log("\n== D. customers/data_request ==");

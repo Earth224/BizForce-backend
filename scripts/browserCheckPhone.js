@@ -771,6 +771,10 @@ const MEASURE = String.raw`(function(){
     // NAMED (Nov 22 2026, FX3): the Guide's tab, now on the phone too, is the owner's board's 32 x 170 (the desktop's look,
     // drawn at every width); PHONE_FX3 holds it to that size. Every control inside its panel is still held to 44.
     if (n.id === "tmx-guide-tab") return;
+    // NAMED (Nov 26 2026, FX4A): the owner's order: the boombox's own controls (inside .bbx, on a page and in music-popout)
+    // are drawn as at frontend c792559, out of PH1's 44 px rule (css/bf-phone.css), so they are not held to 44 here either.
+    // The bar's music button (.bfm-tag, outside .bbx) still is.
+    if (n.closest(".bbx")) return;
     if (n.tagName === "A" && c.display === "inline") { var par = n.parentElement; var pt = (par.innerText || "").replace(/\s+/g, " ").trim(); var lt = (n.innerText || "").replace(/\s+/g, " ").trim(); if (pt.length > lt.length + 8) return; }
     if (r.width < 44 - 0.5 || r.height < 44 - 0.5) out.small.push(name(t) + " \"" + txt(t).slice(0, 18) + "\" " + Math.round(r.width) + "x" + Math.round(r.height));
   });

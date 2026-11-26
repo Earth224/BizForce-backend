@@ -134,6 +134,8 @@ app.use(function (req, res, next) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400");
+  // NAMED (Nov 26 2026, FX4A): a page may read Retry-After on a 429 (the Oracle pages wait that long, at most 60 s, and try once more)
+  res.setHeader("Access-Control-Expose-Headers", "Retry-After");
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();
@@ -946,15 +948,36 @@ app.use(compression());
 // instance requires moving these counters to a shared store (Redis, or the
 // rate-limit store of your choice) FIRST. Adding a replica without that silently
 // multiplies every limit in this file.
+// NAMED (Nov 26 2026, FX4A): BEFORE one bucket per IP address, 300 per 15 minutes, shared by every device and tab on a
+// home or carrier connection, so a member's Oracle pages ran out (HTTP 429) while they did nothing unusual. AFTER a
+// signed-in member (a token that verifies against JWT_SECRET) has a bucket of their own, 1200 per 15 minutes; a
+// signed-out request, and a bad, forged or expired token, counts by IP, 300 per 15 minutes, as before. Every
+// route's own limiter below is unchanged.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: function (req) { return apiLimitKey(req).indexOf("member:") === 0 ? API_LIMIT_MEMBER : API_LIMIT_SIGNED_OUT; },
+  keyGenerator: function (req) { return apiLimitKey(req); },
   standardHeaders: true,
   legacyHeaders: false,
   // W2 (Nov 15 2026): Shopify's webhook deliveries are exempt. Shopify sends them in bursts from shared addresses, and a
   // 429 makes it retry and, in the end, drop the subscription. The HMAC check over the raw body is that route's guard.
   skip: function (req) { return req.method === "POST" && req.path === "/api/webhooks/shopify"; }
 });
+var API_LIMIT_MEMBER = 1200, API_LIMIT_SIGNED_OUT = 300;
+// The bucket's key, worked out once per request: "member:<user id>" for a token jwt.verify accepts, else "ip:<req.ip>".
+function apiLimitKey(req) {
+  if (req.bfApiLimitKey) return req.bfApiLimitKey;
+  let key = "ip:" + req.ip;
+  try {
+    const header = String(req.headers.authorization || "");
+    if (header.indexOf("Bearer ") === 0 && process.env.JWT_SECRET) {
+      const decoded = jwt.verify(header.slice(7).trim(), process.env.JWT_SECRET);
+      if (decoded && typeof decoded.id === "string" && decoded.id) key = "member:" + decoded.id;
+    }
+  } catch (e) { key = "ip:" + req.ip; }
+  req.bfApiLimitKey = key;
+  return key;
+}
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

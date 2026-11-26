@@ -411,8 +411,11 @@ function verified(token) {
   check("A10. a bad value is not configured, never a throw, and the log names the code, not the value", cBad === null && J(LOGS) === J(["[google-wallet] not configured: issuer_id"]) && !holdsSecret(LOGS.join("")), J(LOGS));
   configure(true); LOGS.length = 0;
   check("A11. configured from process.env: the same issuer and class", !!GW.config() && GW.config().classId === ISSUER + ".bizforce_card_v1" && GW.config() === GW.config() && LOGS.length === 0);
-  check("A12. the RS256 key is never handed to jwt.verify: server.js verifies only with JWT_SECRET, once, and lib/googleWallet.js never verifies",
-    (SRC.match(/jwt\.verify\(/g) || []).length === 1 && SRC.indexOf("jwt.verify(token, process.env.JWT_SECRET)") !== -1 && !/verify\(/.test(SOURCES.GW) &&
+  // NAMED (Nov 26 2026, FX4A): BEFORE server.js verified once (requireAuth); AFTER twice, the second being the global rate
+  // limit's key (apiLimitKey: a member's own bucket), also with JWT_SECRET alone. Every jwt.verify in server.js is one of the two.
+  check("A12. the RS256 key is never handed to jwt.verify: server.js verifies only with JWT_SECRET (requireAuth, and FX4A's rate-limit key), and lib/googleWallet.js never verifies",
+    (SRC.match(/jwt\.verify\(/g) || []).length === 2 && SRC.split("jwt.verify(token, process.env.JWT_SECRET)").length === 2 &&
+    SRC.split("jwt.verify(header.slice(7).trim(), process.env.JWT_SECRET)").length === 2 && !/verify\(/.test(SOURCES.GW) &&
     !/GOOGLE_WALLET_SA_KEY/.test(SRC));
 
   /* ════ B. the routes ════ */
