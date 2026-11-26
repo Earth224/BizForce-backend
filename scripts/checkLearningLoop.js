@@ -404,7 +404,9 @@ function bfProfileColumns() {
   // NAMED (Nov 21 2026, P3-2, migration 199): BEFORE 8 private columns. AFTER 10: verified_reason and verified_at are not in the
   // public allow-list; the profile carries the badge as its own key, verified, read through lib/verified.js reasonOf, which
   // answers only "member", "seller", "official" or null (so the raw value planted below never goes out).
-  const PRIVATE_COLS = ["id", "user_id", "created_at", "updated_at", "place_city", "place_region", "place_country", "local_opt_in", "verified_reason", "verified_at"];
+  // NAMED (Nov 25 2026, H1, migration 207b): BEFORE 10 private columns. AFTER 12: the place's centre point (place_lat, place_lng) is
+  // private like the place itself; Local reads it on the server only (lib/homeTabs.js) and shows a distance, never the point.
+  const PRIVATE_COLS = ["id", "user_id", "created_at", "updated_at", "place_city", "place_region", "place_country", "local_opt_in", "verified_reason", "verified_at", "place_lat", "place_lng"];
   const migCols = bfProfileColumns();
   check("P1. every bf_profiles column of the migrations is classified, public or private (" + migCols.length + " columns)",
     migCols.length === PUBLIC.length + PRIVATE_COLS.length && migCols.every(c => PUBLIC.indexOf(c) !== -1 || PRIVATE_COLS.indexOf(c) !== -1), migCols.join(","));

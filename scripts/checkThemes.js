@@ -176,7 +176,8 @@ const MUTATIONS = {
      AFTER: bf_theme is on its PER_USER list, so the mutation drops it from there (G).
      NAMED BEFORE → AFTER (Oct 30 2026, the music player). BEFORE the anchor ended the list at "bf_theme"]. AFTER bf_music
      follows it, so the anchor is "bf_theme", "bf_music"]; the same mutation: bf_theme dropped, bf_music kept. */
-  "offline-inventory-missing": [[OFFCHECK, "\"mcTargetGoalConversions\", \"bf_theme\", \"bf_music\"];", "\"mcTargetGoalConversions\", \"bf_music\"];"]],
+  // NAMED (Nov 25 2026, H1): BEFORE the anchor ended at "bf_music"];. AFTER "bf_recent_searches" follows it.
+  "offline-inventory-missing": [[OFFCHECK, "\"mcTargetGoalConversions\", \"bf_theme\", \"bf_music\", \"bf_recent_searches\"];", "\"mcTargetGoalConversions\", \"bf_music\", \"bf_recent_searches\"];"]],
   // ── Block 4b ──
   // the mist keeping a hard-coded colour (H4)
   "mist-hard-coded": [[PRESENCE, "    \"    rgba(var(--tmx-haze-1, 48,12,150),0.88)   0%,\",", "    \"    rgba(48,12,150,0.88)   0%,\","]],
@@ -196,7 +197,8 @@ const MUTATIONS = {
   // bf_theme surviving sign-out (G)
   // NAMED BEFORE → AFTER (Oct 30 2026, the music player): BEFORE "bf_theme" closed PER_USER_LOCAL; AFTER "bf_music" follows
   // it. The same mutation: bf_theme dropped from the list, bf_music left.
-  "theme-survives-signout": [[SESSION, "    \"mcTargetGoalConversions\",\n    \"bf_theme\",\n    \"bf_music\"\n  ];", "    \"mcTargetGoalConversions\",\n    \"bf_music\"\n  ];"]],
+  // NAMED (Nov 25 2026, H1): BEFORE the anchor ended the list at "bf_music" ];. AFTER bf_recent_searches follows it (Home's recent searches).
+  "theme-survives-signout": [[SESSION, "    \"mcTargetGoalConversions\",\n    \"bf_theme\",\n    \"bf_music\",\n", "    \"mcTargetGoalConversions\",\n    \"bf_music\",\n"]],
   // ── Block 4c: the theme routes reachable ──
   // the live bug: the studio's base back to window.API_URL or "", a relative /api/themes (B, C, I)
   "relative-themes-url": [[STUDIO, "  function api() { return T.apiOrigin(); }",

@@ -340,7 +340,11 @@ const textOf = (h) => String(h || "").replace(/<[^>]+>/g, " ").replace(/&amp;/g,
     has(shell, "'<span><strong>' + esc(p.name || \"A member\") + vb(p.verified) + '</strong>'"));
   check("F7. the profile page, from the server's verified", has(FILES["profile.html"], "profileData.verified = typeof pBody.verified === \"string\" ? pBody.verified : null;") &&
     has(FILES["profile.html"], "document.getElementById(\"displayName\").insertAdjacentHTML(\"beforeend\", window.bfVerified.html(p.verified));"));
-  check("F8. the storefront", has(FILES["seller.html"], "document.getElementById(\"sfName\").insertAdjacentHTML(\"beforeend\", window.bfVerified.html(data.verified));"));
+  // NAMED (Nov 25 2026, H1, part G): BEFORE the storefront drew the badge at once, so a slow bf-verified.js lost it. AFTER whenVerified
+  // waits for either order and draws it once (PHONE_H1 delays each script both ways).
+  check("F8. the storefront, once bf-verified.js and the answer are both in, in either order",
+    has(FILES["seller.html"], "  if (data.verified) whenVerified(function () {\n    var nameEl = document.getElementById(\"sfName\");\n    if (!nameEl.querySelector(\"[data-bf-verified]\")) nameEl.insertAdjacentHTML(\"beforeend\", window.bfVerified.html(data.verified));\n  });") &&
+    has(FILES["seller.html"], "function whenVerified(fn) {\n  if (window.bfVerified) { fn(); return; }\n"));
   check("F9. public listings: the seller's name with the badge", /window\.bfVerified \? window\.bfVerified\.html\(d\.verified\) : ""\) \+ '<\/a><\/p>'/.test(FILES["listing.html"] || ""));
   check("F10. services: the seller's name", has(FILES["services.html"], "<div class=\"svc-seller-name\">' + sellerName + (window.bfVerified && seller ? window.bfVerified.html(seller.verified) : \"\") + '</div>'"));
   check("F11. card pages", has(FILES["card-view.html"], "document.getElementById(\"pName\").insertAdjacentHTML(\"beforeend\", window.bfVerified.html(d.verified));"));

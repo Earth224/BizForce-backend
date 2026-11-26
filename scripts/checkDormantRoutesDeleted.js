@@ -483,7 +483,19 @@ const ADDED = [
   ["get", "/api/indexnow/key.txt"],                          // PUBLIC: the IndexNow key, only while IndexNow is on (571 -> 572)
   ["get", "/api/leads/found"],                               // members: the Found score (572 -> 573)
   ["get", "/api/me/google"],                                 // members: the Google switch (573 -> 574)
-  ["put", "/api/me/google"]                                  // members: set the Google switch (574 -> 575)
+  ["put", "/api/me/google"],                                 // members: set the Google switch (574 -> 575)
+  // NAMED (Nov 25 2026, H1): BEFORE 575 routes; AFTER 586: the home tabs and Search (lib/homeTabs.js, lib/search.js; checkHomeTabs).
+  ["get", "/api/feed/local"],                                // login-only: Local (575 -> 576)
+  ["get", "/api/home/tabs"],                                 // login-only: the place chip and the Market dot (576 -> 577)
+  ["put", "/api/home/prefs"],                                // login-only: Local's Change, rate-limited (577 -> 578)
+  ["get", "/api/home/market"],                               // login-only: Market (578 -> 579)
+  ["post", "/api/home/market/seen"],                         // login-only: the last Market visit (579 -> 580)
+  ["get", "/api/home/suggestions"],                          // login-only: who to follow on an empty Following tab (580 -> 581)
+  ["post", "/api/listings/:id/like"],                        // login-only: like a listing (581 -> 582)
+  ["delete", "/api/listings/:id/like"],                      // login-only: unlike it (582 -> 583)
+  ["post", "/api/listings/:id/save"],                        // login-only: save a listing (583 -> 584)
+  ["delete", "/api/listings/:id/save"],                      // login-only: unsave it (584 -> 585)
+  ["get", "/api/search"]                                     // login-only: Search, rate-limited (585 -> 586)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

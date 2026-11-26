@@ -322,7 +322,9 @@ check("H2. the ten open and close transitions become one plain 0.2 s fade (openC
 console.log("\n══ I. where they stay hidden ══");
 const oldGuide = atRev(GUIDE);
 const line = (t, s) => (String(t || "").split("\n").filter(l => l.indexOf(s) !== -1)[0]) || null;
-check("I1. TMX_NO_MIST_PAGES and the presence's skip as at " + BASE_REV, !!OLD_PRES && line(pres, "  var TMX_NO_MIST_PAGES = ") === line(OLD_PRES, "  var TMX_NO_MIST_PAGES = ") &&
+// NAMED (Nov 25 2026, H1B, owner rule): BEFORE the list exactly as at BASE_REV. AFTER that list plus "home" and "compose" (no mist on
+// Home or the composer); nothing else in it changed.
+check("I1. TMX_NO_MIST_PAGES and the presence's skip as at " + BASE_REV + " (the list plus home and compose, H1B)", !!OLD_PRES && line(pres, "  var TMX_NO_MIST_PAGES = ") === line(OLD_PRES, "  var TMX_NO_MIST_PAGES = ").replace("\"the-third\"];", "\"the-third\", \"home\", \"compose\"];") &&
   line(pres, "    var _tmxSkip  = ") === line(OLD_PRES, "    var _tmxSkip  = ") && !!line(pres, "  var TMX_NO_MIST_PAGES = "));
 check("I2. the Guide signed out as at " + BASE_REV + " (no token: no Guide)", !!oldGuide && line(guide, "!localStorage.getItem(\"bf_token\")) return;") === line(oldGuide, "!localStorage.getItem(\"bf_token\")) return;") && !!line(guide, "!localStorage.getItem(\"bf_token\")) return;"));
 check("I3. the profile preview hides the mist, the chat and the Guide", has(FILES[DESIGN], "#tmx-presence-root,#tmx-chat,#tmx-guide-root,.bfm-float{display:none!important}"));

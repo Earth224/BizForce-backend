@@ -28,10 +28,15 @@ const KEYS = {
   post_likes: ["post_id", "user_id"],
   post_saves: ["post_id", "user_id"],
   post_share_days: ["post_id", "user_id", "day"],
-  post_media: ["post_id", "idx"]
+  post_media: ["post_id", "idx"],
+  // NAMED (Nov 25 2026, H1): migration 207's tables
+  home_prefs: ["user_id"],
+  geo_cache: ["place_key"],
+  listing_likes: ["listing_id", "user_id"],
+  listing_saves: ["listing_id", "user_id"]
 };
 const COUNTERS = { post_likes: "like_count", post_saves: "save_count", post_share_days: "share_count", post_comments: "comment_count" };
-const NO_ID = new Set(["follows", "post_likes", "post_saves", "post_share_days", "post_media", "job_runs"]);
+const NO_ID = new Set(["follows", "post_likes", "post_saves", "post_share_days", "post_media", "job_runs", "home_prefs", "geo_cache", "listing_likes", "listing_saves"]);
 
 function unquote(v) { v = String(v); return v.length > 1 && v.charAt(0) === '"' && v.charAt(v.length - 1) === '"' ? v.slice(1, -1) : v; }
 function cmp(a, b) {
@@ -70,9 +75,14 @@ function test(v, op, x) {
     case "lte": return cmp(v, x) <= 0;
     case "gt": return cmp(v, x) > 0;
     case "gte": return cmp(v, x) >= 0;
+    // NAMED (Nov 25 2026, H1): ilike, is and in inside or() (lib/search.js)
+    case "ilike": return v !== null && v !== undefined && likeRe(x).test(String(v));
+    case "is": return x === "null" ? (v === null || v === undefined) : String(v) === String(x);
+    case "in": return String(x).replace(/^\(|\)$/g, "").split(",").map(s => unquote(s.trim())).indexOf(String(v)) !== -1;
     default: throw new Error("memDb: no operator " + op);
   }
 }
+function likeRe(v) { return new RegExp("^" + String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*") + "$", "i"); }
 function pick(row, cols) {
   if (!cols || cols === "*") return Object.assign({}, row);
   const out = {};
@@ -113,6 +123,7 @@ function memDb(seed, opts) {
     b.is = (c, v) => add("is", [c, v], r => v === null ? (r[c] === null || r[c] === undefined) : r[c] === v);
     b.not = (c, op, v) => add("not", [c, op, v], r => op === "is" && v === null ? !(r[c] === null || r[c] === undefined) : !test(r[c], op, v));
     b.ilike = (c, v) => add("ilike", [c, v], r => r[c] !== null && r[c] !== undefined && new RegExp("^" + String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*") + "$", "i").test(String(r[c])));
+    b.overlaps = (c, list) => add("overlaps", [c, list], r => Array.isArray(r[c]) && r[c].some(x => (list || []).map(String).indexOf(String(x)) !== -1));   // NAMED (Nov 25 2026, H1)
     b.or = (s) => add("or", [s], (() => { const parts = splitTop(s).map(orTerm); return r => parts.some(p => p(r)); })());
     b.order = (c, o) => { q.order.push([c, !(o && o.ascending === false)]); return b; };
     b.limit = (n) => { q.lim = n; return b; };

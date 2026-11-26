@@ -394,8 +394,9 @@ async function main() {
   // NAMED (Nov 21 2026, P3-1C): BEFORE "2026-11-21c" (P3-1B). AFTER "2026-11-21d": members start with 1,000 BizCash and free accounts hold none (the same day again, so the next letter).
   // NAMED (Nov 24 2026, LR-2B): BEFORE "2026-11-21d" and "Last updated November 21, 2026" (P3-1C), and BEFORE the CHANGE_SUMMARY "Members now start with 1,000 BizCash, given once when an account becomes a member, and free
   // accounts do not hold BizCash."
-  check("A17. TERMS_VERSION 2026-11-24, \"Last updated November 24, 2026\", and the CHANGE_SUMMARY word for word", LEGAL.TERMS_VERSION === "2026-11-24" &&
-    LEGAL.TERMS_UPDATED === "Last updated November 24, 2026" && LEGAL.CHANGE_SUMMARY === "Members now get Lead Radar: people asking for what you offer, found from your own Fingerprint, and nothing is ever posted without your approval.");
+  // NAMED (Nov 25 2026, H1): BEFORE 2026-11-24, "Last updated November 24, 2026" and LR-2B's Lead Radar sentence
+  check("A17. TERMS_VERSION 2026-11-25, \"Last updated November 25, 2026\", and the CHANGE_SUMMARY word for word", LEGAL.TERMS_VERSION === "2026-11-25" &&
+    LEGAL.TERMS_UPDATED === "Last updated November 25, 2026" && LEGAL.CHANGE_SUMMARY === "Home now has Local, Market and Search: Local and Market show what is near you, your typed city is turned into its centre point with OpenStreetMap, and on an empty Following tab the people nearest you are suggested first.");
   const pagesEqual = ["terms.html", "privacy.html", "refund.html", "contact.html"].filter((f) => lf(readFe(f)) !== lf(built[f]));
   check("A18. the four frontend pages equal what these sources build", pagesEqual.length === 0, pagesEqual.join(", "));
   /* NAMED (Nov 21 2026, P3-1B, the owner's final rules): the Terms "Free accounts and membership" section and the Privacy text. */
@@ -552,7 +553,7 @@ async function main() {
   check("D2. the yearly reminder states the same facts", yearlyMail.text.indexOf("This is your yearly reminder") !== -1 &&
     ["Your plan: All Access, $199 every month.", "Manage / Cancel Subscription", "Terms of Service: https://bizforceai.net/terms"].every((x) => yearlyMail.text.indexOf(x) !== -1));
   const tc = RE.termsChangeEmail(F);
-  check("D3. the terms-change email: the version, what changed (CHANGE_SUMMARY), the Terms and Privacy links", tc.text.indexOf("November 24, 2026 (version 2026-11-24)") !== -1 /* NAMED (Nov 24 2026, LR-2B): BEFORE November 21, 2026 (version 2026-11-21d) */ &&   // NAMED (Nov 21 2026, P3-1C): BEFORE (version 2026-11-21c). NAMED (Nov 21 2026, P3-1B): BEFORE (version 2026-11-21b). NAMED (Nov 21 2026, P3-2): BEFORE (version 2026-11-21). NAMED (Nov 20 2026, P3-1): BEFORE November 20, 2026 (version 2026-11-20); P2-2 BEFORE November 14, 2026 (version 2026-11-14)
+  check("D3. the terms-change email: the version, what changed (CHANGE_SUMMARY), the Terms and Privacy links", tc.text.indexOf("November 25, 2026 (version 2026-11-25)") !== -1 /* NAMED (Nov 25 2026, H1): BEFORE November 24, 2026 (version 2026-11-24) */ /* NAMED (Nov 24 2026, LR-2B): BEFORE November 21, 2026 (version 2026-11-21d) */ &&   // NAMED (Nov 21 2026, P3-1C): BEFORE (version 2026-11-21c). NAMED (Nov 21 2026, P3-1B): BEFORE (version 2026-11-21b). NAMED (Nov 21 2026, P3-2): BEFORE (version 2026-11-21). NAMED (Nov 20 2026, P3-1): BEFORE November 20, 2026 (version 2026-11-20); P2-2 BEFORE November 14, 2026 (version 2026-11-14)
     tc.text.indexOf("What changed: " + LEGAL.CHANGE_SUMMARY) !== -1 && tc.text.indexOf("Terms of Service: https://bizforceai.net/terms") !== -1 &&
     tc.text.indexOf("Privacy Policy: https://bizforceai.net/privacy") !== -1);
 
@@ -581,7 +582,7 @@ async function main() {
 
   // The yearly reminder.
   // NAMED (Nov 21 2026, P3-1C): BEFORE "2026-11-21c" (P3-1B). AFTER "2026-11-21d": members start with 1,000 BizCash and free accounts hold none (the same day again, so the next letter).
-  db.t.users.push({ id: OTHER, email: "member.two@example.invalid", role: "user", terms_version: "2026-11-24" /* NAMED (Nov 24 2026, LR-2B): BEFORE "2026-11-21d" */ },   // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b". NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21". NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20"; the current version
+  db.t.users.push({ id: OTHER, email: "member.two@example.invalid", role: "user", terms_version: "2026-11-25" /* NAMED (Nov 25 2026, H1): BEFORE "2026-11-24" */ /* NAMED (Nov 24 2026, LR-2B): BEFORE "2026-11-21d" */ },   // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b". NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21". NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20"; the current version
     { id: "u-young", email: "young@example.invalid", role: "user" }, { id: "u-cancel", email: "cancel@example.invalid", role: "user" },
     { id: "u-two", email: "two@example.invalid", role: "user" },
     { id: "u-test", email: "harness-l1@bizforceai.invalid", role: "user" }, { id: OWNER_ID, email: "owner@example.invalid", role: "admin" });
@@ -635,7 +636,7 @@ async function main() {
     { id: "t-old", email: "old@example.invalid", role: "user", terms_version: "2026-11-08" },
     { id: "t-null", email: "null@example.invalid", role: "user", terms_version: null },
     // NAMED (Nov 21 2026, P3-1C): BEFORE "2026-11-21c" (P3-1B). AFTER "2026-11-21d": members start with 1,000 BizCash and free accounts hold none (the same day again, so the next letter).
-    { id: "t-now", email: "now@example.invalid", role: "user", terms_version: "2026-11-24" /* NAMED (Nov 24 2026, LR-2B): BEFORE "2026-11-21d" */ },   // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b". NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21". NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20"; the current version
+    { id: "t-now", email: "now@example.invalid", role: "user", terms_version: "2026-11-25" /* NAMED (Nov 25 2026, H1): BEFORE "2026-11-24" */ /* NAMED (Nov 24 2026, LR-2B): BEFORE "2026-11-21d" */ },   // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b". NAMED (Nov 21 2026, P3-2): BEFORE "2026-11-21". NAMED (Nov 20 2026, P3-1): BEFORE "2026-11-20"; the current version
     { id: "t-gone", email: "deleted-t-gone@deleted.invalid", role: "deleted", terms_version: null },
     { id: "t-test", email: "someone+bftest9@example.invalid", role: "user", terms_version: null }], email_sends: [], job_runs: [] });
   for (let i = 0; i < RE.TERMS_PER_RUN + 5; i++) tdb.t.users.push({ id: "t-many-" + String(i).padStart(3, "0"), email: "many" + i + "@example.invalid", role: "user", terms_version: "2026-10-01" });
@@ -649,7 +650,7 @@ async function main() {
   // NAMED (Nov 21 2026, P3-2): BEFORE 2026-11-21 (P3-1). AFTER 2026-11-21b, the current version.
   // NAMED (Nov 21 2026, P3-1B): BEFORE 2026-11-21b (P3-2). AFTER 2026-11-21c, the current version.
   // NAMED (Nov 21 2026, P3-1C): BEFORE 2026-11-21c (P3-1B). AFTER 2026-11-21d, the current version.
-  const sentTo = ledger(tdb, "account:terms_change:2026-11-24:" /* NAMED (Nov 24 2026, LR-2B): BEFORE 2026-11-21d */).map((r) => r.template.split(":").pop());
+  const sentTo = ledger(tdb, "account:terms_change:2026-11-25:" /* NAMED (Nov 25 2026, H1): BEFORE 2026-11-24 */ /* NAMED (Nov 24 2026, LR-2B): BEFORE 2026-11-21d */).map((r) => r.template.split(":").pop());
   check("D16. the terms-change email: at most " + RE.TERMS_PER_RUN + " a run, then the rest the next day, claimed once a day", r1.sent === RE.TERMS_PER_RUN && r1b.claimed === false &&
     r2t.sent === 7 && r3.sent === 0, J([r1.sent, r1b, r2t.sent, r3.sent]));
   check("D17. ...one per member per version: never twice, never to a member who already accepted it, never to a deleted account or a test account",

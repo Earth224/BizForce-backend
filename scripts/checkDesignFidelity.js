@@ -58,10 +58,37 @@ const TMXP = "scripts/termaximus-presence.js", TMXG = "scripts/termaximus-guide.
 const COMP = "scripts/bf-composer.js", COMPOSE = "compose.html";
 // NAMED (Nov 23 2026, LR-2): Lead Radar's page and the members' page list
 const LRP = "agents/lead-radar.html", BFA = "scripts/bf-access.js";
+const HTABS = "scripts/bf-home-tabs.js";   // NAMED (Nov 25 2026, H1): Home's tabs and Search (section K)
 const MUTATIONS = {
   "tab-font": [[HOME, "color:#c9d1e6;font:600 16px/1 system-ui", "color:#c9d1e6;font:600 15px/1 system-ui"]],
   "underline-thin": [[HOME, "bottom:1px;height:3px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}", "bottom:1px;height:2px;border-radius:2px;background:var(--bf-accent-a, #22d3ee)}"]],
-  "no-dot": [[HOME, 'class="feed-tab is-soon has-dot"', 'class="feed-tab is-soon"']],
+  "no-dot": [[HTABS, 'm.classList.toggle("has-dot", r.body.market_new === true && S.tab !== "market");', 'm.classList.toggle("has-dot", true);']],   // NAMED (Nov 25 2026, H1): BEFORE the page's always-drawn dot was removed
+  // NAMED (Nov 25 2026, H1): section K
+  "h1-chip-height": [[HTABS, "display:inline-flex;align-items:center;gap:6px;height:34px;box-sizing:border-box;padding:0 12px;border-radius:17px", "display:inline-flex;align-items:center;gap:6px;height:32px;box-sizing:border-box;padding:0 12px;border-radius:17px"]],
+  "h1-chip-no-target": [[HTABS, "align-items:center;height:44px;padding:0;border:0;background:none;color:inherit;cursor:pointer", "align-items:center;height:34px;padding:0;border:0;background:none;color:inherit;cursor:pointer"]],
+  "h1-chip-no-face": [[HTABS, "'<button type=\"button\" class=\"bfh-chip\" data-bfh=\"change\" id=\"homeLocalChange\"><span class=\"bfh-chipf\">Change</span></button>'", "'<button type=\"button\" class=\"bfh-chip\" data-bfh=\"change\" id=\"homeLocalChange\">Change</button>'"]],
+  "h1-tab-grey-on-phone": [[HOME,"    @media (min-width: 761px){.feed-tab[aria-selected=false]{border-bottom-color:transparent;color:#a9b3cc;cursor:pointer}}", "    .feed-tab[aria-selected=false]{border-bottom-color:transparent;color:#a9b3cc;cursor:pointer}"]],
+  "h1-chips-low": [[HTABS, "top:calc(59px + env(safe-area-inset-top, 0px));z-index:42;padding:0}", "top:calc(64px + env(safe-area-inset-top, 0px));z-index:42;padding:0}"]],
+  "h1-rail-gap": [[HTABS, "width:60px;flex-direction:column;align-items:center;gap:18px;padding:0}", "width:60px;flex-direction:column;align-items:center;gap:12px;padding:0}"]],
+  "h1-meta-right": [[HTABS, ".bfm-list.is-full .bfm-meta{position:absolute;left:14px;right:80px;bottom:16px;", ".bfm-list.is-full .bfm-meta{position:absolute;left:14px;right:60px;bottom:16px;"]],
+  "h1-title-size": [[HTABS, ".bfm-title{margin:0;font:700 21px/1.2 ", ".bfm-title{margin:0;font:700 19px/1.2 "]],
+  "h1-price-white": [[HTABS, "font:700 22px/1.2 \" + F + \";color:#f5c46b}", "font:700 22px/1.2 \" + F + \";color:#ffffff}"]],
+  "h1-buy-short": [[HTABS, ".bfm-buy{height:44px;padding:0 26px;", ".bfm-buy{height:40px;padding:0 26px;"]],
+  "h1-local-line": [[HTABS, "#homeLocalFeed .bfp-kind.is-local .bfp-kmeta{font-size:13px;color:#c9d1e6}", "#homeLocalFeed .bfp-kind.is-local .bfp-kmeta{font-size:12px;color:#c9d1e6}"]],
+  "h1-local-line-unscoped": [[HTABS, "#homeLocalFeed .bfp-kind.is-local .bfp-kmeta{", ".bfp-kind.is-local .bfp-kmeta{"]],
+  "h1-follow-title": [[HTABS, 'followTitle: "Follow people to fill this tab"', 'followTitle: "Follow people"']],
+  "h1-follow-top": [[HTABS, "body.bfh-board .page{padding-top:calc(68px + env(safe-area-inset-top, 0px))}", "body.bfh-board .page{padding-top:calc(80px + env(safe-area-inset-top, 0px))}"]],
+  "h1-label-spacing": [[HTABS, "letter-spacing:1.6px;color:#8e9bbf}", "letter-spacing:1px;color:#8e9bbf}"]],
+  "h1-row-line": [[HTABS, ".bfh-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #141b33}", ".bfh-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:0}"]],
+  "h1-follow-pill": [[HTABS, "align-items:center;height:34px;box-sizing:border-box;padding:0 14px;border-radius:17px", "align-items:center;height:30px;box-sizing:border-box;padding:0 14px;border-radius:17px"]],
+  "h1-follow-no-target": [[HTABS, "justify-content:center;height:44px;min-width:44px;padding:0;border:0;background:none", "justify-content:center;height:34px;min-width:44px;padding:0;border:0;background:none"]],
+  "h1-suggest-max": [["@lib/homeTabs.js", "const SUGGEST_MAX = 8;", "const SUGGEST_MAX = 12;"]],
+  "h1-field-radius": [[HTABS, "height:44px;box-sizing:border-box;border-radius:22px;border:1px solid var(--bf-accent-a, #22d3ee)", "height:44px;box-sizing:border-box;border-radius:12px;border:1px solid var(--bf-accent-a, #22d3ee)"]],
+  "h1-search-pad": [[HTABS, "padding:calc(12px + env(safe-area-inset-top, 0px)) 12px 8px}", "padding:calc(16px + env(safe-area-inset-top, 0px)) 12px 8px}"]],
+  "h1-scope-missing": [[HTABS, ', ["needs", "Needs"]];', '];']],
+  "h1-thumb": [[HTABS, ".bfh-l-tile{flex:none;width:56px;height:56px;border-radius:12px;", ".bfh-l-tile{flex:none;width:48px;height:48px;border-radius:12px;"]],
+  "h1-grid-two": [[HTABS, ".bfh-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}", ".bfh-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}"]],
+  "h1-board-font": [[HTABS, "var F = 'system-ui,-apple-system,\"Segoe UI\",Arial,sans-serif';", "var F = '\"Space Grotesk\",system-ui';"]],
   "tabs-reordered": [[HOME, 'id="tabMarket"', 'id="tabMarketX"']],
   "row-top": [[HOME, "padding:calc(12px + env(safe-area-inset-top, 0px)) 2px 0 9px;background:none}", "padding:calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;background:none}"]],
   "soon-unwired": [[HOME, 'window.BFFeed.soon(t.getAttribute("data-soon"), t);', "say(\"Soon.\");"]],
@@ -94,8 +121,8 @@ const MUTATIONS = {
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter): the anchor "p33", the mutant "fx3b"
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment. Mutant "p33".
-  // NAMED (Nov 25 2026, HOTFIX-G1): BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  "shell-rev": [[SW, "var SHELL_REV = \"g1\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
+  // NAMED (Nov 25 2026, H1B): BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "shell-rev": [[SW, "var SHELL_REV = \"h1b\";", "var SHELL_REV = \"p33\";"]],   // NAMED (Nov 22 2026, FX3): BEFORE the anchor "p31b" (mutant "fx2"), which no longer matched; AFTER "fx3" (mutant "p31c")
     // NAMED (Nov 21 2026, P3-1B): the mutant is now "fx2", was "p32"; NAMED (Nov 21 2026, FX2): BEFORE "p32" (mutant "p23")
   // NAMED (Nov 21 2026, FX2)
   "tip-never-shown": [[FEED, "    \".bfp-feed.is-full .bfp-tip.is-member{visibility:visible}\",\n", ""]],
@@ -232,7 +259,7 @@ const MUTATIONS = {
   "lr4-waiting-words": [["@lib/foundScore.js", "detail: \"Connected, waiting for each platform's approval\"", "detail: \"Waiting for approval\""]]
 };
 // NAMED (Nov 23 2026, LR-2): + Lead Radar's page and bf-access.js
-const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB, COMP, COMPOSE, LRP, BFA]);   // NAMED (Nov 23 2026, P3-3): + the composer and its page   // NAMED (Nov 22 2026, FX3): + the four boards' files
+const T = H.setup(__filename, MUTATIONS, [HOME, FEED, SHELL, BAR, SW, PROFILE, POSTS, AGV, AGP, ORB, "css/bf-phone.css", TMXP, TMXG, ABY, DASHB, COMP, COMPOSE, LRP, BFA, HTABS, "@lib/homeTabs.js"]);   // NAMED (Nov 25 2026, H1): + HTABS, lib/homeTabs.js   // NAMED (Nov 23 2026, P3-3): + the composer and its page   // NAMED (Nov 22 2026, FX3): + the four boards' files
 const { FILES, check, J } = T;
 
 /* The text of the block that opens at `marker` (its "{"), to the matching "}". The CSS in a .js file is an array of
@@ -277,8 +304,11 @@ console.log("\n══ A. the feed's top row (home.html) ══");
 const ids = [...home.matchAll(/<button type="button" class="feed-(?:live|tab[^"]*|search)" [^>]*id="([A-Za-z]+)"/g)].map(m => m[1]);
 check("A1. Live, then the tabs Local, Following, Market, For You, then Search, in that order", J(ids) === J(["feedLive", "tabLocal", "tabFollowing", "tabMarket", "tabForYou", "feedSearch"]), J(ids));
 const tabText = [...home.matchAll(/class="feed-tab[^"]*"[^>]*>([^<]+)<\/button>/g)].map(m => m[1]);
-check("A2. the tabs read " + F.TOP.TABS.join(", ") + "; Following is the selected one; Market carries the dot",
-  J(tabText) === J(F.TOP.TABS) && /id="tabFollowing" aria-selected="true"/.test(home) && /class="feed-tab is-soon has-dot" role="tab" id="tabMarket"/.test(home), J(tabText));
+// NAMED (Nov 25 2026, H1): BEFORE the page drew Market's dot always (class "feed-tab is-soon has-dot"). AFTER bf-home-tabs.js draws it only
+// when a member listed something since the viewer's last Market visit (GET /api/home/tabs market_new).
+check("A2. the tabs read " + F.TOP.TABS.join(", ") + "; Following is the selected one; Market's dot only for new listings",
+  J(tabText) === J(F.TOP.TABS) && /id="tabFollowing" aria-selected="true"/.test(home) && /class="feed-tab" role="tab" id="tabMarket"/.test(home) &&
+  (FILES[HTABS] || "").indexOf('m.classList.toggle("has-dot", r.body.market_new === true && S.tab !== "market");') !== -1, J(tabText));
 ruleCheck("A3. a tab (phone): " + F.TOP.TAB_FONT + " px " + F.TOP.TAB_WEIGHT + ", " + F.TOP.TAB_HEIGHT + " px tall, " + F.TOP.TAB_PAD_X + " px each side, " + C.TAB_INACTIVE, homePhone, ".feed-tab",
   { height: px(F.TOP.TAB_HEIGHT), "min-height": px(F.TOP.TAB_HEIGHT), padding: "0 " + px(F.TOP.TAB_PAD_X), color: C.TAB_INACTIVE, font: F.TOP.TAB_WEIGHT + " " + px(F.TOP.TAB_FONT) + '/1 system-ui,-apple-system,"Segoe UI",Arial,sans-serif' });
 ruleCheck("A4. the active tab white", homePhone, ".feed-tab[aria-selected=true]", { color: "#fff" });
@@ -290,11 +320,17 @@ ruleCheck("A7. Live and Search " + F.TOP.BUTTON + " px, round, no frame", homePh
   { width: px(F.TOP.BUTTON), height: px(F.TOP.BUTTON), border: "0", "border-radius": px(F.TOP.BUTTON / 2), background: "transparent" });
 ruleCheck("A8. the row " + F.TOP.ROW_TOP + " px below the safe area, Live " + F.TOP.LIVE_LEFT + " px in, Search " + F.TOP.SEARCH_RIGHT + " px in", homePhone, "body.feed-full .feed-top",
   { padding: "calc(" + px(F.TOP.ROW_TOP) + " + env(safe-area-inset-top, 0px)) " + px(F.TOP.SEARCH_RIGHT) + " 0 " + px(F.TOP.LIVE_LEFT) });
-check("A9. Live, Search on a phone, and Local, Market and For You open the Coming soon sheet",
-  home.indexOf('window.BFFeed.soon(t.getAttribute("data-soon"), t);') !== -1 && home.indexOf('window.BFFeed.soon("live", this);') !== -1 && home.indexOf('if (phoneNow()) window.BFFeed.soon("search", this);') !== -1 &&
-  ["local", "market", "foryou", "live", "search", "reviews"].every(k => new RegExp("\\n    " + k + ": \\[").test(feed)));
-check("A10. a desktop shows only Following and Search, as before (Live and the later tabs hidden outside the phone block)",
-  home.indexOf("    .feed-live,.feed-tab.is-soon{display:none}\n    @media (max-width: 760px){") !== -1 && homePhone.indexOf(".feed-live,.feed-tab.is-soon{display:inline-flex}") !== -1);
+// NAMED (Nov 25 2026, H1): BEFORE Local, Market and Search (on a phone) opened the Coming soon sheet. AFTER they are built
+// (scripts/bf-home-tabs.js); Live and For You still open it.
+check("A9. Live and For You open the Coming soon sheet; Local and Market are tabs; Search opens the search screen on every width",
+  home.indexOf('window.BFFeed.soon(t.getAttribute("data-soon"), t);') !== -1 && home.indexOf('window.BFFeed.soon("live", this);') !== -1 &&
+  home.indexOf('document.getElementById("feedSearch").addEventListener("click", function () { if (window.BFHomeTabs) window.BFHomeTabs.openSearch(); });') !== -1 &&
+  !/id="tab(Local|Market)"[^>]*data-soon/.test(home) && ["foryou", "live", "reviews"].every(k => new RegExp("\\n    " + k + ": \\[").test(feed)));
+// NAMED (Nov 25 2026, H1): BEFORE a desktop showed only Following and Search. AFTER Local, Following, Market and Search, the
+// inactive tabs grey (only above 760 px: a phone keeps the board's #c9d1e6); Live and For You stay hidden there.
+check("A10. a desktop shows Local, Following, Market and Search, its inactive tabs grey only above 760 px (Live and For You hidden outside the phone block)",
+  home.indexOf("    .feed-live,.feed-tab.is-soon{display:none}\n    /* NAMED (Nov 25 2026, H1)") !== -1 && home.indexOf("    @media (min-width: 761px){.feed-tab[aria-selected=false]{border-bottom-color:transparent;color:#a9b3cc;cursor:pointer}}") !== -1 &&
+  (home.match(/\.feed-tab\[aria-selected=false\]/g) || []).length === 1 && homePhone.indexOf(".feed-live,.feed-tab.is-soon{display:inline-flex}") !== -1);
 
 /* ── B ── */
 console.log("\n══ B. the rail and the bottom-left block (scripts/bf-feed.js) ══");
@@ -417,8 +453,8 @@ console.log("\n══ E. the shell's version ══");
 // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
 // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
 // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-// NAMED (Nov 25 2026, HOTFIX-G1): BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-check("E1. sw.js SHELL_REV is \"g1\"", /\nvar SHELL_REV = "g1";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
+// NAMED (Nov 25 2026, H1B): BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+check("E1. sw.js SHELL_REV is \"h1b\"", /\nvar SHELL_REV = "h1b";[ \t]*(?:\/\/[^\n]*)?\n/.test(FILES[SW] || ""));
 
 /* ── F (FX2) ── */
 (async () => {
@@ -794,6 +830,71 @@ check("E1. sw.js SHELL_REV is \"g1\"", /\nvar SHELL_REV = "g1";[ \t]*(?:\/\/[^\n
     Object.values(FD.WEIGHTS).reduce((a, b) => a + b, 0) === 100 &&
     Object.values(FD.TITLES).every(t => FSL.indexOf('title: "' + t + '"') !== -1) &&
     Object.values(FD.DETAILS).every(t => FSL.indexOf('"' + t + '"') !== -1) && FD.WAITING_TITLE === ["YouTube", "TikTok", "Instagram", "Facebook"].join(", "));
+
+  { /* ── K ── NAMED (Nov 25 2026, H1): the owner's canvas row 7; its own block (its names are its own) */
+  console.log("\n══ K. H1: the owner's canvas row 7 (" + DS.HOME.BOARDS.join(", ") + ") ══");
+  const HM = DS.HOME, CH = HM.CHIPS, RL = HM.RAIL, IN = HM.INFO, FW = HM.FOLLOW, SE = HM.SEARCH;
+  const ht = FILES[HTABS] || "", htPhone = block(ht, '"@media " + BREAKPOINT + "{"');
+  const FN = '" + F + "';   // the site's font stack, as bf-home-tabs.js writes it
+  const hr = sel => rule(ht, sel), hp = sel => rule(htPhone, sel);
+  check("K1. the four boards' tabs " + HM.TABS.join(", ") + "; Local and Market built (no Coming soon), For You still Coming soon",
+    J(HM.TABS) === J(F.TOP.TABS) && /id="tabLocal" aria-selected="false" aria-controls="homeLocal"/.test(home) && /id="tabMarket" aria-selected="false" aria-controls="homeMarket"/.test(home) &&
+    /class="feed-tab is-soon" role="tab" id="tabForYou"[^>]*data-soon="foryou"/.test(home) && home.indexOf('<script src="/scripts/bf-home-tabs.js"></script>') !== -1);
+  // NAMED (Nov 25 2026, H1, PHONE_H1): BEFORE the chip itself was the 34 px face (the site's phone rule raised it to 44). AFTER a 44 px
+  // target (.bfh-chip) holding the board's 34 px face (.bfh-chipf), as LR-4's .lr-btnf.
+  check("K2. the chips: a " + CH.H + " px face in a " + CH.HIT + " px target, radius " + CH.RADIUS + ", 0 " + CH.PAD_X + " px, " + CH.BORDER + " on " + CH.BG + ", " + CH.TEXT + " " + CH.WEIGHT + " " + CH.FONT + " px, " + CH.GAP + " px apart; on: accent on " + CH.ON_BG,
+    holds(hr(".bfh-chip"), { height: px(CH.HIT), padding: "0", border: "0", background: "none" }) &&
+    holds(hr(".bfh-chipf"), { height: px(CH.H), "box-sizing": "border-box", padding: "0 " + px(CH.PAD_X), "border-radius": px(CH.RADIUS), border: "1px solid " + CH.BORDER, background: CH.BG, color: CH.TEXT, font: CH.WEIGHT + " " + CH.FONT + "px/1 " + FN }) &&
+    holds(hr(".bfh-chips"), { gap: px(CH.GAP) }) && holds(hr(".bfh-chip.is-on .bfh-chipf,.bfh-chip[aria-pressed=true] .bfh-chipf"), { "border-color": ACC, background: CH.ON_BG, color: ACC }) &&
+    ht.split('<span class="bfh-chipf">').length - 1 === 6, J([hr(".bfh-chip"), hr(".bfh-chipf"), hr(".bfh-chips")]));   // Local's three, All, each category, each filter
+  check("K3. over a full-screen tab the chips sit " + CH.LEFT + " px in and " + CH.TOP + " px down (below the safe area); Local's: the city with a " + CH.PIN + " px pin, " + CH.LOCAL.join(", "),
+    holds(hp("body.feed-full .bfh-chips.is-over"), { position: "fixed", left: px(CH.LEFT), top: "calc(" + px(CH.TOP - (CH.HIT - CH.H) / 2) + " + env(safe-area-inset-top, 0px))" }) &&   // the target 5 px above the face
+    ht.indexOf("svg(ICON.pin, " + CH.PIN + ")") !== -1 && ht.indexOf('var REACH_WORDS = { city: "My city", "25": "' + CH.LOCAL[0] + '", anywhere: "Anywhere" };') !== -1 && ht.indexOf('id="homeLocalChange"><span class="bfh-chipf">' + CH.LOCAL[1] + "</span></button>") !== -1, J(hp("body.feed-full .bfh-chips.is-over")));
+  check("K4. Market's rail: " + RL.RIGHT + " px from the right, " + RL.ABOVE_BAR + " px above the bar, " + RL.GAP + " px apart, " + RL.WIDTH + " px wide; the seller's " + RL.AVATAR + " px picture with a " + RL.PLUS + " px follow; " + RL.MARKET.join(", ") + "; no Tip",
+    holds(hp(".bfm-list.is-full .bfm-rail"), { position: "absolute", right: px(RL.RIGHT), bottom: px(RL.ABOVE_BAR), width: px(RL.WIDTH), gap: px(RL.GAP) }) &&
+    holds(hp(".bfm-list.is-full .bfm-list") || hp(".bfm-list.is-full"), { bottom: "calc(56px + env(safe-area-inset-bottom, 0px))" }) &&
+    holds(hp(".bfm-list.is-full .bfm-pic"), { width: px(RL.AVATAR), height: px(RL.AVATAR) }) && holds(hp(".bfm-list.is-full .bfm-badge span"), { width: px(RL.PLUS), height: px(RL.PLUS) }) &&
+    RL.MARKET.every(w => ht.indexOf("<span>" + w + "</span>") !== -1 || ht.indexOf("(l.saved ? \"Saved\" : \"" + w + "\")") !== -1) && !/data-mact="tip"|>Tip</.test(ht), J([hp(".bfm-list.is-full .bfm-rail"), hp(".bfm-list.is-full")]));
+  check("K5. Market's block: " + IN.LEFT + " px in, " + IN.RIGHT + " px from the right, " + IN.ABOVE_BAR + " px above the bar, " + IN.GAP + " px apart; the line " + IN.LINE_FONT + " px " + IN.LINE_COLOR + "; the title " + IN.TITLE_WEIGHT + " " + IN.TITLE_FONT + "/" + IN.TITLE_LINE + "; the seller line " + IN.SUB_FONT + " px",
+    holds(hp(".bfm-list.is-full .bfm-meta"), { position: "absolute", left: px(IN.LEFT), right: px(IN.RIGHT), bottom: px(IN.ABOVE_BAR) }) && holds(hr(".bfm-meta"), { gap: px(IN.GAP) }) &&
+    holds(hr(".bfm-line"), { font: "400 " + IN.LINE_FONT + "px/1.3 " + FN, color: IN.LINE_COLOR }) && holds(hr(".bfm-title"), { font: IN.TITLE_WEIGHT + " " + IN.TITLE_FONT + "px/" + IN.TITLE_LINE + " " + FN }) &&
+    holds(hr(".bfm-sub"), { font: "400 " + IN.SUB_FONT + "px/1.4 " + FN }), J([hp(".bfm-list.is-full .bfm-meta"), hr(".bfm-line"), hr(".bfm-title")]));
+  check("K6. the price " + IN.PRICE_WEIGHT + " " + IN.PRICE_FONT + " px gold " + IN.PRICE + " in BizCash; Buy " + IN.BUY_H + " px, 0 " + IN.BUY_PAD_X + " px, radius " + IN.BUY_RADIUS + ", accent, " + IN.BUY_WEIGHT + " " + IN.BUY_FONT + " px",
+    holds(hr(".bfm-price"), { font: IN.PRICE_WEIGHT + " " + IN.PRICE_FONT + "px/1.2 " + FN, color: IN.PRICE.toLowerCase() }) && ht.indexOf("n(l.price_bfc) + ' BFC</span>") !== -1 &&
+    holds(hr(".bfm-buy"), { height: px(IN.BUY_H), padding: "0 " + px(IN.BUY_PAD_X), "border-radius": px(IN.BUY_RADIUS), background: ACC, color: IN.BUY_TEXT, font: IN.BUY_WEIGHT + " " + IN.BUY_FONT + "px/1 " + FN }), J([hr(".bfm-price"), hr(".bfm-buy")]));
+  check("K7. Local: bf-feed.js's cards with the line \"" + HM.LOCAL_LINE.EXAMPLE + "\" (" + HM.LOCAL_LINE.FONT + " px " + HM.LOCAL_LINE.COLOR + "), the For You rail and the strip",
+    feed.indexOf("    if (p.local && typeof p.local === \"object\") {") !== -1 && feed.indexOf('esc(lp.join(" \u00b7 "))') !== -1 &&
+    holds(hr("#homeLocalFeed .bfp-kind.is-local .bfp-kmeta"), { "font-size": px(HM.LOCAL_LINE.FONT), color: HM.LOCAL_LINE.COLOR }) && ht.indexOf('window.BFFeed.mount(host, { full: true, local: true,') !== -1, J(hr("#homeLocalFeed .bfp-kind.is-local .bfp-kmeta")));
+  check("K8. Following, nobody followed: " + FW.BG + ", " + FW.TOP + " px down, " + FW.PAD + ", " + FW.GAP + " px apart; the " + FW.ICON + " px circle; \"" + FW.TITLE + "\" " + FW.TITLE_WEIGHT + " " + FW.TITLE_FONT + " px; the line " + FW.SUB_FONT + "/" + FW.SUB_LINE,
+    holds(hp("body.bfh-follow-empty .bfh-follow"), { padding: FW.PAD, background: FW.BG }) && holds(hp("body.bfh-board .page"), { "padding-top": "calc(" + px(FW.TOP) + " + env(safe-area-inset-top, 0px))" }) &&
+    holds(hr(".bfh-follow"), { gap: px(FW.GAP) }) && holds(hr(".bfh-follow-ic"), { width: px(FW.ICON), height: px(FW.ICON), background: FW.ICON_BG, color: ACC }) &&
+    holds(hr(".bfh-follow-t"), { font: FW.TITLE_WEIGHT + " " + FW.TITLE_FONT + "px/1.3 " + FN }) && holds(hr(".bfh-follow-s"), { font: "400 " + FW.SUB_FONT + "px/" + FW.SUB_LINE + " " + FN }) &&
+    ht.indexOf('followTitle: "' + FW.TITLE + '"') !== -1 && ht.indexOf('followSub: "' + FW.SUB + '"') !== -1, J([hp("body.bfh-follow-empty .bfh-follow"), hr(".bfh-follow-t")]));
+  check("K9. \"" + FW.LABEL + "\" " + FW.LABEL_WEIGHT + " " + FW.LABEL_FONT + " px, " + FW.LABEL_SPACING + " px apart, " + FW.LABEL_COLOR + "; a row " + FW.ROW_PAD + ", a " + FW.ROW_LINE + " line, " + FW.ROW_GAP + " px apart; the " + FW.AVATAR + " px picture; the name " + FW.NAME_WEIGHT + " " + FW.NAME_FONT + " px with Verified; the line " + FW.ROW_SUB_FONT + " px",
+    holds(hr(".bfh-lbl"), { font: FW.LABEL_WEIGHT + " " + FW.LABEL_FONT + "px/1.2 " + FN, "letter-spacing": px(FW.LABEL_SPACING), color: FW.LABEL_COLOR }) && ht.indexOf('suggested: "' + FW.LABEL + '"') !== -1 &&
+    holds(hr(".bfh-row"), { padding: FW.ROW_PAD, "border-bottom": "1px solid " + FW.ROW_LINE, gap: px(FW.ROW_GAP) }) && holds(hr(".bfh-av"), { width: px(FW.AVATAR), height: px(FW.AVATAR) }) &&
+    holds(hr(".bfh-name"), { font: FW.NAME_WEIGHT + " " + FW.NAME_FONT + "px/1.3 " + FN }) && holds(hr(".bfh-sub"), { font: "400 " + FW.ROW_SUB_FONT + "px/1.35 " + FN }) && ht.indexOf("esc(p.name) + vb(p.verified)") !== -1, J([hr(".bfh-lbl"), hr(".bfh-row")]));
+  // NAMED (Nov 25 2026, H1, PHONE_H1): BEFORE the button was the 34 px pill. AFTER a 44 px target (.bfh-fbtn) holding the 34 px face (.bfh-fbtnf).
+  check("K10. Follow inline: a " + FW.BTN_H + " px face in a " + FW.BTN_HIT + " px target, 0 " + FW.BTN_PAD_X + " px, radius " + FW.BTN_RADIUS + ", accent, " + FW.BTN_TEXT + " " + FW.BTN_WEIGHT + " " + FW.BTN_FONT + " px; up to " + FW.MAX + " suggestions (lib/homeTabs.js)",
+    holds(hr(".bfh-fbtn"), { height: px(FW.BTN_HIT), "min-width": px(FW.BTN_HIT), padding: "0", background: "none" }) &&
+    holds(hr(".bfh-fbtnf"), { height: px(FW.BTN_H), padding: "0 " + px(FW.BTN_PAD_X), "border-radius": px(FW.BTN_RADIUS), background: ACC, color: FW.BTN_TEXT, font: FW.BTN_WEIGHT + " " + FW.BTN_FONT + "px/1 " + FN }) &&
+    ht.indexOf('<span class="bfh-fbtnf">Follow</span></button>') !== -1 &&
+    (FILES["@lib/homeTabs.js"] || "").indexOf("const SUGGEST_MAX = " + FW.MAX + ";") !== -1, J([hr(".bfh-fbtn"), hr(".bfh-fbtnf")]));
+  check("K11. Search's top: " + SE.TOP_PAD + " px below the safe area, " + SE.SIDE + " px sides, " + SE.BOTTOM_PAD + " px under, " + SE.GAP + " px apart; back " + SE.BACK + " px; the field " + SE.FIELD_H + " px, radius " + SE.FIELD_RADIUS + ", accent line on " + SE.FIELD_BG + ", " + SE.FIELD_PAD_LEFT + " px in, a " + SE.ICON + " px magnifier, " + SE.INPUT_FONT + " px text, a " + SE.CLEAR + " px clear",
+    holds(hr(".bfh-s-top"), { gap: px(SE.GAP), padding: "calc(" + px(SE.TOP_PAD) + " + env(safe-area-inset-top, 0px)) " + px(SE.SIDE) + " " + px(SE.BOTTOM_PAD) }) &&
+    holds(hr(".bfh-s-back"), { width: px(SE.BACK), height: px(SE.BACK) }) &&
+    holds(hr(".bfh-s-box"), { height: px(SE.FIELD_H), "border-radius": px(SE.FIELD_RADIUS), border: "1px solid " + ACC, background: SE.FIELD_BG, padding: "0 6px 0 " + px(SE.FIELD_PAD_LEFT) }) &&
+    holds(hr(".bfh-s-input"), { font: "400 " + SE.INPUT_FONT + "px/1 " + FN }) && ht.indexOf("svg(ICON.search, " + SE.ICON + ")") !== -1 && ht.indexOf("svg(ICON.x, " + SE.CLEAR + ")") !== -1, J([hr(".bfh-s-top"), hr(".bfh-s-box")]));
+  check("K12. the filters " + SE.SCOPES.join(", ") + "; the groups " + SE.GROUPS.join(", ") + " with \"" + SE.SEE_ALL + "\" (" + SE.SEE_ALL_FONT + " px); recent searches up to " + SE.RECENT_MAX,
+    ht.indexOf("var SCOPES = " + J(SE.SCOPES.map(x => [x.toLowerCase(), x])).replace(/,/g, ", ") + ";") !== -1 &&
+    ht.indexOf("var GROUPS = " + J(SE.GROUPS.map(x => [x.toLowerCase(), x])).replace(/,/g, ", ") + ";") !== -1 && ht.indexOf('seeAll: "' + SE.SEE_ALL + '"') !== -1 &&
+    holds(hr(".bfh-s-all"), { font: "400 " + SE.SEE_ALL_FONT + "px/1 " + FN }) && ht.indexOf("var RECENT_MAX = " + SE.RECENT_MAX + ";") !== -1);
+  check("K13. a listing row: the " + SE.THUMB + " px picture (radius " + SE.THUMB_RADIUS + "), the title " + SE.L_TITLE_WEIGHT + " " + SE.L_TITLE_FONT + " px, the line " + SE.L_SUB_FONT + " px, the price " + SE.PRICE_WEIGHT + " " + SE.PRICE_FONT + " px gold; posts " + SE.GRID_COLS + " across, " + SE.GRID_RATIO + ", radius " + SE.GRID_RADIUS + ", " + SE.GRID_GAP + " px apart",
+    holds(hr(".bfh-l-tile"), { width: px(SE.THUMB), height: px(SE.THUMB), "border-radius": px(SE.THUMB_RADIUS) }) && holds(hr(".bfh-l-t"), { font: SE.L_TITLE_WEIGHT + " " + SE.L_TITLE_FONT + "px/1.3 " + FN }) &&
+    holds(hr(".bfh-l-p"), { font: SE.PRICE_WEIGHT + " " + SE.PRICE_FONT + "px/1 " + FN, color: IN.PRICE.toLowerCase() }) &&
+    holds(hr(".bfh-grid"), { "grid-template-columns": "repeat(" + SE.GRID_COLS + ",minmax(0,1fr))", gap: px(SE.GRID_GAP) }) && holds(hr(".bfh-tile"), { "aspect-ratio": SE.GRID_RATIO, "border-radius": px(SE.GRID_RADIUS) }), J([hr(".bfh-l-tile"), hr(".bfh-grid"), hr(".bfh-tile")]));
+  check("K14. the site's fonts, never the boards' (Space Grotesk, Inter)", !/Space Grotesk|Inter\b/.test(ht) && ht.indexOf("var F = 'system-ui,-apple-system,\"Segoe UI\",Arial,sans-serif';") !== -1);
+  }
 
   T.finish();
 })();

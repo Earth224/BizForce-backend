@@ -128,7 +128,9 @@ const MUTATIONS = {
   // the mist shows on the sign-in page
   "mist-on-login": [[PRESENCE, "[\"index\", \"app\", \"reset-password\"", "[\"index\", \"reset-password\""]],
   // the mist is taken off an ordinary page too
-  "mist-missing-elsewhere": [[PRESENCE, "\"synastry\", \"the-third\"];", "\"synastry\", \"the-third\", \"crm\"];"]],
+  "mist-missing-elsewhere": [[PRESENCE, "\"the-third\", \"home\", \"compose\"];", "\"the-third\", \"home\", \"compose\", \"crm\"];"]],   // NAMED (Nov 25 2026, H1B): the anchor moved with the list
+  "mist-on-home": [[PRESENCE, "\"the-third\", \"home\", \"compose\"];", "\"the-third\", \"compose\"];"]],   // NAMED (Nov 25 2026, H1B)
+  "mist-on-compose": [[PRESENCE, "\"the-third\", \"home\", \"compose\"];", "\"the-third\", \"home\"];"]],   // NAMED (Nov 25 2026, H1B)
   // the bottom-right glow returns on the Oracle page
   "bottom-right-glow-back": [["oracle.html", "    :root { --bf-glow-b-alpha: 0 !important; }\n", ""]],
   // the top-left glow is put out too
@@ -734,8 +736,10 @@ function mistChecks() {
   console.log("\n══ M. the mist: everywhere signed in, except the sign-in pages and the Oracle pages ══");
   const m = /var TMX_NO_MIST_PAGES = (\[[^\]]*\]);/.exec(FILES[PRESENCE]);
   const list = m ? vm.runInNewContext(m[1]) : null;
-  const WANT = ["index", "app", "reset-password", "verify-email", "oracle", "mychart", "synastry", "the-third"];
-  check("M1. the one place that decides: TMX_NO_MIST_PAGES is exactly the sign-in pages and the Oracle pages",
+  // NAMED (Nov 25 2026, H1B, owner rule): BEFORE the sign-in pages and the Oracle pages. AFTER also Home (home.html: every Home
+  // tab and the Search screen) and the Create (+) composer (compose.html); HQ and its pages, Profile and Inbox keep the mist.
+  const WANT = ["index", "app", "reset-password", "verify-email", "oracle", "mychart", "synastry", "the-third", "home", "compose"];
+  check("M1. the one place that decides: TMX_NO_MIST_PAGES is exactly the sign-in pages, the Oracle pages, Home and the composer",
     JSON.stringify(list) === JSON.stringify(WANT) && (FILES[PRESENCE].match(/TMX_NO_MIST_PAGES/g) || []).length === 2, JSON.stringify(list));
   check("M1. ... and it decides before anything is drawn (the first statement after it returns)",
     /var TMX_NO_MIST_PAGES = [^\n]+\n  try \{\n    var _tmxPath  = \(window\.location\.pathname \|\| ""\)\.toLowerCase\(\);\n    var _tmxFile  = [^\n]+\n    var _tmxSkip  = _tmxFile === "" \|\| TMX_NO_MIST_PAGES\.indexOf\(_tmxFile\) !== -1;\n    if \(_tmxSkip \|\| !localStorage\.getItem\("bf_token"\)\) return;/.test(FILES[PRESENCE]));

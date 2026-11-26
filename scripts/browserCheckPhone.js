@@ -289,6 +289,9 @@
                            and 430 (from BIZFORCE_FRONTEND_DIR) to PHONE_COMPARE_DIRphone-baseline-<page>-<width>.json
      PHONE_COMPARE=1       the batch's pages compared, element by element, with those baselines (or a named override
                            phone-override-<tag>--<page>-<width>.json); see compareRun at the end of this file
+     PHONE_H1=1            only H1's Home tabs (Local, Following, Market, Search), the Change sheet, Buy, Ask and Save for a member and a
+                           free account, Search and its filters, back to the right tab, and the storefront's Verified race (fixtures only;
+                           PHONE_H1_WIDTHS, PHONE_H1_OUT, PHONE_H1_SELLER)
      PHONE_LR4=1           only LR-4's Get found, the Google switch, /@handle and /listing/:id with the server's head, privacy and
                            music-popout's width, and Edit post's audience (lr4Run; NAMED (Nov 25 2026, LR-4)); at 360, 390 and 430;
                            screenshots and the two heads to PHONE_LR4_OUT (default Downloads\lr4).
@@ -361,7 +364,7 @@ let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
 // NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && process.env.PHONE_LR2 !== "1" && process.env.PHONE_LR3 !== "1" && process.env.PHONE_LR4 !== "1" && PAGES.length > 15) {   // NAMED (Nov 25 2026, LR-4): and PHONE_LR4
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && process.env.PHONE_P31 !== "1" && process.env.PHONE_P32 !== "1" && process.env.PHONE_FX3 !== "1" && process.env.PHONE_P33 !== "1" && process.env.PHONE_LR2 !== "1" && process.env.PHONE_LR3 !== "1" && process.env.PHONE_LR4 !== "1" && process.env.PHONE_H1 !== "1" && PAGES.length > 15) {   // NAMED (Nov 25 2026, H1): and PHONE_H1   // NAMED (Nov 25 2026, LR-4): and PHONE_LR4
     // NAMED (Nov 23 2026, P3-3): and PHONE_P33. NAMED (Nov 23 2026, LR-2): and PHONE_LR2   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
@@ -566,6 +569,7 @@ function api(method, u, request) {
   // so the Message button and the "..." menu are compared at phone widths; only that one answer, so no other page changes
   if ((COMPARE || GUIDE_SCAN || SHOTS) && !LR3 && p === "/api/bfp/seller/ana") return lr3Api(method, u, request);   // and PHONE_GUIDE
   if (LR4) { const a = lr4Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 25 2026, LR-4)
+  if (H1) { const a = h1Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 25 2026, H1): the backend's own libs over H1S.db
   if (FX3) { const a = fx3Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 22 2026, FX3)
   if (P23 && FX2S.on && !FX2S.inner) { const a = fx2Api(method, u, request); if (a !== undefined) return a; }   // NAMED (Nov 21 2026, FX2)
   // NAMED (Nov 20 2026, P3-1): with PHONE_P31=1, a free account's /api/auth/me and Resend email first (p31Api); then P2-3's posts and P2-1's fixtures
@@ -640,6 +644,9 @@ function serve() {
     // NAMED (Nov 25 2026, LR-4B): PHONE_LR4 step 7b holds bf-safety.js back, then answers it as usual
     // NAMED (Nov 25 2026, LR-4B): PHONE_LR4_SELLER=<file> serves that file as /@rose (to show step 7b fails on an older seller.html)
     if (LR4 && process.env.PHONE_LR4_SELLER && p === "/@rose" && !/[?&]__plain=1/.test(req.url)) { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(fs.readFileSync(process.env.PHONE_LR4_SELLER)); return; }
+    // NAMED (Nov 25 2026, H1): PHONE_H1 step 10 holds bf-verified.js back; PHONE_H1_SELLER=<file> serves that file as seller.html
+    if (H1 && H1S.verifiedDelay && p === "/scripts/bf-verified.js" && !req.h1Held) { req.h1Held = true; setTimeout(() => server.emit("request", req, res), H1S.verifiedDelay); return; }
+    if (H1 && process.env.PHONE_H1_SELLER && p === "/seller.html") { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(fs.readFileSync(process.env.PHONE_H1_SELLER)); return; }
     if (LR4 && LR4S.safetyDelay && p === "/scripts/bf-safety.js" && !req.lr4Held) { req.lr4Held = true; setTimeout(() => server.emit("request", req, res), LR4S.safetyDelay); return; }
     // NAMED (Nov 20 2026, P2-3): /p/<id> is the backend's page (lib/postPage.js over P23S.db), as _redirects proxies it
     if ((P23 || P32 || P31) && /^\/p\/[^/]+$/.test(p)) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 21 2026, P3-1B): and PHONE_P31
@@ -873,6 +880,47 @@ async function guideRule(cdp, page, w) {
 }
 let guideListed = 0;   // NAMED (Nov 25 2026, HOTFIX-G1)
 
+/* NAMED (Nov 25 2026, H1B): NOTHING TO TAP UNDER THE RESTING MIST (MIST_CLEAR, the same idea as GUIDE_CLEAR). The mist
+   (#tmx-presence-root, Termaximus's presence) rests fixed at the bottom right, 56 x 56, 16 px above the bottom bar. With the
+   page scrolled to its END (worked out from the boxes, as GUIDE_CLEAR does, so nothing scrolls and no feed loads more), no
+   button, link, input or other tappable element may meet the mist's box; a fixed control is judged where it is. The mist's own
+   parts and the Guide's are their own. Every phone open() runs it, in every phone mode, PHONE_COMPARE included. */
+const MIST_CLEAR = String.raw`(function(){
+  var mist = document.getElementById("tmx-presence-root");
+  if (!mist) return null;
+  var m = mist.getBoundingClientRect(), mc = getComputedStyle(mist);
+  if (m.width < 1 || m.height < 1 || mc.display === "none" || mc.visibility === "hidden" || mc.opacity === "0") return null;
+  var guide = document.getElementById("tmx-guide-root");
+  var maxS = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+  function shown(n){ for (var e = n; e && e.nodeType === 1; e = e.parentElement) { var c = getComputedStyle(e); if (c.display === "none" || c.visibility === "hidden" || c.opacity === "0") return false; } return true; }
+  function fixedUp(n){ for (var e = n; e && e.nodeType === 1; e = e.parentElement) if (getComputedStyle(e).position === "fixed") return true; return false; }
+  function name(n){ var c = n.className && n.className.baseVal !== undefined ? n.className.baseVal : n.className; return n.tagName.toLowerCase() + (n.id ? "#" + n.id : "") + (c ? "." + String(c).trim().split(/\s+/).slice(0, 2).join(".") : ""); }
+  var SEL = "a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=tab],[role=switch],summary,[tabindex]:not([tabindex='-1'])";
+  // a box that scrolls (a wide code block, a list) is touched too: it counts as tappable
+  var els = [].slice.call(document.querySelectorAll(SEL));
+  [].forEach.call(document.querySelectorAll("body *"), function(n){ if (els.indexOf(n) !== -1) return; var c = getComputedStyle(n);
+    if ((/(auto|scroll)/.test(c.overflowX) && n.scrollWidth > n.clientWidth + 1) || (/(auto|scroll)/.test(c.overflowY) && n.scrollHeight > n.clientHeight + 1)) { var q = n.getBoundingClientRect(); if (!(q.left <= m.left && q.right >= m.right && q.top <= m.top && q.bottom >= m.bottom)) els.push(n); } });   // a scroller that holds the whole mist is the canvas, not under it
+  var hits = [];
+  els.forEach(function(n){
+    if (mist.contains(n) || (guide && guide.contains(n))) return;
+    var r = n.getBoundingClientRect(); if (r.width < 2 || r.height < 2 || !shown(n)) return;
+    if (r.left >= m.right - 0.5 || r.right <= m.left + 0.5) return;
+    var top = fixedUp(n) ? r.top : r.top + scrollY - maxS, bottom = top + r.height;   // where it sits once the page is at its end
+    if (top < m.bottom - 0.5 && bottom > m.top + 0.5) hits.push(name(n) + " \"" + (n.innerText || n.getAttribute("aria-label") || n.value || "").replace(/\s+/g, " ").trim().slice(0, 24) + "\" " +
+      Math.round(r.left) + "," + Math.round(r.top + scrollY) + " " + Math.round(r.width) + "x" + Math.round(r.height) + (fixedUp(n) ? " fixed" : ""));
+  });
+  return { mist: [Math.round(m.left), Math.round(m.top), Math.round(m.width), Math.round(m.height)], end: maxS, hits: hits };
+})()`;
+const mistHits = {};   // page@width -> every hit
+let mistPages = 0;
+async function mistRule(cdp, page, w, at) {
+  const g = await evaluate(cdp, MIST_CLEAR);
+  if (!g) return;   // no mist on this page
+  mistPages++;
+  if (g.hits.length) mistHits[page + "@" + w] = g.hits;
+  check((at || page + " at " + w + ": ") + "MIST_CLEAR: nothing to tap under the resting mist with the page at its end (" + g.mist.join(",") + ")", g.hits.length === 0, g.hits.length + " " + J(g.hits.slice(0, 8)));
+}
+
 /* ── open a page at a size ── */
 async function open(cdp, origin, page, w, h, phone) {
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: phone ? 2 : 1, mobile: phone, screenWidth: w, screenHeight: h });
@@ -884,6 +932,7 @@ async function open(cdp, origin, page, w, h, phone) {
   for (let i = 0; i < 80; i++) { try { if (await evaluate(cdp, "document.readyState === 'complete'")) break; } catch (e) { /* navigating */ } await sleep(100); }
   await sleep(phone ? 1600 : 1800);
   if (phone && MODE === "check" && !COMPARE && !SHOTS) await guideRule(cdp, page, w);   // NAMED (Nov 24 2026, LR-3B): every phone mode. NAMED (Nov 25 2026, HOTFIX-G1): but PHONE_COMPARE
+  if (phone && MODE === "check" && !SHOTS) await mistRule(cdp, page, w);   // NAMED (Nov 25 2026, H1B): MIST_CLEAR, every phone mode, PHONE_COMPARE too
 }
 async function shotPage(cdp, file, w) {
   const hgt = await evaluate(cdp, "Math.min(document.documentElement.scrollHeight, 9000)");
@@ -945,7 +994,7 @@ const ORBIT = String.raw`(function(){
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: code, body: Buffer.from(body).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,PATCH,DELETE,OPTIONS" }] });
-        } else if ((P23 || P32) && u.origin === P23_STORAGE) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32
+        } else if ((P23 || P32 || H1) && u.origin === P23_STORAGE) {   // NAMED (Nov 21 2026, P3-2): and PHONE_P32. NAMED (Nov 25 2026, H1): and PHONE_H1 (the Market's photos)
           // NAMED (Nov 20 2026, P2-3): a post's photos, the frontend's own brand pictures
           const pic = P21_IMG[(u.pathname.length % P21_IMG.length)];
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: fs.readFileSync(path.join(FRONTEND, pic)).toString("base64"),
@@ -984,6 +1033,7 @@ const ORBIT = String.raw`(function(){
     else if (LR2) { await lr2Run(cdp, origin); PAGES = []; }   // NAMED (Nov 23 2026, LR-2)
     else if (LR3) { await lr3Run(cdp, origin); PAGES = []; }   // NAMED (Nov 24 2026, LR-3)
     else if (LR4) { await lr4Run(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, LR-4)
+    else if (H1) { await h1Run(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, H1)
     else if (COMPARE) { await compareRun(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, HOTFIX-G1)
     else if (SHOTS) { await shotsRun(cdp, origin); PAGES = []; }   // NAMED (Nov 25 2026, HOTFIX-G1)
     else if (GUIDE_SCAN) {   // NAMED (Nov 24 2026, LR-3B): only the Guide-tab rule, every listed page at 360, 390 and 430
@@ -1707,13 +1757,14 @@ async function p23World(empty) {
   db.t.notifications.length = 0;
   return { db, deps };
 }
-const P23_IS = p => /^\/api\/(feed\/|posts|comments\/|follows|bfp\/seller\/pat$|me\/relation$)/.test(p);
+const P23_IS = p => /^\/api\/(feed\/|posts|comments\/|follows|bfp\/seller\/pat$|me\/relation$|home\/suggestions$)/.test(p);   // NAMED (Nov 25 2026, H1): + the empty Following board's suggestions
 async function p23Api(method, u, request) {
   const P = require("../lib/posts"), d = P23S.deps, me = ROSE.id, p = u.pathname, q = k => u.searchParams.get(k) || undefined;
   let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; }
   const out = r => r.status === 200 ? r.body : { __status: r.status, __body: r.body };
   let m;
   if (p === "/api/feed/following" && method === "GET") return out(await P.followingFeed(d, me, q("cursor")));
+  if (p === "/api/home/suggestions") return out(await require("../lib/homeTabs").suggestPeople(d, me));   // NAMED (Nov 25 2026, H1)
   if (p === "/api/posts/saved") return out(await P.savedPosts(d, me, q("cursor")));
   if ((m = /^\/api\/posts\/by\/([^/]+)$/.exec(p))) return out(await P.postsByAuthor(d, me, m[1], q("cursor")));
   if (p === "/api/posts" && method === "POST") return out(await P.createPost(d, me, b));
@@ -1848,7 +1899,11 @@ async function p23Run(cdp, origin) {
   const px = v => Number(String(v).replace("px", ""));
   const rgb = hex => "rgb(" + [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", ") + ")";
   const fx1Feed = async (w, id, badge) => {
+    // NAMED (Nov 25 2026, H1): BEFORE Market always drew its dot; AFTER only when a listing is new (PHONE_H1 checks when). The dot's
+    // face is measured here with has-dot set, then the tab is put back as it was.
+    const hadDot = await ev("(function(){var t=document.getElementById('tabMarket');var h=t.classList.contains('has-dot');t.classList.add('has-dot');return h;})()");
     const at = "FX1 feed at " + w + ": ", F = DS.FEED, m = await ev(FX1_FEED_MEASURE + "(" + J(id) + ")");
+    if (!hadDot) await ev("document.getElementById('tabMarket').classList.remove('has-dot'),true");
     if (!m) { check(at + "the post is on the screen", false, "not found"); return null; }
     const barTop = m.bar.t;
     if (badge) {
@@ -1958,13 +2013,14 @@ async function p23Run(cdp, origin) {
     await shot("home-photo-post");
     if (w === 390) await fx1Shot("live-feed-" + FX1_TAG + ".png");
     await fx1Feed(w, P23_POST.photo, false);
-    await click("#tabMarket"); await sleep(400);
+    // NAMED (Nov 25 2026, H1): BEFORE Market opened the Coming soon sheet; AFTER Market is a tab (PHONE_H1) and For You still opens it
+    await click("#tabForYou"); await sleep(400);
     const fsoon = await ev("(function(){var s=document.getElementById('bfp-soon');if(!s||s.hidden)return null;var r=s.getBoundingClientRect();return {key:s.getAttribute('data-soon'),b:Math.round(r.bottom),l:Math.round(r.left),r:Math.round(r.right),focus:document.activeElement&&document.activeElement.id};})()");
-    check("FX1 feed at " + w + ": Market opens the Coming soon sheet, a bottom sheet across the screen, Close focused", !!fsoon && fsoon.key === "market" && fsoon.b <= h + 1 && fsoon.l <= 1 && fsoon.r >= w - 1 && fsoon.focus === "bfpSoonClose", J(fsoon));
+    check("FX1 feed at " + w + ": For You opens the Coming soon sheet, a bottom sheet across the screen, Close focused", !!fsoon && fsoon.key === "foryou" && fsoon.b <= h + 1 && fsoon.l <= 1 && fsoon.r >= w - 1 && fsoon.focus === "bfpSoonClose", J(fsoon));
     await pageChecks("FX1 feed Coming soon at " + w + ": ", { sheet: true });
     await click("#bfpSoonClose"); await sleep(300);
-    const fshut = await ev("(function(){return {hidden:document.getElementById('bfp-soon').hidden,focus:document.activeElement&&document.activeElement.id};})()");
-    check("FX1 feed at " + w + ": Close shuts it and focus returns to Market", fshut.hidden && fshut.focus === "tabMarket", J(fshut));
+    const fshut = await ev("(function(){var s=document.getElementById('bfp-soon');if(!s)return {hidden:null};return {hidden:s.hidden,focus:document.activeElement&&document.activeElement.id};})()");
+    check("FX1 feed at " + w + ": Close shuts it and focus returns to For You", fshut.hidden === true && fshut.focus === "tabForYou", J(fshut));
 
     // 2. Like, through lib/posts.js
     await scrollTo(P23_POST.text);
@@ -2104,13 +2160,19 @@ async function p23Run(cdp, origin) {
     Object.assign(P23S, await p23World(true));
     await open(cdp, origin, "home.html", w, h, true);
     at = "P23 few follows at " + w + ": ";
+    // NAMED (Nov 25 2026, H1): BEFORE following nobody showed the member's own post with Find people to follow under it; AFTER the
+    // empty Following board (the owner's canvas row 7, FeedFollowing) with lib/homeTabs.js's suggestions and an inline Follow.
+    const want = (await require("../lib/homeTabs").suggestPeople(P23S.deps, ROSE.id)).body.people.map(x => x.user_id);
+    await ev("new Promise(function(r){var n=0;(function w(){if(document.querySelector('#homeSuggest .bfh-row,#homeSuggest .bfh-note:not(:first-child)')||++n>40)return r(true);setTimeout(w,100);})();})");
+    const eb = await ev("(function(){var b=document.getElementById('homeFollowEmpty');var f=document.getElementById('findPeople');return {board:!!b&&!b.hidden,find:!!f&&!f.hidden,people:[].map.call(document.querySelectorAll('#homeSuggest [data-hfollow]'),function(x){var r=x.getBoundingClientRect();return x.getAttribute('data-hfollow')+' '+Math.round(r.width)+'x'+Math.round(r.height);})};})()");
+    check(at + "following nobody: the empty Following board, its suggestions those of lib/homeTabs.js, each Follow 44 px or more; no Find people block",
+      eb.board && !eb.find && want.length > 0 && J(eb.people.map(x => x.split(" ")[0])) === J(want) && eb.people.every(x => { const m = / (\d+)x(\d+)$/.exec(x); return +m[1] >= 44 && +m[2] >= 44; }), J([eb, want]));
     const em = await ev("(function(){var f=document.getElementById('findPeople');return {find:!!f&&!f.hidden,people:[].map.call(document.querySelectorAll('#findPeople [data-follow]'),function(b){var r=b.getBoundingClientRect();return b.textContent.trim()+' '+Math.round(r.width)+'x'+Math.round(r.height);}),own:document.querySelectorAll('#feed .bfp-post').length};})()");
-    check(at + "only the member's own post, then people to follow, each Follow 44 px or more", em.own === 1 && em.find && em.people.length === 3 && em.people.every(big), J(em));
-    await ev("(function(){var f=document.getElementById('findPeople');if(f)f.scrollIntoView({block:'center'});return true;})()"); await sleep(400);
+    void em;
     await pageChecks(at);
     await shot("home-few-follows");
-    await click("#findPeople [data-follow]"); await sleep(700);
-    check(at + "Follow there is stored", P23S.db.t.follows.length === 1 && P23S.db.t.follows[0].follower_id === ROSE.id, J(P23S.db.t.follows));
+    await click("#homeSuggest [data-hfollow]"); await sleep(700);
+    check(at + "Follow there is stored", P23S.db.t.follows.length === 1 && P23S.db.t.follows[0].follower_id === ROSE.id && P23S.db.t.follows[0].following_id === want[0], J(P23S.db.t.follows));
   }
 
   /* ══ FX2 (Nov 21 2026): at 390 x 844 (the tabs at every width), screenshots to Downloads\design (fx1Shot's scale) ══
@@ -4178,6 +4240,580 @@ async function lr4Run(cdp, origin) {
     const pub = P23S.db.t.posts.find(x => x.id === P23_POST.own) || {};
     check(at + "once confirmed, Save makes it Public", pub.audience === "public", pub.audience);
   }
+}
+
+/* ══ H1 (Nov 25 2026): PHONE_H1=1 ═════════════════════════════════════════════════════════════════════════
+   NAMED (Nov 25 2026, H1): Home's four boards (the owner's canvas row 7: FeedLocal, FeedFollowing, FeedMarket, FeedSearch) at
+   PHONE_H1_WIDTHS (default 360, 390, 430), fixtures only: no request leaves the browser. Every answer is the backend's own:
+   lib/homeTabs.js, lib/search.js and lib/posts.js over an in-memory database (scripts/_p23Db.js), rebuilt for each width; the
+   city lookup is a fake Nominatim (H1S.answers, the same {status, json} shape as checkHomeTabs). Each board is held to what the
+   libs themselves answer for the same viewer (the order, the people, the rules), then: the tabs underlined, the last tab kept
+   per device (and Home still opening when storage throws), no sideways swipe, the Market dot only for new listings; Local's
+   chips and the Change sheet (My city, Within 25 mi, Anywhere, "Use a different city", OpenStreetMap), the choice kept per
+   member, a failed lookup still saved; "Add your city"; Following, nobody followed, and Follow inline; Market's cards and
+   rail (no Tip), Like, Save, Share, Buy and Ask for a member and for a free account; Search, its filters, See all, paging,
+   recent searches with Clear, the privacy rules, back to the tab it came from; seller.html's Verified badge with
+   bf-verified.js and the seller's data each held back 1500 ms (PHONE_H1_SELLER=<file> serves an older seller.html, to show
+   the race is caught). Screenshots at 390 x 844 (DPR 2) to PHONE_H1_OUT (default Downloads\h1). */
+const H1 = process.env.PHONE_H1 === "1";
+const H1_WIDTHS = String(process.env.PHONE_H1_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const H1_OUT = process.env.PHONE_H1_OUT || path.join(os.homedir(), "Downloads", "h1");
+const H1S = { db: null, deps: null, free: false, calls: [], lookups: [], answers: {}, verifiedDelay: 0, sellerDelay: 0 };
+const h1u = n => "aaaaaaaa-0000-4000-8000-" + String(100 + n).padStart(12, "0");
+const h1p = n => "dddddddd-0000-4000-8000-" + String(n).padStart(12, "0");
+const h1l = n => "cccccccc-0000-4000-8000-" + String(n).padStart(12, "0");
+const H1P = { A: h1u(2), B: h1u(3), B2: h1u(4), C: h1u(5), E: h1u(7), FR: h1u(8), F: h1u(9), M: h1u(10), X: h1u(11), S: h1u(13), Z: h1u(15), FO: h1u(16) };
+const H1_SD = [32.72, -117.16];
+function h1World() {
+  const { memDb } = require("./_p23Db");
+  const OLD = ago(24 * 60);
+  const prof = (id, username, name, city, pt, optIn, extra) => Object.assign({ user_id: id, username, display_name: name, avatar_url: null, place_city: city, place_region: city ? "CA" : null,
+    place_country: city ? "US" : null, place_lat: pt ? pt[0] : null, place_lng: pt ? pt[1] : null, local_opt_in: !!optIn, verified_reason: null, updated_at: OLD }, extra || {});
+  const profiles = [
+    prof(ROSE.id, "rose", "Rose", "San Diego", H1_SD, true),
+    prof(H1P.A, "rosacuts", "Rosa Diaz", "North Park, San Diego", [32.73, -117.16], true, { updated_at: ago(2) }),
+    prof(H1P.B, "benito", "Ben Ito", "La Jolla", [32.84, -117.27], true, { updated_at: ago(3) }),
+    prof(H1P.B2, "esccobb", "Esc Cobb", "Escondido", [33.12, -117.09], true, { updated_at: ago(4) }),
+    prof(H1P.C, "caralopez", "Cara Lopez", "Los Angeles", [34.05, -118.24], true, { updated_at: ago(5) }),
+    prof(H1P.E, "elipark", "Eli Park", "San Diego", null, true, { verified_reason: "member", updated_at: ago(6) }),
+    prof(H1P.FR, "freddie", "Freddie Moss", "San Diego", H1_SD, true, { updated_at: ago(7) }),
+    prof(H1P.F, "fiona", "Fiona Black", "San Diego", H1_SD, true, { updated_at: ago(8) }),
+    prof(H1P.M, "milo", "Milo Hart", "San Diego", H1_SD, true, { updated_at: ago(9) }),
+    prof(H1P.X, "xavier", "Xavier Cole", "San Diego", H1_SD, true, { updated_at: ago(10) }),
+    prof(H1P.S, "samreed", "Sam Reed", null, null, false, { updated_at: ago(11) }),
+    prof(H1P.Z, "xxxstudio", "XXX Studio", "San Diego", H1_SD, true, { updated_at: ago(12) }),
+    prof(H1P.FO, "fola", "Fola Ade", "Austin", [30.27, -97.74], true, { updated_at: ago(13) })
+  ];
+  for (let i = 1; i < 23; i++) profiles.push(prof(h1u(200 + i), "painter" + String(i).padStart(2, "0"), "Painter " + i, null, null, false, { updated_at: ago(20 + i) }));
+  let n = 0;
+  const post = (id, author, body, extra) => Object.assign({ id, author_id: author, body, kind: "text", intent: "share", category: "hair_beauty", status: "published", audience: "public",
+    published_at: ago(++n), created_at: ago(n), like_count: 0, comment_count: 0, save_count: 0, share_count: 0, place_city: null, place_region: null, place_country: null, removed_at: null,
+    need_place: null, need_when: null, need_found_at: null, need_lat: null, need_lng: null, listing_id: null }, extra || {});
+  const posts = [
+    post(h1p(1), H1P.A, "Fresh fade in North Park, walk-ins until six."),
+    post(h1p(2), H1P.B, "Glow facial openings this week."),
+    post(h1p(3), H1P.B2, "Escondido market day, come say hello."),
+    post(h1p(4), H1P.C, "LA shoot recap from the weekend."),
+    post(h1p(5), H1P.F, "Fiona's fresh cuts."),
+    post(h1p(6), H1P.M, "Milo's fade day."),
+    post(h1p(7), H1P.B2, "Members circle note", { audience: "followers" }),
+    post(h1p(8), H1P.A, "Pending circle draft", { status: "pending" }),
+    post(h1p(9), H1P.S, "Need a hair stylist for a wedding on Saturday", { intent: "need", need_place: "San Diego" }),
+    post(h1p(10), H1P.E, "Walk-in sketch hours at the studio.", { category: "art" }),
+    post(h1p(11), H1P.X, "Fade deal today only."),
+    post(h1p(12), H1P.S, "Need a mover in Austin", { intent: "need", category: "cleaning_moving", need_place: "Austin, TX" }),
+    post(h1p(13), H1P.FO, "Austin hair day, chairs open.", { place_city: "Austin" })
+  ];
+  let k = 0;
+  const pic = name => [{ url: P23_STORAGE + "/storage/v1/object/public/listings/" + name + ".png", type: "image/png" }];
+  const listing = (id, seller, title, cat, extra) => Object.assign({ id, slug: null, seller_id: seller, title, description: "", price_bfc: 40, category_slug: cat, category: cat, listing_kind: "service",
+    media: pic("l" + id.slice(-2)), status: "active", created_at: ago(++k) }, extra || {});
+  const listings = [
+    listing(h1l(1), H1P.A, "Fade and beard trim", "hair_beauty", { description: "Skin fade and a beard line-up, about 45 minutes.", price_bfc: 35 }),
+    listing(h1l(2), H1P.B, "Glow facial", "hair_beauty", { description: "A calm hour, all products included.", price_bfc: 60 }),
+    listing(h1l(3), H1P.C, "LA portrait session", "art", { price_bfc: 120 }),
+    listing(h1l(4), H1P.E, "Pencil portrait", "art"),
+    listing(h1l(5), H1P.B2, "Escondido mural", "art", { price_bfc: 900 }),
+    listing(h1l(6), H1P.A, "Hair color session", "hair_beauty"),
+    listing(h1l(7), H1P.B, "Brow shaping", "hair_beauty", { price_bfc: 25 }),
+    listing(h1l(8), H1P.FR, "Fade kit", "hair_beauty"),
+    listing(h1l(9), H1P.F, "Fiona's fade", "hair_beauty"),
+    listing(h1l(10), H1P.X, "Xavier's trims", "hair_beauty"),
+    listing(h1l(11), H1P.M, "Milo's cuts", "hair_beauty"),
+    listing(h1l(12), ROSE.id, "Rose's sourdough", "food"),
+    listing(h1l(13), H1P.A, "Paused trim", "hair_beauty", { status: "paused" }),
+    listing(h1l(14), H1P.A, "Hidden trim", "hair_beauty")
+  ];
+  const ids = profiles.map(x => x.user_id);
+  const db = memDb({
+    categories: require("./_categories").rows(),
+    users: ids.map(id => ({ id, created_at: OLD, email_verified_at: OLD })), bf_profiles: profiles, profiles: [{ user_id: H1P.B, business_name: "Jolla Glow Studio", full_name: null, logo_url: null }],
+    posts, post_media: [], post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], user_preferences: [], member_media: [],
+    follows: [{ follower_id: H1P.FO, following_id: ROSE.id, created_at: OLD }],
+    member_blocks: [{ blocker_id: H1P.F, blocked_id: ROSE.id }], member_mutes: [{ muter_id: ROSE.id, muted_id: H1P.M }],
+    moderation_queue: [{ id: h1u(900), object_type: "listing", object_id: h1l(14), state: "hidden" }],
+    marketplace_listings: listings,
+    lead_fingerprints: [{ user_id: ROSE.id, categories: ["hair_beauty"], reach: "local" }, { user_id: H1P.S, categories: ["hair_beauty"], reach: "online" }],
+    home_prefs: [], geo_cache: [], listing_likes: [], listing_saves: []
+  });
+  const banned = new Set([H1P.X]), freeIds = new Set([H1P.FR]);
+  const deps = { sb: db.client, now: () => new Date(NOW).toISOString(), env: { SUPABASE_URL: P23_STORAGE }, claims: () => null, push: async () => {}, background: j => j,
+    ownerPublic: async id => !banned.has(id), tierOf: async id => (freeIds.has(id) || (id === ROSE.id && H1S.free) ? "free" : "member"),
+    membersPanel: () => require("../lib/membership").membersPanelFromCode(),
+    clock: () => Date.now(), sleep: ms => new Promise(r => setTimeout(r, ms)),
+    request: async url => { H1S.lookups.push(url); const q = decodeURIComponent((/[?&]q=([^&]*)/.exec(url) || [])[1] || "").replace(/\+/g, " "); const a = H1S.answers[q]; if (a instanceof Error) throw a; return a || { status: 200, json: [] }; } };
+  return { db, deps };
+}
+const H1_CALL = (method, p) => /^\/api\/(feed\/(local|following)|home\/(tabs|prefs|market|market\/seen|suggestions)|search|follows|follows\/[^/]+\/counts|categories|auth\/me|bfp\/seller\/rose)$/.test(p) ||
+  /^\/api\/(listings\/[^/]+\/(like|save)|posts\/[^/]+\/(like|save))$/.test(p) || (method === "POST" && (/^\/api\/marketplace\/listings\/[^/]+\/buy$/.test(p) || p === "/api/messages"));
+function h1Api(method, u, request) {
+  if (!H1_CALL(method, u.pathname)) return undefined;
+  return h1Answer(method, u, request);
+}
+async function h1Answer(method, u, request) {
+  const P = require("../lib/posts"), HT = require("../lib/homeTabs"), SR = require("../lib/search");
+  const d = H1S.deps, me = ROSE.id, p = u.pathname, q = k => u.searchParams.get(k) || undefined;
+  let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; }
+  if (!/^\/api\/(auth\/me|categories|bfp\/)/.test(p)) H1S.calls.push(method + " " + p + (u.search || ""));
+  const out = r => r.status === 200 ? r.body : { __status: r.status, __body: r.body };
+  const panel = require("../lib/membership").membersPanelFromCode();
+  let m;
+  if (p === "/api/auth/me") return { user: Object.assign({}, ROSE, { email_verified_at: ago(24) }),
+    access: H1S.free ? { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription", tier: "free", email_verified: true, members_panel: panel }
+      : { active: true, exempt: false, access_reason: "subscription", inactive_reason: null, tier: "member", email_verified: true, members_panel: panel },
+    subscription: null, profile: { username: "rose" } };
+  if (p === "/api/categories") return { categories: require("./_categories").rows().map(c => ({ slug: c.slug, name: c.name })) };
+  if (p === "/api/bfp/seller/rose") {
+    const v = { seller: { user_id: ROSE.id, username: "rose", display_name: "Rose", tagline: "Maple Street Bakery", avatar_url: null }, products: [], services: [], support_links: [], verified: "member" };
+    return H1S.sellerDelay ? new Promise(r => setTimeout(() => r(v), H1S.sellerDelay)) : v;
+  }
+  if (p === "/api/feed/following") return out(await P.followingFeed(d, me, q("cursor")));
+  if (p === "/api/feed/local") return out(await HT.localFeed(d, me, q("cursor")));
+  if (p === "/api/home/tabs") return out(await HT.tabsState(d, me));
+  if (p === "/api/home/prefs" && method === "PUT") return out(await HT.savePrefs(d, me, b));
+  if (p === "/api/home/market") return out(await HT.marketFeed(d, me, { category: q("category"), cursor: q("cursor") }));
+  if (p === "/api/home/market/seen") return out(await HT.marketSeen(d, me));
+  if (p === "/api/home/suggestions") return out(await HT.suggestPeople(d, me));
+  if ((m = /^\/api\/listings\/([^/]+)\/(like|save)$/.exec(p))) return out(await (m[2] === "like" ? HT.likeListing : HT.saveListing)(d, me, m[1], method === "POST"));
+  if ((m = /^\/api\/posts\/([^/]+)\/(like|save)$/.exec(p))) return out(await P[m[2]](d, me, m[1], method === "POST"));
+  if (p === "/api/search") return out(await SR.search(d, me, { q: q("q"), scope: q("scope"), cursor: q("cursor") }));
+  if (p === "/api/follows" && method === "POST") return out(await P.follow(d, me, b));
+  if ((m = /^\/api\/follows\/([^/]+)\/counts$/.exec(p))) return out(await P.followCounts(d, me, m[1]));   // the storefront: Rose's own (self)
+  if (/^\/api\/marketplace\/listings\/[^/]+\/buy$/.test(p)) return { purchased: true, balance: 965 };
+  if (p === "/api/messages") return { message: { id: h1u(950), receiver_id: b.receiver_id } };
+  return { __status: 404, __body: { error: "Not found" } };
+}
+async function h1Run(cdp, origin) {
+  fs.mkdirSync(H1_OUT, { recursive: true });
+  console.log("browserCheckPhone H1 (Home: Local, Following, Market, Search; the Change sheet; Follow; Buy, Ask, Save for a member and a free account; Search and its filters; back; the Verified race) at " + H1_WIDTHS.join(", "));
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT_ = require("../lib/homeTabs"), SR_ = require("../lib/search"), HM = require("./designSpec").HOME;
+  const HTS = { 360: 780, 390: 844, 430: 932 };
+  const COVER = /^(div|section|aside)[#.](bf-buy-sheet|bf-members-panel|homeSheet|homeSheetBack|homeSearch|bfa-veil)[ .]/;
+  const pageChecks = async (at, opts) => {
+    const mm = await ev(MEASURE);
+    check(at + "no horizontal scroll", !mm.hscroll, J(mm.wide));
+    check(at + "no text cut off", mm.clipped.length === 0, J(mm.clipped));
+    check(at + "every tap target is at least 44 x 44", mm.smallCount === 0, mm.smallCount + " " + J(mm.small));
+    const ok = x => !!(opts && opts.cover) && COVER.test(x);
+    const deco = mm.deco.filter(x => !ok(x));
+    check(at + "decoration is under the text", deco.length === 0, J(deco));
+    const over = mm.over.filter(x => !/^(div#tmx-presence-root|nav#bf-tabbar|div\.feed-top|div#homeLocalChips|div#homeMarketChips|div\.bfh-chips) /.test(x) && !ok(x));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.cover ? " (the sheet is meant to cover the page)" : ""), over.length === 0, J(over));
+    return mm;
+  };
+  const tap = sel => ev("(function(){var e=document.querySelector(" + J(sel) + ");if(!e)return false;e.click();return true;})()");
+  const waitFor = async (expr, n) => { for (let i = 0; i < (n || 40); i++) { try { if (await ev(expr)) return true; } catch (e) { /* navigating */ } await sleep(100); } return false; };
+  const SHEET_CLEAR = "(function(){var s=document.getElementById('homeSheet'),b=document.getElementById('bf-tabbar');var bt=b?b.getBoundingClientRect().top:innerHeight;var r=s.getBoundingClientRect();var hid=[].filter.call(s.querySelectorAll('button,input,textarea,a,.bfh-osm'),function(e){e.scrollIntoView({block:'nearest'});var q=e.getBoundingClientRect();return q.bottom>bt+0.5||q.top<r.top-0.5;}).map(function(e){return e.id||e.className||e.tagName;});s.scrollTop=0;return {bottom:Math.round(r.bottom),bar:Math.round(bt),hidden:hid};})()";
+  const settle = async () => { await sleep(350); };
+  const calls = re => H1S.calls.filter(c => re.test(c));
+  const TABS = "(function(){var t=[].map.call(document.querySelectorAll('.feed-tab'),function(b){var r=b.getBoundingClientRect(),a=getComputedStyle(b,'::after'),c=getComputedStyle(b);" +
+    "return {id:b.id,txt:b.textContent.trim(),sel:b.getAttribute('aria-selected'),shown:r.width>0,dot:b.classList.contains('has-dot'),line:a.content!=='none'&&a.content!==''?{h:a.height,bg:a.backgroundColor}:null,bb:c.borderBottomColor,bbw:c.borderBottomWidth};});" +
+    "return {tabs:t,body:document.body.getAttribute('data-home-tab'),kept:(function(){try{return localStorage.getItem('bf_home_tab');}catch(e){return 'threw';}})()," +
+    "local:!document.getElementById('homeLocal').hidden,market:!document.getElementById('homeMarket').hidden,feed:!document.getElementById('feed').hidden,follow:!document.getElementById('homeFollowEmpty').hidden};})()";
+  const POSTS_IN = sel => "(function(){var seen=[];[].forEach.call(document.querySelectorAll(" + J(sel + " [data-post]") + "),function(e){var id=e.getAttribute('data-post');if(seen.indexOf(id)===-1)seen.push(id);});return seen;})()";
+  const ACCENT = "rgb(34, 211, 238)";
+  const rgb = hex => { const v = parseInt(hex.slice(1), 16); return "rgb(" + (v >> 16) + ", " + ((v >> 8) & 255) + ", " + (v & 255) + ")"; };
+  const fresh = async () => { Object.assign(H1S, h1World(), { free: false, calls: [], lookups: [], answers: {}, verifiedDelay: 0, sellerDelay: 0 }); };
+  const clearKeys = () => ev("(function(){try{localStorage.removeItem('bf_home_tab');localStorage.removeItem('bf_recent_searches');}catch(e){}return true;})()");
+
+  for (const w of H1_WIDTHS) {
+    const h = HTS[w] || 844;
+    const shot = async name => { if (w === 390) { await sleep(250); const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(H1_OUT, name + ".png"), Buffer.from(r.data, "base64")); } };
+    await fresh();
+    await open(cdp, origin, "home.html", w, h, true);
+    await clearKeys();
+
+    // 1. FeedFollowing: nobody followed, up to 8 suggestions in the lib's own order, Follow inline
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("document.querySelectorAll('#homeSuggest .bfh-row').length>0", 60);
+    let at = "H1 Following, nobody followed at " + w + ": ";
+    const want = (await HT_.suggestPeople(H1S.deps, ROSE.id)).body.people;
+    let fe = await ev("(function(){var b=document.getElementById('homeFollowEmpty');var q=function(s){return b.querySelector(s);};var R=function(e){if(!e)return null;var r=e.getBoundingClientRect(),c=getComputedStyle(e);return {t:Math.round(r.top),l:Math.round(r.left),r:Math.round(r.right),w:Math.round(r.width),h:Math.round(r.height),fs:c.fontSize,fw:c.fontWeight,col:c.color,bg:c.backgroundColor,txt:e.textContent.trim()};};" +
+      "return {shown:!b.hidden,feedHidden:getComputedStyle(document.getElementById('feed')).display==='none',icon:R(q('.bfh-follow-ic')),title:R(q('.bfh-follow-t')),sub:R(q('.bfh-follow-s')),label:R(q('.bfh-lbl'))," +
+      "rows:[].map.call(b.querySelectorAll('#homeSuggest .bfh-row'),function(r){var f=r.querySelector('.bfh-fbtn'),fr=f&&f.getBoundingClientRect(),ff=f&&f.querySelector('.bfh-fbtnf'),fq=ff&&ff.getBoundingClientRect();return {id:f&&f.getAttribute('data-hfollow'),face:fq?Math.round(fq.height):null,name:(r.querySelector('.bfh-name')||{}).textContent,sub:(r.querySelector('.bfh-sub')||{}).textContent,badge:!!r.querySelector('[data-bf-verified]'),av:R(r.querySelector('.bfh-av')),btn:fr?{h:Math.round(fr.height),w:Math.round(fr.width),r:Math.round(fr.right)}:null};})};})()");
+    check(at + "the board: the " + HM.FOLLOW.ICON + " px circle, \"" + HM.FOLLOW.TITLE + "\" " + HM.FOLLOW.TITLE_WEIGHT + " " + HM.FOLLOW.TITLE_FONT + " px, the line, \"" + HM.FOLLOW.LABEL + "\"; the feed hidden",
+      fe.shown && fe.feedHidden && fe.icon.w === HM.FOLLOW.ICON && fe.icon.h === HM.FOLLOW.ICON && fe.title.txt === HM.FOLLOW.TITLE && fe.title.fs === HM.FOLLOW.TITLE_FONT + "px" && fe.title.fw === String(HM.FOLLOW.TITLE_WEIGHT) &&
+      fe.sub.txt === HM.FOLLOW.SUB && fe.label.txt === HM.FOLLOW.LABEL && fe.label.col === rgb(HM.FOLLOW.LABEL_COLOR), J([fe.shown, fe.feedHidden, fe.icon, fe.title, fe.sub, fe.label]));
+    check(at + "up to " + HM.FOLLOW.MAX + " people, exactly the lib's (" + want.length + "), in its order: nearest first, then shared categories, Verified first among equals",
+      want.length === HM.FOLLOW.MAX && J(fe.rows.map(x => x.id)) === J(want.map(x => x.user_id)), J([fe.rows.map(x => x.name), want.map(x => x.name)]));
+    check(at + "never Rose herself, nobody who blocked her, nobody she muted, nobody suspended, no adult name; Eli Park (Verified) carries the badge",
+      fe.rows.every(x => [ROSE.id, H1P.F, H1P.M, H1P.X, H1P.Z].indexOf(x.id) === -1) && fe.rows.some(x => x.id === H1P.E && x.badge), J(fe.rows.map(x => [x.name, x.badge])));
+    check(at + "each row: a " + HM.FOLLOW.AVATAR + " px picture, the name, the lib's category and place, Follow: the " + HM.FOLLOW.BTN_H + " px face in a 44 px target, inside the screen",
+      fe.rows.every((x, i) => x.av.w === HM.FOLLOW.AVATAR && x.btn && x.btn.h >= 44 && x.btn.w >= 44 && x.btn.r <= w && x.face === HM.FOLLOW.BTN_H && x.sub === [want[i].category, want[i].area].filter(Boolean).join(" \u00b7 ")), J(fe.rows.map(x => [x.sub, x.btn, x.face])));
+    let tb = await ev(TABS);
+    check(at + "Following is the tab (nothing kept yet), underlined: a 3 px accent line under it only",
+      tb.body === "following" && tb.tabs.filter(t => t.shown && t.line).length === 1 && (tb.tabs.find(t => t.id === "tabFollowing").line || {}).h === "3px" && (tb.tabs.find(t => t.id === "tabFollowing").line || {}).bg === ACCENT, J(tb.tabs));
+    const dotWant = (await HT_.tabsState(H1S.deps, ROSE.id)).body.market_new;
+    check(at + "the Market dot: drawn because the server says a listing is new since her last visit (never visited)", dotWant === true && tb.tabs.find(t => t.id === "tabMarket").dot === true, J([dotWant, tb.tabs.find(t => t.id === "tabMarket")]));
+    await ev("scrollTo(0,0),true");
+    await pageChecks(at);
+    await shot("following-empty");
+    const firstId = fe.rows[0].id;
+    await tap('#homeSuggest [data-hfollow="' + firstId + '"]');
+    await waitFor("!document.querySelector('#homeSuggest [data-hfollow=\"" + firstId + "\"]')", 30);
+    const fb = await ev("(function(){var b=[].filter.call(document.querySelectorAll('#homeSuggest .bfh-fbtn'),function(x){return x.textContent==='Following';});return b.map(function(x){return [x.disabled,x.classList.contains('is-on')];});})()");
+    check(at + "Follow inline: one POST /api/follows, the row reads Following (disabled), and the follow is stored",
+      calls(/^POST \/api\/follows$/).length === 1 && fb.length === 1 && fb[0][0] === true && H1S.db.t.follows.some(x => x.follower_id === ROSE.id && x.following_id === firstId), J([fb, calls(/follows/)]));
+    // no sideways swipe: a swipe left over the board leaves the tab alone
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: w - 40, y: 420 }] });
+    for (let i = 1; i <= 6; i++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: w - 40 - i * 45, y: 422 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await sleep(300);
+    tb = await ev(TABS);
+    check(at + "no sideways swipe: a swipe left over the board keeps Following", tb.body === "following", tb.body);
+
+    // 2. FeedLocal: posts and open Needs within 25 mi, newest first, the chips, the Local line
+    await tap("#tabLocal");
+    await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>0&&!document.getElementById('homeLocalChips').hidden", 60);
+    await settle();
+    at = "H1 Local at " + w + ": ";
+    const lw = (await HT_.localFeed(H1S.deps, ROSE.id)).body;
+    let ids = await ev(POSTS_IN("#homeLocalFeed"));
+    check(at + "the posts are the lib's for Within 25 mi, newest first (" + lw.posts.length + "): Rosa (North Park), Ben (La Jolla), Sam's open Need, Eli (San Diego by name)",
+      J(ids) === J(lw.posts.map(x => x.id)) && J(ids.slice().sort()) === J([h1p(1), h1p(2), h1p(9), h1p(10)].sort()), J([ids, lw.posts.map(x => x.id)]));
+    check(at + "never: Escondido and LA (outside 25 mi), a member who blocked her, one she muted, a suspended one, Followers-only, pending, a Need elsewhere",
+      [h1p(3), h1p(4), h1p(5), h1p(6), h1p(7), h1p(8), h1p(11), h1p(12)].every(x => ids.indexOf(x) === -1), J(ids));
+    const ll = await ev("(function(){var e=document.querySelector('#homeLocalFeed [data-post=\"" + h1p(1) + "\"] .bfp-kind.is-local .bfp-kmeta');var c=e&&getComputedStyle(e);return e?{txt:e.textContent,fs:c.fontSize,col:c.color}:null;})()");
+    check(at + "the Local line under Rosa's post: \"Hair & Beauty · North Park · 0.7 mi\" (" + HM.LOCAL_LINE.FONT + " px " + HM.LOCAL_LINE.COLOR + "): under a mile in tenths",
+      !!ll && ll.txt === "Hair & Beauty · North Park · 0.7 mi" && ll.fs === HM.LOCAL_LINE.FONT + "px" && ll.col === rgb(HM.LOCAL_LINE.COLOR), J(ll));
+    const lb = await ev("(function(){var e=document.querySelector('#homeLocalFeed [data-post=\"" + h1p(2) + "\"] .bfp-kmeta');return e&&e.textContent;})()");
+    check(at + "a mile or more is whole miles: Ben's \"Hair & Beauty · La Jolla · 10 mi\"; a neighbourhood only where the member typed one", lb === "Hair & Beauty · La Jolla · 10 mi", lb);
+    const ch = await ev("(function(){var b=document.getElementById('homeLocalChips');var cs=[].map.call(b.querySelectorAll('.bfh-chip'),function(c){var r=c.getBoundingClientRect(),f=c.querySelector('.bfh-chipf').getBoundingClientRect();return {txt:c.textContent.trim(),hit:Math.round(r.height),h:Math.round(f.height),l:Math.round(f.left),t:Math.round(f.top),r:Math.round(f.right),on:c.classList.contains('is-on'),pin:!!c.querySelector('svg')};});var r=b.getBoundingClientRect();return {cs:cs,over:b.classList.contains('is-over'),l:cs.length?cs[0].l:null,t:cs.length?cs[0].t:null,full:document.body.classList.contains('feed-full')};})()");
+    check(at + "the chips: the city with a pin (on), \"" + HM.CHIPS.LOCAL.join("\", \"") + "\"; " + HM.CHIPS.H + " px faces in 44 px targets, inside the screen",
+      J(ch.cs.map(c => c.txt)) === J(["San Diego, CA", HM.CHIPS.LOCAL[0], HM.CHIPS.LOCAL[1]]) && ch.cs[0].on && ch.cs[0].pin && ch.cs.every(c => c.h === HM.CHIPS.H && c.hit === 44 && c.l >= 0 && c.r <= w), J(ch));
+    check(at + "over the full-screen feed the chips sit " + HM.CHIPS.LEFT + " px in and " + HM.CHIPS.TOP + " px down", ch.full && ch.over && ch.l === HM.CHIPS.LEFT && ch.t === HM.CHIPS.TOP, J([ch.full, ch.over, ch.l, ch.t]));
+    tb = await ev(TABS);
+    check(at + "Local is the tab, underlined, and kept on this device (bf_home_tab)", tb.body === "local" && tb.kept === "local" && (tb.tabs.find(t => t.id === "tabLocal").line || {}).bg === ACCENT && tb.local && !tb.market, J(tb));
+    await ev("scrollTo(0,0),true");
+    await pageChecks(at);
+    await shot("local");
+
+    // 3. the Change sheet; Anywhere kept per member; "Use a different city" looked up once; a failed lookup still saved
+    at = "H1 the Change sheet at " + w + ": ";
+    await tap("#homeLocalChange");
+    await waitFor("!document.getElementById('homeSheet').hidden", 20);
+    const sh = await ev("(function(){var s=document.getElementById('homeSheet');var o=[].map.call(s.querySelectorAll('.bfh-opt'),function(b){var r=b.getBoundingClientRect();return [b.textContent.trim(),b.getAttribute('aria-pressed'),Math.round(r.height),Math.round(r.right)];});var i=s.querySelector('#homeCityInput'),r=s.getBoundingClientRect();" +
+      "return {title:(s.querySelector('h2')||{}).textContent,opts:o,input:!!i,inputFs:i&&getComputedStyle(i).fontSize,label:(s.querySelector('label[for=homeCityInput]')||{}).textContent,osm:(s.querySelector('.bfh-osm')||{}).textContent,focus:document.activeElement&&document.activeElement.closest('#homeSheet')!==null,gps:/geolocation|Use my location/i.test(s.innerHTML),b:Math.round(r.bottom),l:Math.round(r.left),r:Math.round(r.right)};})()");
+    check(at + "My city, Within 25 mi (chosen), Anywhere, each 44 px or more; \"Use a different city\" (16 px text, no GPS); the OpenStreetMap credit; focus inside",
+      J(sh.opts.map(o => o[0])) === J(["My city", "Within 25 mi", "Anywhere"]) && sh.opts[1][1] === "true" && sh.opts.every(o => o[2] >= 44 && o[3] <= w) && sh.input && sh.inputFs === "16px" &&
+      /USE A DIFFERENT CITY/i.test(sh.label || "") && !sh.gps && /OpenStreetMap/.test(sh.osm || "") && sh.focus && sh.l >= 0 && sh.r <= w, J(sh));
+    const sc1 = await ev(SHEET_CLEAR);
+    check(at + "the sheet ends above the bottom bar, and every control in it (Use this city, Close) and the OpenStreetMap credit can be seen above the bar", sc1.bottom <= sc1.bar && sc1.hidden.length === 0, J(sc1));
+    await pageChecks(at + "(open) ", { cover: true });
+    await shot("local-change");
+    await ev("(function(){var b=[].filter.call(document.querySelectorAll('#homeSheet .bfh-opt'),function(x){return x.getAttribute('data-reach')==='anywhere';})[0];b.click();return true;})()");
+    await waitFor("document.getElementById('homeSheet').hidden", 30);
+    await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>4", 60);
+    const prefs1 = H1S.db.t.home_prefs.find(x => x.user_id === ROSE.id) || {};
+    ids = await ev(POSTS_IN("#homeLocalFeed"));
+    check(at + "Anywhere: one PUT /api/home/prefs, kept for the member (home_prefs), the chip reads Anywhere, Escondido and LA now show",
+      calls(/^PUT \/api\/home\/prefs$/).length === 1 && prefs1.local_reach === "anywhere" && ids.indexOf(h1p(3)) !== -1 && ids.indexOf(h1p(4)) !== -1 &&
+      (await ev("[].map.call(document.querySelectorAll('#homeLocalChips .bfh-chip'),function(c){return c.textContent.trim();}).join('|')")) === "San Diego, CA|Anywhere|Change", J([prefs1, ids]));
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>0&&!document.getElementById('homeLocalChips').hidden", 60);
+    tb = await ev(TABS);
+    check(at + "a reload opens Local again (the last tab, this device) with Anywhere (the member's choice, the server)",
+      tb.body === "local" && (await ev("[].map.call(document.querySelectorAll('#homeLocalChips .bfh-chip'),function(c){return c.textContent.trim();}).join('|')")) === "San Diego, CA|Anywhere|Change", J(tb.body));
+    H1S.answers["austin, tx"] = { status: 200, json: [{ lat: "30.2711286", lon: "-97.7436995" }] };
+    await tap("#homeLocalChange"); await waitFor("!document.getElementById('homeSheet').hidden", 20);
+    await ev("(function(){var i=document.getElementById('homeCityInput');i.value='Austin, TX';document.getElementById('homeCityGo').click();return true;})()");
+    await waitFor("document.getElementById('homeSheet').hidden", 40);
+    await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>0", 60);
+    const gc = H1S.db.t.geo_cache.find(x => x.place_key === "austin, tx") || H1S.db.t.geo_cache[0] || {};
+    const prefs2 = H1S.db.t.home_prefs.find(x => x.user_id === ROSE.id) || {};
+    ids = await ev(POSTS_IN("#homeLocalFeed"));
+    check(at + "\"Use a different city\" Austin, TX: one lookup (the fake Nominatim), cached by its text, the point rounded to 2 decimals; the chip reads Austin, TX",
+      H1S.lookups.length === 1 && /nominatim\.openstreetmap\.org\/search/.test(H1S.lookups[0]) && Number(gc.lat) === 30.27 && Number(gc.lng) === -97.74 && prefs2.local_place === "Austin, TX" && prefs2.local_lat === 30.27 &&
+      (await ev("(document.querySelector('#homeLocalChips .bfh-chip')||{}).textContent")).trim() === "Austin, TX", J([H1S.lookups, gc, prefs2]));
+    await tap("#homeLocalChange"); await waitFor("!document.getElementById('homeSheet').hidden", 20);
+    await ev("(function(){var b=[].filter.call(document.querySelectorAll('#homeSheet .bfh-opt'),function(x){return x.getAttribute('data-reach')==='25';})[0];b.click();return true;})()");
+    await waitFor("document.getElementById('homeSheet').hidden", 40); await settle();
+    await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>0", 60);
+    ids = await ev(POSTS_IN("#homeLocalFeed"));
+    check(at + "Austin, TX within 25 mi: the lib's posts, Fola's Austin post and Sam's Austin Need, nothing from San Diego",
+      J(ids) === J((await HT_.localFeed(H1S.deps, ROSE.id)).body.posts.map(x => x.id)) && ids.indexOf(h1p(13)) !== -1 && ids.indexOf(h1p(12)) !== -1 && ids.indexOf(h1p(1)) === -1, J(ids));
+    // a lookup that finds nothing still saves the place, and My city goes back to her own
+    await tap("#homeLocalChange"); await waitFor("!document.getElementById('homeSheet').hidden", 20);
+    await ev("(function(){document.getElementById('homeCityInput').value='Nowhereville';document.getElementById('homeCityGo').click();return true;})()");
+    await waitFor("document.getElementById('homeSheet').hidden", 40); await settle();
+    const prefs3 = H1S.db.t.home_prefs.find(x => x.user_id === ROSE.id) || {};
+    check(at + "a lookup that finds nothing still saves the place (no point), and the chip reads it", prefs3.local_place === "Nowhereville" && prefs3.local_lat === null && H1S.lookups.length === 2 &&
+      (await ev("(document.querySelector('#homeLocalChips .bfh-chip')||{}).textContent")).trim() === "Nowhereville", J(prefs3));
+    await tap("#homeLocalChange"); await waitFor("!document.getElementById('homeSheet').hidden", 20);
+    await ev("(function(){var b=[].filter.call(document.querySelectorAll('#homeSheet .bfh-opt'),function(x){return x.getAttribute('data-reach')==='city';})[0];b.click();return true;})()");
+    await waitFor("document.getElementById('homeSheet').hidden", 40); await settle();
+    await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>0", 60);
+    const prefs4 = H1S.db.t.home_prefs.find(x => x.user_id === ROSE.id) || {};
+    ids = await ev(POSTS_IN("#homeLocalFeed"));
+    check(at + "My city: back to San Diego, matched by the city's name (Rosa's North Park, Rose's San Diego, Eli's San Diego; not La Jolla)",
+      prefs4.local_reach === "city" && prefs4.local_place === null && ids.indexOf(h1p(1)) !== -1 && ids.indexOf(h1p(10)) !== -1 && ids.indexOf(h1p(2)) === -1 &&
+      J(ids) === J((await HT_.localFeed(H1S.deps, ROSE.id)).body.posts.map(x => x.id)), J([prefs4, ids]));
+
+    // 4. "Add your city" when no place is set
+    at = "H1 Local with no place at " + w + ": ";
+    const roseRow = H1S.db.t.bf_profiles.find(x => x.user_id === ROSE.id);
+    const keep = { place_city: roseRow.place_city, place_region: roseRow.place_region, place_country: roseRow.place_country, place_lat: roseRow.place_lat, place_lng: roseRow.place_lng };
+    Object.assign(roseRow, { place_city: null, place_region: null, place_country: null, place_lat: null, place_lng: null });
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("!document.getElementById('homeLocalState').hidden", 60);
+    const ac = await ev("(function(){var s=document.getElementById('homeLocalState');var a=s.querySelector('a.bfh-go'),r=a&&a.getBoundingClientRect();return {h2:(s.querySelector('h2')||{}).textContent,href:a&&a.getAttribute('href'),txt:a&&a.textContent,h:r&&Math.round(r.height),chips:document.getElementById('homeLocalChips').hidden};})()");
+    check(at + "\"Add your city\": the card and its link to Settings, Local (44 px or more); no chips",
+      /Add your city/.test(ac.h2 || "") && ac.href === "settings.html#local" && ac.h >= 44 && ac.chips === true, J(ac));
+    await pageChecks(at);
+    Object.assign(roseRow, keep);
+
+    // 5. FeedMarket: full-screen cards in the lib's order, the rail (no Tip), the category chips, Like, Save, Share, Buy, Ask
+    await open(cdp, origin, "home.html", w, h, true);
+    await tap("#tabMarket");
+    await waitFor("document.querySelectorAll('#homeMarketList .bfm-card').length>0", 60);
+    await settle();
+    at = "H1 Market at " + w + ": ";
+    const mw = (await HT_.marketFeed(H1S.deps, ROSE.id, {})).body;
+    const cards = await ev("[].map.call(document.querySelectorAll('#homeMarketList .bfm-card'),function(c){return c.getAttribute('data-listing');})");
+    check(at + "the cards are the lib's, in its order (nearest within reach, then newest): " + mw.listings.length + " on the first page",
+      J(cards) === J(mw.listings.map(x => x.id)) && cards[0] === h1l(1), J([cards, mw.listings.map(x => x.title)]));
+    check(at + "never: her own listing, a free account's, a blocked one's, a muted one's, a suspended one's, paused, hidden by moderation",
+      [h1l(8), h1l(9), h1l(10), h1l(11), h1l(12), h1l(13), h1l(14)].every(x => cards.indexOf(x) === -1), J(cards));
+    const cd = await ev("(function(){var c=document.querySelector('#homeMarketList .bfm-card');var R=function(e){if(!e)return null;var r=e.getBoundingClientRect(),s=getComputedStyle(e);return {l:Math.round(r.left),r:Math.round(r.right),t:Math.round(r.top),b:Math.round(r.bottom),w:Math.round(r.width),h:Math.round(r.height),fs:s.fontSize,fw:s.fontWeight,col:s.color,bg:s.backgroundColor,txt:e.textContent.trim()};};var q=function(s){return c.querySelector(s);};" +
+      "var img=q('.bfm-stage img');return {card:R(c),photo:img?{src:img.getAttribute('src'),ok:img.complete&&img.naturalWidth>0}:null,line:R(q('.bfm-line')),title:R(q('.bfm-title')),sub:R(q('.bfm-sub')),price:R(q('.bfm-price')),buy:R(q('.bfm-buy')),rail:R(q('.bfm-rail'))," +
+      "acts:[].map.call(c.querySelectorAll('.bfm-rail .bfm-act'),function(a){var r=a.getBoundingClientRect();return [a.getAttribute('data-mact'),a.textContent.trim(),Math.round(r.height),Math.round(r.width)];}),pic:R(q('.bfm-pic')),badge:R(q('.bfm-badge')),full:document.getElementById('homeMarketList').classList.contains('is-full'),bar:(document.getElementById('bf-tabbar')||{getBoundingClientRect:function(){return {top:0};}}).getBoundingClientRect().top};})()");
+    check(at + "a full-screen card (the screen wide, down to the bar) with its photo", cd.full && cd.card.w === w && cd.card.l === 0 && !!cd.photo && cd.photo.ok, J([cd.card, cd.photo, cd.bar]));
+    check(at + "the card's words: \"Hair & Beauty · North Park · 0.7 mi\", the title " + HM.INFO.TITLE_WEIGHT + " " + HM.INFO.TITLE_FONT + " px, Rosa Diaz, \"35 BFC\" gold " + HM.INFO.PRICE_FONT + " px, Buy " + HM.INFO.BUY_H + " px",
+      cd.line.txt === "Hair & Beauty · North Park · 0.7 mi" && cd.title.txt === "Fade and beard trim" && cd.title.fs === HM.INFO.TITLE_FONT + "px" && /^Rosa Diaz/.test(cd.sub.txt) &&
+      cd.price.txt === "35 BFC" && cd.price.col === rgb(HM.INFO.PRICE) && cd.price.fs === HM.INFO.PRICE_FONT + "px" && cd.buy.txt === "Buy" && cd.buy.h === HM.INFO.BUY_H && cd.buy.r <= w, J([cd.line, cd.title, cd.price, cd.buy]));
+    check(at + "the rail: the seller's " + HM.RAIL.AVATAR + " px picture with a follow, then " + HM.RAIL.MARKET.join(", ") + " (each 44 px or more); no Tip; " + HM.RAIL.RIGHT + " px from the right",
+      J(cd.acts.map(a => a[1])) === J(HM.RAIL.MARKET) && cd.acts.every(a => a[2] >= 44 && a[3] >= 44) && cd.pic.w === HM.RAIL.AVATAR && !!cd.badge && w - cd.rail.r === HM.RAIL.RIGHT &&
+      (await ev("!/Tip/.test(document.getElementById('homeMarketList').textContent)")), J([cd.acts, cd.pic, cd.rail]));
+    const cats = await ev("[].map.call(document.querySelectorAll('#homeMarketChips .bfh-chip'),function(c){return [c.textContent.trim(),c.getAttribute('aria-pressed')];})");
+    check(at + "the category chips: All (on), then the categories", cats.length > 5 && cats[0][0] === "All" && cats[0][1] === "true" && cats.some(c => c[0] === "Hair & Beauty"), J(cats.slice(0, 6)));
+    tb = await ev(TABS);
+    check(at + "Market is the tab, underlined; its dot is gone, and the visit is recorded (POST /api/home/market/seen)",
+      tb.body === "market" && tb.kept === "market" && !tb.tabs.find(t => t.id === "tabMarket").dot && calls(/^POST \/api\/home\/market\/seen$/).length >= 1 &&
+      !!(H1S.db.t.home_prefs.find(x => x.user_id === ROSE.id) || {}).market_seen_at, J(tb.tabs.find(t => t.id === "tabMarket")));
+    await ev("scrollTo(0,0),true");
+    await pageChecks(at);
+    await shot("market");
+    const card1 = '#homeMarketList .bfm-card[data-listing="' + h1l(1) + '"] ';
+    await tap(card1 + '[data-mact="like"]'); await waitFor("document.querySelector(" + J(card1 + '[data-mact="like"]') + ").getAttribute('aria-pressed')==='true'", 30);
+    await tap(card1 + '[data-mact="save"]'); await waitFor("document.querySelector(" + J(card1 + '[data-mact="save"]') + ").getAttribute('aria-pressed')==='true'", 30);
+    const sv = await ev("(document.querySelector(" + J(card1 + '[data-mact="save"]') + ")||{}).textContent");
+    check(at + "Like and Save: one POST each, stored (listing_likes, listing_saves), pressed, Save reads Saved",
+      calls(/^POST \/api\/listings\/[^/]+\/like$/).length === 1 && calls(/^POST \/api\/listings\/[^/]+\/save$/).length === 1 && H1S.db.t.listing_likes.some(x => x.user_id === ROSE.id && x.listing_id === h1l(1)) &&
+      H1S.db.t.listing_saves.some(x => x.user_id === ROSE.id && x.listing_id === h1l(1)) && String(sv).trim() === "Saved", J([calls(/listings/), sv]));
+    await tap(card1 + '[data-mact="save"]'); await waitFor("document.querySelector(" + J(card1 + '[data-mact="save"]') + ").getAttribute('aria-pressed')==='false'", 30);
+    check(at + "Save again: a DELETE, the row gone", calls(/^DELETE \/api\/listings\/[^/]+\/save$/).length === 1 && !H1S.db.t.listing_saves.some(x => x.user_id === ROSE.id && x.listing_id === h1l(1)));
+    await ev("(function(){window.__shared=null;navigator.share=function(o){window.__shared=o;return Promise.resolve();};return true;})()");
+    await tap(card1 + '[data-mact="share"]'); await sleep(200);
+    check(at + "Share hands the listing's address to the phone's share sheet", J(await ev("window.__shared")) === J({ title: "Fade and beard trim", url: "https://bizforceai.net/listing/" + h1l(1) }), J(await ev("window.__shared")));
+    await tap(card1 + ".bfm-badge"); await waitFor("document.querySelector(" + J(card1 + ".bfm-badge") + ").hidden", 30);
+    check(at + "the rail's follow: one POST /api/follows, the plus goes", H1S.db.t.follows.some(x => x.follower_id === ROSE.id && x.following_id === H1P.A));
+    // a member: Buy asks first, then buys through the existing route; Ask opens the question sheet and sends to the Inbox
+    const buysBefore = calls(/\/buy$/).length;
+    await tap(card1 + '[data-mact="buy"]');
+    await waitFor("!document.getElementById('homeSheet').hidden&&!!document.getElementById('homeBuyYes')", 20);
+    const bs = await ev("(function(){var s=document.getElementById('homeSheet');return {h2:(s.querySelector('h2')||{}).textContent,yes:(document.getElementById('homeBuyYes')||{}).textContent,focus:document.activeElement&&document.activeElement.id,cardSheet:!!document.getElementById('bf-buy-sheet')};})()");
+    check(at + "a member's Buy asks first: \"Buy Fade and beard trim?\", \"Buy for 35 BFC\" (focused), Cancel; nothing bought yet",
+      bs.h2 === "Buy Fade and beard trim?" && bs.yes === "Buy for 35 BFC" && bs.focus === "homeBuyYes" && !bs.cardSheet && calls(/\/buy$/).length === buysBefore, J(bs));
+    const sc2 = await ev(SHEET_CLEAR);
+    check(at + "the Buy sheet ends above the bottom bar, its buttons clear of it", sc2.bottom <= sc2.bar && sc2.hidden.length === 0, J(sc2));
+    await pageChecks(at + "(Buy open) ", { cover: true });
+    await tap("#homeBuyYes");
+    await waitFor("/Purchase complete/.test((document.getElementById('homeSheetNote')||{}).textContent||'')", 30);
+    check(at + "Buy for 35 BFC: one POST /api/marketplace/listings/:id/buy (the existing route), \"Purchase complete. New balance: 965 BFC\"",
+      calls(/^POST \/api\/marketplace\/listings\/[^/]+\/buy$/).length === buysBefore + 1 && /New balance: 965 BFC/.test(await ev("document.getElementById('homeSheetNote').textContent")));
+    await tap("#homeSheetClose"); await sleep(150);
+    await tap(card1 + '[data-mact="ask"]');
+    await waitFor("!!document.getElementById('homeAskText')", 20);
+    const as = await ev("(function(){var t=document.getElementById('homeAskText');return {h2:(document.querySelector('#homeSheet h2')||{}).textContent,val:t.value,fs:getComputedStyle(t).fontSize,panel:!!document.getElementById('bf-members-panel')};})()");
+    check(at + "a member's Ask: \"Ask Rosa Diaz\", the question started (16 px text), no members panel", as.h2 === "Ask Rosa Diaz" && /^Hi, a question about Fade and beard trim/.test(as.val) && as.fs === "16px" && !as.panel, J(as));
+    await ev("(function(){document.getElementById('homeAskSend').click();return true;})()");
+    await waitFor("/inbox\\.html/.test(location.pathname)", 40);
+    check(at + "Send: one POST /api/messages to the seller with the listing's address, then the Inbox with her", calls(/^POST \/api\/messages$/).length === 1 &&
+      (await ev("location.pathname+location.search")) === "/inbox.html?with=" + H1P.A, J(await ev("location.pathname+location.search")));
+    // the category chip
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("document.querySelectorAll('#homeMarketList .bfm-card').length>0&&document.querySelectorAll('#homeMarketChips [data-cat]').length>1", 60);
+    tb = await ev(TABS);
+    check(at + "a reload opens Market again (kept on this device), and with nothing new listed since her visit, no dot", tb.body === "market" && !tb.tabs.find(t => t.id === "tabMarket").dot, J(tb.tabs.find(t => t.id === "tabMarket")));
+    await tap('#homeMarketChips [data-cat="art"]');
+    await waitFor("document.querySelector('#homeMarketChips [data-cat=\"art\"]').getAttribute('aria-pressed')==='true'&&document.querySelectorAll('#homeMarketList .bfm-card').length>0&&[].every.call(document.querySelectorAll('#homeMarketList .bfm-card'),function(c){return /Art/.test(c.querySelector('.bfm-line').textContent);})", 40);
+    const artWant = (await HT_.marketFeed(H1S.deps, ROSE.id, { category: "art" })).body.listings.map(x => x.id);
+    check(at + "a category chip: only that category, in the lib's order (GET /api/home/market?category=art)", J(await ev("[].map.call(document.querySelectorAll('#homeMarketList .bfm-card'),function(c){return c.getAttribute('data-listing');})")) === J(artWant) &&
+      calls(/^GET \/api\/home\/market\?category=art$/).length >= 1, J([await ev("[].map.call(document.querySelectorAll('#homeMarketList .bfm-card'),function(c){return c.getAttribute('data-listing');})"), artWant]));
+
+    // 6. a free account: Buy says card checkout is coming, Ask opens the members panel; Save still works
+    at = "H1 Market, a free account, at " + w + ": ";
+    H1S.free = true;
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("document.querySelectorAll('#homeMarketList .bfm-card').length>0", 60);
+    await sleep(400);
+    const card2 = '#homeMarketList .bfm-card[data-listing="' + h1l(2) + '"] ';
+    const fb0 = calls(/\/buy$|\/api\/messages$/).length;
+    await tap(card2 + '[data-mact="buy"]'); await sleep(300);
+    const fbuy = await ev("(function(){var s=document.getElementById('bf-buy-sheet');return {sheet:!!s,h2:s&&(s.querySelector('h2')||{}).textContent,mine:!document.getElementById('homeSheet').hidden};})()");
+    check(at + "Buy: \"Card checkout is coming\", not the BizCash sheet, nothing sent", fbuy.sheet && fbuy.h2 === "Card checkout is coming" && !fbuy.mine && calls(/\/buy$|\/api\/messages$/).length === fb0, J(fbuy));
+    await pageChecks(at + "(the sheet open) ", { cover: true });
+    await ev("(function(){var s=document.getElementById('bf-buy-sheet');if(s)s.parentNode.removeChild(s);return true;})()");
+    await tap(card2 + '[data-mact="ask"]'); await sleep(300);
+    const fask = await ev("({panel:!!document.getElementById('bf-members-panel'),mine:!document.getElementById('homeSheet').hidden})");
+    check(at + "Ask: the members panel, not the question sheet, nothing sent", fask.panel && !fask.mine && calls(/\/buy$|\/api\/messages$/).length === fb0, J(fask));
+    await ev("(function(){var s=document.getElementById('bf-members-panel');if(s)s.parentNode.removeChild(s);return true;})()");
+    await tap(card2 + '[data-mact="save"]'); await waitFor("document.querySelector(" + J(card2 + '[data-mact="save"]') + ").getAttribute('aria-pressed')==='true'", 30);
+    check(at + "Save works for a free account too", H1S.db.t.listing_saves.some(x => x.user_id === ROSE.id && x.listing_id === h1l(2)));
+    H1S.free = false;
+
+    // 7. the Market dot comes back only for a new listing
+    at = "H1 the Market dot at " + w + ": ";
+    await tap("#tabFollowing"); await sleep(200);
+    H1S.db.t.marketplace_listings.push({ id: h1l(20), slug: null, seller_id: H1P.B, title: "Lash lift", description: "", price_bfc: 30, category_slug: "hair_beauty", category: "hair_beauty", listing_kind: "service", media: [], status: "active", created_at: new Date(NOW + 60000).toISOString() });
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("document.getElementById('tabMarket').classList.contains('has-dot')", 40);
+    tb = await ev(TABS);
+    check(at + "a member lists something after her last visit: the dot is back on Market (and only there)", tb.tabs.filter(t => t.dot).map(t => t.id).join() === "tabMarket" && tb.body === "following", J(tb.tabs.map(t => [t.id, t.dot])));
+
+    // 8. Search: from Market, the groups for "hair", See all, the People filter, paging, recent searches, the privacy rules, back
+    at = "H1 Search at " + w + ": ";
+    await tap("#tabMarket"); await waitFor("document.querySelectorAll('#homeMarketList .bfm-card').length>0", 60);
+    await tap("#feedSearch");
+    await waitFor("!document.getElementById('homeSearch').hidden&&!!document.getElementById('homeSearchInput')", 20);
+    const sf = await ev("(function(){var i=document.getElementById('homeSearchInput'),r=i.getBoundingClientRect(),b=document.querySelector('.bfh-s-box').getBoundingClientRect(),k=document.getElementById('homeSearchBack').getBoundingClientRect();" +
+      "return {fs:getComputedStyle(i).fontSize,focus:document.activeElement===i,box:{h:Math.round(b.height),l:Math.round(b.left),r:Math.round(b.right)},back:{w:Math.round(k.width),h:Math.round(k.height)},scopes:[].map.call(document.querySelectorAll('#homeSearch [data-scope]'),function(c){return [c.textContent.trim(),c.getAttribute('aria-pressed')];}),hint:(document.getElementById('homeSearchBody')||{}).textContent};})()");
+    check(at + "the field: 16 px text (no zoom on a phone), focused, " + HM.SEARCH.FIELD_H + " px; Back " + HM.SEARCH.BACK + " px; the filters " + HM.SEARCH.SCOPES.join(", ") + " (All on)",
+      sf.fs === "16px" && sf.focus && sf.box.h === HM.SEARCH.FIELD_H && sf.box.r <= w && sf.back.w === HM.SEARCH.BACK && sf.back.h === HM.SEARCH.BACK &&
+      J(sf.scopes.map(s => s[0])) === J(HM.SEARCH.SCOPES) && sf.scopes[0][1] === "true", J(sf));
+    await ev("(function(){var i=document.getElementById('homeSearchInput');i.value='hair';i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));return true;})()");
+    await waitFor("document.querySelectorAll('#homeSearchBody .bfh-s-group').length>0", 40);
+    const sw = (await SR_.search(H1S.deps, ROSE.id, { q: "hair", scope: "all" })).body.groups;
+    const sg = await ev("[].map.call(document.querySelectorAll('#homeSearchBody .bfh-s-group'),function(g){return {label:(g.querySelector('.bfh-lbl')||{}).textContent,all:!!g.querySelector('[data-seeall]'),n:g.querySelectorAll('.bfh-row,.bfh-l,.bfh-tile,.bfh-need').length,txt:g.textContent};})");
+    const wantG = HM.SEARCH.GROUPS.filter(g => sw[g.toLowerCase()] && sw[g.toLowerCase()].items.length);
+    check(at + "\"hair\": the groups the lib answers (" + wantG.join(", ") + "), each with the lib's count, See all where it has more",
+      J(sg.map(g => g.label)) === J(wantG) && sg.every(g => g.n === sw[g.label.toLowerCase()].items.length && g.all === !!sw[g.label.toLowerCase()].more) && wantG.length === 4, J([sg.map(g => [g.label, g.n, g.all]), Object.keys(sw).map(k => [k, sw[k].items.length, sw[k].more])]));
+    check(at + "the privacy rules hold in what is shown: nobody who blocked her, muted, suspended or adult; no Followers-only or pending post",
+      sg.every(g => !/Fiona|Milo|Xavier|XXX|circle/.test(g.txt)), J(sg.map(g => g.txt.slice(0, 120))));
+    check(at + "the search is kept in recent searches (this device)", J(await ev("JSON.parse(localStorage.getItem('bf_recent_searches')||'[]')")) === J(["hair"]));
+    await ev("scrollTo(0,0),true");
+    await pageChecks(at, { cover: true });
+    await shot("search");
+    await tap('#homeSearch [data-scope="people"]');
+    await waitFor("document.querySelector('#homeSearch [data-scope=\"people\"]').getAttribute('aria-pressed')==='true'&&!!document.getElementById('homeScoped')", 40);
+    const pw = (await SR_.search(H1S.deps, ROSE.id, { q: "hair", scope: "people" })).body.items;
+    const pr = await ev("[].map.call(document.querySelectorAll('#homeScoped .bfh-row'),function(r){return (r.querySelector('.bfh-name')||{}).textContent;})");
+    check(at + "the People filter: the lib's people for \"hair\" (" + pw.length + "), each with Follow or Following", J(pr) === J(pw.map(x => x.name)) && pw.length > 0, J([pr, pw.map(x => x.name)]));
+    await pageChecks(at + "(People) ", { cover: true });
+    await shot("search-people");
+    await ev("(function(){var i=document.getElementById('homeSearchInput');i.value='painter';i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));return true;})()");
+    await waitFor("document.querySelectorAll('#homeScoped .bfh-row').length===20&&!!document.getElementById('homeSearchMore')", 40);
+    await tap("#homeSearchMore");
+    await waitFor("document.querySelectorAll('#homeScoped .bfh-row').length===22", 40);
+    check(at + "paging: 20 painters, then More gives the last 2 (22), More gone", (await ev("document.querySelectorAll('#homeScoped .bfh-row').length")) === 22 && !(await ev("!!document.getElementById('homeSearchMore')")) &&
+      calls(/^GET \/api\/search\?q=painter&scope=people&cursor=o20$/).length === 1, J(calls(/painter/)));
+    const priv = {};
+    for (const qq of ["fiona", "milo", "xavier", "xxx", "freddie", "circle"]) priv[qq] = (await SR_.search(H1S.deps, ROSE.id, { q: qq, scope: "all" })).body.groups;
+    const cnt = g => Object.keys(g).reduce((s, k) => s + g[k].items.length, 0);
+    check(at + "the lib behind it: blocked (fiona), muted (milo), suspended (xavier), adult (xxx) and a Followers-only post (circle) find nothing; a free account (freddie) is found as a person",
+      ["fiona", "milo", "xavier", "xxx", "circle"].every(k => cnt(priv[k]) === 0) && priv.freddie.people.items.some(x => x.user_id === H1P.FR), J(Object.keys(priv).map(k => [k, cnt(priv[k])])));
+    await tap('#homeSearch [data-scope="all"]');
+    await ev("(function(){var c=document.getElementById('homeSearchClear');c.click();return true;})()");
+    await waitFor("!!document.getElementById('homeRecentClear')", 30);
+    const rc = await ev("[].map.call(document.querySelectorAll('#homeSearchBody [data-recent]'),function(b){return b.getAttribute('data-recent');})");
+    check(at + "an empty field shows recent searches, newest first, with Clear", J(rc) === J(["painter", "hair"]), J(rc));
+    await tap("#homeRecentClear"); await sleep(150);
+    check(at + "Clear empties them (the key removed)", (await ev("localStorage.getItem('bf_recent_searches')")) === null && !(await ev("!!document.querySelector('#homeSearchBody [data-recent]')")));
+    await tap("#homeSearchBack"); await sleep(250);
+    tb = await ev(TABS);
+    check(at + "Back returns to Market, the tab it came from", tb.body === "market" && tb.market && (await ev("document.getElementById('homeSearch').hidden")) === true, J(tb.body));
+    await tap("#tabLocal"); await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>0", 60);
+    await tap("#feedSearch"); await waitFor("!document.getElementById('homeSearch').hidden", 20);
+    await ev("(function(){var e=new KeyboardEvent('keydown',{key:'Escape',bubbles:true});document.getElementById('homeSearchInput').dispatchEvent(e);return true;})()"); await sleep(250);
+    tb = await ev(TABS);
+    check(at + "from Local, Escape (or Back) returns to Local", tb.body === "local" && tb.local, J(tb.body));
+
+    // 9. storage that throws: Home still opens (Following), the tabs and Search still work, nothing kept
+    at = "H1 storage refused at " + w + ": ";
+    const { identifier: noStore } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "(function(){var g=Storage.prototype.getItem,s=Storage.prototype.setItem,r=Storage.prototype.removeItem;var bad=function(k){return k==='bf_home_tab'||k==='bf_recent_searches';};" +
+      "Storage.prototype.getItem=function(k){if(bad(k))throw new Error('refused');return g.apply(this,arguments);};Storage.prototype.setItem=function(k){if(bad(k))throw new Error('refused');return s.apply(this,arguments);};Storage.prototype.removeItem=function(k){if(bad(k))throw new Error('refused');return r.apply(this,arguments);};})();" });
+    const errs0 = exceptionsSeen().length;
+    await open(cdp, origin, "home.html", w, h, true);
+    await waitFor("!!document.body.getAttribute('data-home-tab')", 40);
+    const st1 = await ev("document.body.getAttribute('data-home-tab')");
+    await tap("#tabMarket"); await waitFor("document.querySelectorAll('#homeMarketList .bfm-card').length>0", 60);
+    await tap("#feedSearch"); await waitFor("!document.getElementById('homeSearch').hidden", 20);
+    await ev("(function(){var i=document.getElementById('homeSearchInput');i.value='hair';i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));return true;})()");
+    const st2 = await waitFor("document.querySelectorAll('#homeSearchBody .bfh-s-group').length>0", 40);
+    await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: noStore });
+    check(at + "Home opens on Following, Market and Search work, and no script error", st1 === "following" && st2 && exceptionsSeen().length === errs0, J([st1, st2, exceptionsSeen().slice(errs0)]));
+
+    // 10. the Verified race on seller.html: bf-verified.js late, then the seller's data late; the badge drawn once both ways
+    {
+      at = "H1 the storefront's Verified badge at " + w + ": ";
+      const REC = "(function(){var R=window.__vrace={};new MutationObserver(function(){var n=document.getElementById('sfName');" +
+        "if(R.dataAt===undefined&&n&&/Rose/.test(n.textContent)){R.dataAt=performance.now();R.libAtData=!!window.bfVerified;}" +
+        "if(R.badgeAt===undefined&&n&&n.querySelector('[data-bf-verified]'))R.badgeAt=performance.now();}).observe(document,{subtree:true,childList:true,characterData:true});})();";
+      const { identifier: recId } = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: REC });
+      const run = async (verifiedDelay, sellerDelay) => {
+        Object.assign(H1S, { verifiedDelay, sellerDelay });
+        await open(cdp, origin, "seller.html?u=rose", w, h, true);
+        const drawn = await waitFor("!!document.querySelector('#sfName [data-bf-verified]')&&window.__vrace.dataAt!==undefined", 60);
+        await sleep(300);
+        const o = await ev("({race:window.__vrace,n:document.querySelectorAll('#sfName [data-bf-verified]').length,reason:(document.querySelector('#sfName [data-bf-verified]')||{getAttribute:function(){return null;}}).getAttribute('data-bf-verified')})");
+        Object.assign(H1S, { verifiedDelay: 0, sellerDelay: 0 });
+        return Object.assign(o, { drawn });
+      };
+      const late = await run(1500, 0), early = await run(0, 1500);
+      await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: recId });
+      check(at + "bf-verified.js held back 1500 ms (not yet run when Rose's name is drawn): the badge is drawn once, after it loads",
+        late.drawn && late.race.libAtData === false && late.race.badgeAt > late.race.dataAt && late.n === 1 && late.reason === "member", J(late));
+      check(at + "the seller's data held back 1500 ms (bf-verified.js already run): the badge is drawn once, with the name",
+        early.drawn && early.race.libAtData === true && early.n === 1 && early.reason === "member", J(early));
+    }
+  }
+  // 11. NAMED (Nov 25 2026, H1B, owner rule): the mist is never on Home (For You, Local, Following, Market, the Search screen)
+  // or the Create (+) composer, phone or desktop; it is on HQ, Profile and Inbox exactly as before (phone: 56 x 56, 16 px from
+  // the right, 16 px above the bottom bar). The presence script still loads on Home and the composer (the music player needs
+  // it): only TMX_NO_MIST_PAGES keeps the mist away. The Guide tab is where it was: on the pages that load termaximus-guide.js.
+  {
+    const MIST = "(function(){var m=document.getElementById('tmx-presence-root'),b=document.getElementById('bf-tabbar');var vb=b&&getComputedStyle(b).display!=='none'&&b.getBoundingClientRect().height>0;" +
+      "var r=m&&m.getBoundingClientRect();return {script:!!document.querySelector('script[src*=\"termaximus-presence\"]'),guideScript:!!document.querySelector('script[src*=\"termaximus-guide\"]'),guide:!!document.getElementById('tmx-guide-tab')," +
+      "mist:m?{w:Math.round(r.width),h:Math.round(r.height),right:Math.round(innerWidth-r.right),aboveBar:vb?Math.round(b.getBoundingClientRect().top-r.bottom):null}:null};})()";
+    const none = (at, label, x) => check(at + label + ": no mist (the presence script still loads); the Guide tab as before (" + (x.guideScript ? "drawn" : "not on this page") + ")",
+      !!x && x.script && x.mist === null && x.guide === x.guideScript, J(x));
+    for (const w of [360, 390, 430, 1440]) {
+      const phone = w !== 1440, h = phone ? (HTS[w] || 844) : 900;
+      const at = "H1B the mist at " + w + ": ";
+      const shotAt = async name => { if (w === 390) { await sleep(300); const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(H1_OUT, name + ".png"), Buffer.from(r.data, "base64")); } };
+      await fresh();
+      await open(cdp, origin, "home.html", w, h, phone);
+      await clearKeys();
+      await open(cdp, origin, "home.html", w, h, phone);
+      await waitFor("document.querySelectorAll('#homeSuggest .bfh-row').length>0", 60);
+      none(at, "Home, Following (nobody followed: the suggestions)", await ev(MIST));
+      await tap("#tabLocal"); await waitFor("document.querySelectorAll('#homeLocalFeed [data-post]').length>0", 60); await settle();
+      none(at, "Home, Local", await ev(MIST));
+      await tap("#tabMarket"); await waitFor("document.querySelectorAll('#homeMarketList .bfm-card').length>0", 60); await settle();
+      none(at, "Home, Market", await ev(MIST));
+      if (phone) {
+        await tap("#tabForYou"); await waitFor("(function(){var s=document.getElementById('bfp-soon');return !!s&&!s.hidden;})()", 40); await settle();
+        none(at, "Home, For You (its Coming soon sheet)", await ev(MIST));
+        await shotAt("foryou");
+        await tap("#bfpSoonClose"); await settle();
+      }
+      await tap("#feedSearch"); await waitFor("!document.getElementById('homeSearch').hidden", 40); await settle();
+      none(at, "Home, the Search screen", await ev(MIST));
+      await open(cdp, origin, "compose.html", w, h, phone);
+      none(at, "the Create (+) composer (compose.html)", await ev(MIST));
+      for (const [pg, label] of [["dashboard.html", "HQ"], ["profile.html", "Profile"], ["inbox.html", "Inbox"]]) {
+        await open(cdp, origin, pg, w, h, phone);
+        await waitFor("!!document.getElementById('tmx-presence-root')", 30);
+        const x = await ev(MIST);
+        check(at + label + " (" + pg + "): the mist, as before" + (phone ? " (56 x 56, 16 px from the right, 16 px above the bottom bar)" : " (the desktop mist, 110 x 110)") + "; the Guide tab as before",
+          !!x && x.script && !!x.mist && x.guide === x.guideScript && (phone ? x.mist.w === 56 && x.mist.h === 56 && x.mist.right === 16 && x.mist.aboveBar === 16 : x.mist.w === 110 && x.mist.h === 110), J(x));
+        if (pg === "dashboard.html") await shotAt("hq");
+      }
+    }
+  }
+  console.log("    screenshots: " + H1_OUT);
 }
 
 /* ══ HOTFIX-G1 (Nov 25 2026): PHONE_COMPARE ═════════════════════════════════════════════════════════════════════

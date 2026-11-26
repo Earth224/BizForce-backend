@@ -885,13 +885,14 @@ const fmt = n => Number(n).toLocaleString("en-US");
     // for free accounts, email confirmation, storage per account, members-only BizCash sending and the adult content rule.
     // NAMED (Nov 21 2026, P3-1B): BEFORE "2026-11-21b" (P3-2). AFTER "2026-11-21c", the owner's final free-account rules and members' Google optimisation (the same day again, so the next letter).
     // NAMED (Nov 21 2026, P3-1C): BEFORE "2026-11-21c" (P3-1B). AFTER "2026-11-21d": members start with 1,000 BizCash and free accounts hold none (the same day again, so the next letter).
-    check("P12. W3's privacy-only clarification made no new version; P3-1, P3-2 and then P3-1B moved TERMS_VERSION to " + LEGAL.TERMS_VERSION + " (NAMED (Nov 24 2026, LR-2B): then LR-2B, BEFORE 2026-11-21d)", LEGAL.TERMS_VERSION === "2026-11-24");
+    check("P12. W3's privacy-only clarification made no new version; P3-1, P3-2 and then P3-1B moved TERMS_VERSION to " + LEGAL.TERMS_VERSION + " (NAMED (Nov 24 2026, LR-2B): then LR-2B, BEFORE 2026-11-21d; NAMED (Nov 25 2026, H1): then H1, BEFORE 2026-11-24)", LEGAL.TERMS_VERSION === "2026-11-25");
     // NAMED (Nov 21 2026, P3-1B): the published pages carry the owner's final rules (checkLegalL1 A19 and A20 read them word for word)
     const termsFe = FE["terms.html"] || "", privacyFe = FE["privacy.html"] || "";
     // NAMED (Nov 21 2026, P3-1C): BEFORE version 2026-11-21c (P3-1B). AFTER 2026-11-21d, and the members sentence is on the page.
     // NAMED (Nov 24 2026, LR-2B): BEFORE "Version 2026-11-21d"; terms.html also lists Lead Radar in what membership adds.
-    check("P13. terms.html shows version 2026-11-24, Lead Radar among what membership adds, and the final free-account rules; privacy.html says which posts search engines may index",
-      termsFe.indexOf("Version 2026-11-24") !== -1 && termsFe.indexOf("Lead Radar: people asking for what you offer, found from your Fingerprint, with every reply approved by you") !== -1 && termsFe.indexOf("Members start with 1,000 BizCash. Free accounts do not hold BizCash.") !== -1 && termsFe.indexOf("On a free account: a share post needs at least one photo") !== -1 &&
+    // NAMED (Nov 25 2026, H1): BEFORE "Version 2026-11-24"; terms.html also says Local and Market are not ranked yet and how the empty Following tab suggests.
+    check("P13. terms.html shows version 2026-11-25, Lead Radar among what membership adds, and the final free-account rules; privacy.html says which posts search engines may index",
+      termsFe.indexOf("Version 2026-11-25") !== -1 && termsFe.indexOf("except on an empty Following tab, where the people nearest you come first") !== -1 && termsFe.indexOf("Lead Radar: people asking for what you offer, found from your Fingerprint, with every reply approved by you") !== -1 && termsFe.indexOf("Members start with 1,000 BizCash. Free accounts do not hold BizCash.") !== -1 && termsFe.indexOf("On a free account: a share post needs at least one photo") !== -1 &&
       termsFe.indexOf("A free account never holds, receives or sends BizCash") !== -1 &&
       privacyFe.indexOf("Only a member&#39;s published public post with Show in Google on can be indexed by search engines") + privacyFe.indexOf("Only a member's published public post with Show in Google on can be indexed by search engines") !== -2);
   }

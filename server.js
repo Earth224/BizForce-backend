@@ -9093,7 +9093,8 @@ app.post("/api/copyright/counter/:id", requireAuth, copyrightLimiter, async func
 function postDeps() {
   return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env,
     tierOf: async function (userId) { return accessTier(await getUserPlan(userId)); },
-    membersPanel: function () { return require("./lib/membership").membersPanelFromCode(); } };
+    membersPanel: function () { return require("./lib/membership").membersPanelFromCode(); },
+    request: require("./lib/guardedFetch").guardedJsonRequest };   // NAMED (Nov 25 2026, H1): lib/geo.js's city point lookups
 }
 function postRoute(run) {
   return async function (req, res, next) {
@@ -9160,6 +9161,43 @@ app.get("/api/follows/:userId/counts", postRoute(async function (req) {
 }));
 app.get("/api/follows/:userId/:which", requireAuth, postRoute(function (req) {
   return require("./lib/posts").followList(postDeps(), req.user.id, req.params.userId, req.params.which, req.query.cursor);
+}));
+
+/* ── H1 (Nov 25 2026): THE HOME TABS AND SEARCH (lib/homeTabs.js, lib/search.js, lib/geo.js; migration 207) ──
+   Local (public posts and open Needs within the member's reach), Market (active listings by members, nearest then
+   newest), the tab row's state (the place chip and the Market dot), Local's Change (reach and "Use a different city"),
+   the follow suggestions for an empty Following tab, Like and Save on listings, and Search. Every rule is in the libs. */
+function homeDeps() { return postDeps(); }
+const homePrefsLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "home-prefs:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Thirty changes an hour at most. Try again later.", reason: "rate_limited" }
+});
+const searchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "search:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Sixty searches a minute at most. Wait a moment and try again.", reason: "rate_limited" }
+});
+app.get("/api/feed/local", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").localFeed(homeDeps(), req.user.id, req.query.cursor); }));
+app.get("/api/home/tabs", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").tabsState(homeDeps(), req.user.id); }));
+app.put("/api/home/prefs", requireAuth, homePrefsLimiter, postRoute(function (req) { return require("./lib/homeTabs").savePrefs(homeDeps(), req.user.id, req.body); }));
+app.get("/api/home/market", requireAuth, postRoute(function (req) {
+  return require("./lib/homeTabs").marketFeed(homeDeps(), req.user.id, { category: req.query.category, cursor: req.query.cursor });
+}));
+app.post("/api/home/market/seen", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").marketSeen(homeDeps(), req.user.id); }));
+app.get("/api/home/suggestions", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").suggestPeople(homeDeps(), req.user.id); }));
+app.post("/api/listings/:id/like", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").likeListing(homeDeps(), req.user.id, req.params.id, true); }));
+app.delete("/api/listings/:id/like", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").likeListing(homeDeps(), req.user.id, req.params.id, false); }));
+app.post("/api/listings/:id/save", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").saveListing(homeDeps(), req.user.id, req.params.id, true); }));
+app.delete("/api/listings/:id/save", requireAuth, postRoute(function (req) { return require("./lib/homeTabs").saveListing(homeDeps(), req.user.id, req.params.id, false); }));
+app.get("/api/search", requireAuth, searchLimiter, postRoute(function (req) {
+  return require("./lib/search").search(homeDeps(), req.user.id, { q: req.query.q, scope: req.query.scope, cursor: req.query.cursor });
 }));
 
 /* P2-3 (Nov 20 2026): THE SHARED STORAGE GUARD (lib/storageGuard.js): 920 MB across every bucket, asked before every
@@ -54273,9 +54311,15 @@ app.put("/api/me/place", requireAuth, async function (req, res, next) {
     const checked = PL.placeUpdates(req.body);
     if (checked.error) return res.status(400).json({ error: checked.error, field: checked.field });
     const row = Object.assign({ user_id: req.user.id, updated_at: nowIso() }, checked.updates);
+    // NAMED (Nov 25 2026, H1): the place as it was, so its city point (lib/geo.js) is looked up only when it changed
+    const placeBefore = await supabase.from("bf_profiles").select("place_city, place_region, place_country, place_lat, place_lng").eq("user_id", req.user.id).maybeSingle();
     const saved = await supabase.from("bf_profiles").upsert(row, { onConflict: "user_id" })
       .select("place_city, place_region, place_country, local_opt_in").single();
     if (saved.error) throw saved.error;
+    // NAMED (Nov 25 2026, H1): after the place is saved, its city centre point, not awaited: a slow or failed lookup never
+    // delays or fails the save (Local then matches the city's name as text)
+    require("./lib/homeTabs").locateProfile(homeDeps(), req.user.id, placeBefore.error ? null : placeBefore.data || null, saved.data)
+      .catch(function (geoErr) { console.error("[geo] profile place lookup failed for " + req.user.id + ": " + ((geoErr && geoErr.message) || geoErr)); });
     return res.json({ place: PL.placeReply(saved.data) });
   } catch (error) { next(error); }
 });

@@ -355,7 +355,8 @@ const MEMBER_ROUTES = {
     /members' posts are for members/.test(FR.comment_member_post || "") && /Nothing was posted\.$/.test(FR.comment_member_post) &&
     /reply when a member messages you first/.test(FR.start_conversation || "") && /Nothing was sent\.$/.test(FR.start_conversation), J(FR));
   check("I7. lib/posts.js is handed the tier (postDeps().tierOf, the same accessTier) and the members panel",
-    has(S, "    tierOf: async function (userId) { return accessTier(await getUserPlan(userId)); },\n    membersPanel: function () { return require(\"./lib/membership\").membersPanelFromCode(); } };"));
+    // NAMED (Nov 25 2026, H1): BEFORE the members panel closed postDeps; AFTER the geocoder's request follows it (lib/geo.js)
+    has(S, "    tierOf: async function (userId) { return accessTier(await getUserPlan(userId)); },\n    membersPanel: function () { return require(\"./lib/membership\").membersPanelFromCode(); },\n"));
 
   /* ── J. THE APP FOR A FREE ACCOUNT (NAMED, Nov 21 2026, P3-1B): scripts/bf-access.js in the same vm page; the Create sheet,
      the composer, Talk and the Inbox read. browserCheckPhone PHONE_P31 taps the real pages. ── */

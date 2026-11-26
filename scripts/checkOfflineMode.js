@@ -387,8 +387,8 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b" (I7, I8, I10)
     // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
     // NAMED (Nov 23 2026, LR-1): BEFORE -p33; AFTER -lr1
-    // NAMED (Nov 25 2026, HOTFIX-G1): BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-g1", names.length === 1 && names[0] === "bf-shell-abc1234-g1", names.join(","));
+    // NAMED (Nov 25 2026, H1B): BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-h1b", names.length === 1 && names[0] === "bf-shell-abc1234-h1b", names.join(","));
     // NAMED (Nov 20 2026, P2-2): BEFORE at most 600 characters between BUILD and SHELL_REV; AFTER 800, for P2-2's one-line note.
     // NAMED (Nov 20 2026, P2-3): BEFORE 800; AFTER 1000, for P2-3 one-line note (861 today).
     // NAMED (Nov 20 2026, P3-1): BEFORE at most 1000 characters between BUILD and SHELL_REV; AFTER 1400, for P3-1's one-line note.
@@ -399,9 +399,9 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
       // NAMED (P3-1C): BEFORE a window of 1,800 characters between BUILD and SHELL_REV; AFTER 2,400, for the history notes above SHELL_REV.
       // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-      // NAMED (Nov 25 2026, HOTFIX-G1): BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+      // NAMED (Nov 25 2026, H1B): BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
       // NAMED (Nov 23 2026, LR-2): the window from BUILD to SHELL_REV widened from 2400 to 3200 characters (LR-1B left it at 2397).
-      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,3200}?var SHELL_REV = "g1";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,3200}?var SHELL_REV = "h1b";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -412,8 +412,8 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     await sw.dispatch("activate");
     // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
     // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
-    // NAMED (Nov 25 2026, HOTFIX-G1): BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-g1") /* NAMED (Nov 23 2026, LR-1): BEFORE -p33 */ && sw.caches.has("someone-else"),
+    // NAMED (Nov 25 2026, H1B): BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-h1b") /* NAMED (Nov 23 2026, LR-1): BEFORE -p33 */ && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle
@@ -625,8 +625,10 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        dashboard's card view and orbit choice, scripts/bf-hq-views.js, the device copy of user_preferences.hq_card_view and
        hq_orbit) are the member's choices, so sign-out clears them.
        NAMED BEFORE → AFTER (Nov 21 2026, FX2). BEFORE: PER_USER had 14 keys. AFTER: 15; bf_agents_view (the phone Agent Directory's
-       view, scripts/bf-agents-views.js, the device copy of user_preferences.agents_card_view) is the member's choice, so sign-out clears it. */
-    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "bf_main_boxes", "bf_hq_view", "bf_hq_orbit", "bf_agents_view", "mcTargetGoalConversions", "bf_theme", "bf_music"];
+       view, scripts/bf-agents-views.js, the device copy of user_preferences.agents_card_view) is the member's choice, so sign-out clears it.
+       NAMED BEFORE → AFTER (Nov 25 2026, H1). BEFORE: PER_USER had 15 keys. AFTER: 16; bf_recent_searches (Home's recent searches,
+       scripts/bf-home-tabs.js) is what the member searched for, so sign-out clears it. */
+    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "bf_main_boxes", "bf_hq_view", "bf_hq_orbit", "bf_agents_view", "mcTargetGoalConversions", "bf_theme", "bf_music", "bf_recent_searches"];
     const SESSION_PREFIX = "bf_tmx_insight:";
     /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
@@ -688,6 +690,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       bf_oauth_return: "which sign-in, youtube or tiktok, is coming back to the Social page in this tab",
       bf_store_return: "which store's page, etsy or shopify, the Store page is coming back from in this tab",
       bf_exec_tab: "which tab the Executive command deck opens on",
+      bf_home_tab: "which Home tab opens, Local, Following or Market, on this device",   // NAMED (Nov 25 2026, H1)
       bf_tmx_not_now: "which Termaximus suggestions were set aside with Not now on this device",
       bf_boombox: "where the music boombox sits and whether it is minimised",
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",

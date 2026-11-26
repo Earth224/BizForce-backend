@@ -336,7 +336,8 @@ const pid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
   check("I2. the routes pass the server's own pieces: the claims screen, ownerPagePublic, Web Push, the tier and the members panel",
     has(S, "  return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env,\n" +
       "    tierOf: async function (userId) { return accessTier(await getUserPlan(userId)); },\n" +
-      "    membersPanel: function () { return require(\"./lib/membership\").membersPanelFromCode(); } };"));
+      "    membersPanel: function () { return require(\"./lib/membership\").membersPanelFromCode(); },\n" +
+      "    request: require(\"./lib/guardedFetch\").guardedJsonRequest };"));   // NAMED (Nov 25 2026, H1): BEFORE the object ended at membersPanel; AFTER + request (lib/geo.js)
   check("I3. a member's posts answer a visitor not signed in, with a signed-in viewer's blocks applied (viewerIdFrom)",
     has(S, 'app.get("/api/posts/by/:userId", postRoute(async function (req) {\n  return require("./lib/posts").postsByAuthor(postDeps(), await viewerIdFrom(req), req.params.userId, req.query.cursor);'));
   check("I4. no emoji in lib/posts.js or this check", !/\p{Extended_Pictographic}/u.test(FILES[POSTS] + require("fs").readFileSync(__filename, "utf8")));

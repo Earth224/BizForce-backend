@@ -369,5 +369,31 @@ const LEADS = {
     WAITING_TITLE: "YouTube, TikTok, Instagram, Facebook" }
 };
 
-// NAMED (Nov 25 2026, LR-4): + LEADS.FOUND, TABS four. NAMED (Nov 24 2026, LR-3): + LEADS.INBOUND. NAMED (Nov 23 2026, LR-2): + LEADS. NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
-module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX, COMPOSER, NEEDPOST, LEADS };
+/* NAMED (Nov 25 2026, H1): THE OWNER'S CANVAS, ROW 7 (four boards, 390 x 844; Downloads\design\h1\project): "Home: Local"
+   (FeedLocal), "Home: Following, nobody followed" (FeedFollowing), "Home: Market" (FeedMarket) and "Search" (FeedSearch).
+   The site's fonts are kept, never the boards' Space Grotesk and Inter. scripts/bf-home-tabs.js draws them; the Local
+   feed's cards are bf-feed.js's own (FEED above), with the Local line. */
+const HOME = {
+  BOARDS: ["FeedLocal", "FeedFollowing", "FeedMarket", "FeedSearch"],
+  TABS: ["Local", "Following", "Market", "For You"],     // For You still opens its Coming soon sheet
+  CHIPS: { LEFT: 12, TOP: 64, H: 34, HIT: 44, RADIUS: 17,   // H the drawn face; HIT the tap target around it (css/bf-phone.css I)
+    PAD_X: 12, GAP: 8, BORDER: "#2b3a6b", BG: "rgba(14,20,40,.8)", TEXT: "#c9d1e6", FONT: 12.5, WEIGHT: 500,
+    ON_BG: "#0f2a3a", PIN: 14, LOCAL: ["Within 25 mi", "Change"] },
+  RAIL: { RIGHT: 10, ABOVE_BAR: 16, GAP: 18, WIDTH: 60, AVATAR: 52, PLUS: 22, MARKET: ["Like", "Ask", "Save", "Share"] },
+  INFO: { LEFT: 14, RIGHT: 80, ABOVE_BAR: 16, GAP: 8, LINE_FONT: 13, LINE_COLOR: "#c9d1e6", TITLE_FONT: 21, TITLE_WEIGHT: 700, TITLE_LINE: 1.2, SUB_FONT: 14,
+    PRICE_FONT: 22, PRICE_WEIGHT: 700, PRICE: "#f5c46b", BUY_H: 44, BUY_PAD_X: 26, BUY_RADIUS: 22, BUY_FONT: 15, BUY_WEIGHT: 700, BUY_TEXT: "#070b18" },
+  LOCAL_LINE: { FONT: 13, COLOR: "#c9d1e6", EXAMPLE: "Hair & Beauty \u00b7 North Park \u00b7 0.8 mi" },   // the board: "Hair and Beauty"; the categories table says "Hair & Beauty"
+  FOLLOW: { BG: "#070b18", TOP: 68, PAD: "16px 16px 0", GAP: 14, ICON: 64, ICON_BG: "#0f2a3a",
+    TITLE: "Follow people to fill this tab", TITLE_FONT: 18, TITLE_WEIGHT: 700,
+    SUB: "Posts from people you follow show here, newest first. Here are a few near you and in what you do.", SUB_FONT: 13.5, SUB_LINE: 1.45,
+    LABEL: "SUGGESTED FOR YOU", LABEL_FONT: 11, LABEL_WEIGHT: 600, LABEL_SPACING: 1.6, LABEL_COLOR: "#8e9bbf",
+    ROW_PAD: "10px 0", ROW_LINE: "#141b33", ROW_GAP: 10, AVATAR: 48, NAME_FONT: 14.5, NAME_WEIGHT: 600, ROW_SUB_FONT: 12.5,
+    BTN_H: 34, BTN_HIT: 44, BTN_PAD_X: 14, BTN_RADIUS: 17, BTN_FONT: 13, BTN_WEIGHT: 700, BTN_TEXT: "#070b18", MAX: 8 },
+  SEARCH: { TOP_PAD: 12, SIDE: 12, BOTTOM_PAD: 8, GAP: 8, BACK: 44, FIELD_H: 44, FIELD_RADIUS: 22, FIELD_BG: "#0b1022", FIELD_PAD_LEFT: 14, ICON: 18,
+    INPUT_FONT: 16, CLEAR: 16, SCOPES: ["All", "People", "Listings", "Posts", "Needs"], GROUPS: ["PEOPLE", "LISTINGS", "POSTS", "NEEDS"], SEE_ALL: "See all", SEE_ALL_FONT: 13,
+    THUMB: 56, THUMB_RADIUS: 12, L_TITLE_FONT: 14, L_TITLE_WEIGHT: 600, L_SUB_FONT: 12.5, PRICE_FONT: 14, PRICE_WEIGHT: 700, GRID_COLS: 3, GRID_RATIO: "3/4", GRID_RADIUS: 8, GRID_GAP: 4,
+    RECENT_MAX: 8 }
+};
+
+// NAMED (Nov 25 2026, H1): + HOME. NAMED (Nov 25 2026, LR-4): + LEADS.FOUND, TABS four. NAMED (Nov 24 2026, LR-3): + LEADS.INBOUND. NAMED (Nov 23 2026, LR-2): + LEADS. NAMED (Nov 23 2026, P3-3): + COMPOSER, NEEDPOST. NAMED (Nov 21 2026, FX2): + AGENTS, HQ, ORBIT; NAMED (Nov 22 2026, FX3): + TMX, HQ.ABYSS for HQ.SUN
+module.exports = { TOLERANCE, SCREEN, PICTURED_SAFE_AREA, COLOR, FEED, BAR, PROFILE, AGENTS, HQ, ORBIT, TMX, COMPOSER, NEEDPOST, LEADS, HOME };
