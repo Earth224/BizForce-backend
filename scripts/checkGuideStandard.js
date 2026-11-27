@@ -343,8 +343,12 @@ check("S7. the legal pages do not load it", LEGAL.every(f => FILES[f] && !loadsG
 // loads the guide and has its own entry (four tips).
 // NAMED (Nov 5 2026, mailbox connection, migration 169): BEFORE 58 shown and 59 loading. AFTER 59 and 60: mailbox.html
 // (Your Inbox) loads the guide and has its own entry (four tips).
-check("S7. the guide displays on 59 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html, plus media.html, plus mailbox.html",
-  SHOWN.length === 59 && HTML_PAGES.filter(loadsGuide).length === 60 && SHOWN.indexOf("media.html") !== -1 && SHOWN.indexOf("mailbox.html") !== -1, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
+// NAMED (Nov 26 2026, FX4M, the owner's order): BEFORE 59 shown and 60 loading. AFTER 60 and 61: inbox.html loads the guide
+// (its tag on its own line before the legal footer) and has its own entry (four tips).
+check("S7. the guide displays on 60 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html, plus media.html, plus mailbox.html, plus inbox.html",
+  SHOWN.length === 60 && HTML_PAGES.filter(loadsGuide).length === 61 && SHOWN.indexOf("media.html") !== -1 && SHOWN.indexOf("mailbox.html") !== -1 &&
+  SHOWN.indexOf("inbox.html") !== -1 && FILES["inbox.html"].indexOf(GUIDE_TAG + "\n<footer") !== -1 && (ENTRIES["inbox.html"] || []).length === 4,
+  SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
 
 /* ── S8. the Guide's tab at every width ────────────────────────────────── */
 // NAMED (Nov 22 2026, FX3): BEFORE "S8. phones: the Guide button and the bottom sheet" (a button and a sheet at 860px and less, the panel

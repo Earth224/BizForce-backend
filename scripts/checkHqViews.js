@@ -121,7 +121,8 @@ const MUTATIONS = {
   "gold-title-not-applied": [[VIEWS, "    title.classList.toggle(\"hq-gold\", open === \"oracle\");\n", ""]],
   "gold-icons-not-applied": [[VIEWS, "      if (oracleTool(slug)) {", "      if (false) {"]],
   "oracle-page-edited": [["oracle.html", "<title>BizForce AI — The Oracle</title>", "<title>BizForce AI — The Oracle!</title>"]],
-  "autoplay-resume-ungated": [[MUSIC, "      if (loadPlayAllowed() && S.was_playing && S.track_id && trackById(S.track_id)) {", "      if (S.was_playing && S.track_id && trackById(S.track_id)) {"]],
+  // NAMED (Nov 26 2026, FX4M): BEFORE the boot's loadPlayAllowed() gate dropped; AFTER the carry-on rule's visit and hold tests dropped
+  "autoplay-resume-ungated": [[MUSIC, "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }", "  function resumeWanted() { return S.was_playing === true && !!S.track_id && !onHomeFeed(); }"]],
   "autoplay-ignores-pause": [[MUSIC, "  function loadPlayAllowed() { return S.autoplay === true && !held(); }", "  function loadPlayAllowed() { return S.autoplay === true; }"]],
   "pause-not-remembered": [[MUSIC, "  function pause() { hold(true); if (popoutAlive())", "  function pause() { if (popoutAlive())"]],
   "page-plays-itself": [["agents-hub.html", "</body>", "<script>window.addEventListener('load',function(){if(window.BFMusic)window.BFMusic.play();});</script></body>"]],
@@ -136,8 +137,8 @@ const MUTATIONS = {
   // NAMED (Nov 22 2026, FX3B): BEFORE anchored on "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 26 2026, FX4A): BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx4a\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
+  // NAMED (Nov 26 2026, FX4M): BEFORE "fx4a"; AFTER "fx4m" (music carries on across pages and stops on Home; the Guide tab on the Inbox). FX4A: BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"fx4m\";", "var SHELL_REV = \"ph1\";"]],   // NAMED (Nov 22 2026, FX3): the anchor was still p31b (already stale at HEAD, where sw.js said p31c)
   // FX3B (Nov 22 2026): a moon whose photo failed shows again (drawn whole) at every repaint, until the error hides it
   "fx3b-moon-reveal": [[MOON, "    el.hidden = failed;\n", "    el.hidden = false;\n"]],
   // FX3B: no probe, so a moon whose photo failed never shows again
@@ -622,13 +623,20 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   check("A1. one rule: loadPlayAllowed is the setting on (saved by its checkbox) and no pause or stop in this visit",
     once(M, "  function loadPlayAllowed() { return S.autoplay === true && !held(); }") && once(M, "  function setAutoplay(on) { S.autoplay = !!on; save(); render(); }"));
   const startFn = s.definitionOf ? null : null;
-  const bootA = M.indexOf("    loadLibrary().then(function () {\n      /* HQ1"), bootB = M.indexOf("\n    });\n  }", bootA);
+  // NAMED (Nov 26 2026, FX4M): BEFORE the boot began "loadLibrary().then(function () {" then HQ1's note; AFTER the fast carry-on's line comes first
+  const bootA = M.indexOf("    loadLibrary().then(function () {\n      if (fastResume) { render(); return; }\n      /* HQ1"), bootB = M.indexOf("\n    });\n  }", bootA);
   const boot = bootA >= 0 && bootB > bootA ? M.slice(bootA, bootB) : "";
   const bootCode = noComments(boot);
-  check("A2. on load, the carry-on from the last page runs only when it is allowed", /if \(loadPlayAllowed\(\) && S\.was_playing && S\.track_id && trackById\(S\.track_id\)\) \{\s*setTimeout\(resumeAfterNavigation, RESUME_WAIT_MS\);/.test(bootCode), boot.slice(0, 200));
+  /* NAMED BEFORE → AFTER (Nov 26 2026, FX4M, the owner's option b). BEFORE (HQ1): the carry-on ran only when loadPlayAllowed() (the setting on,
+     no pause or stop in this visit). AFTER: only when resumeWanted(): it was playing as the last page went, in this visit (sessionLive), with no
+     pause or stop since (held), and not on Home; the setting no longer matters to it. */
+  check("A2. on load, the carry-on from the last page runs only when it is wanted (playing, in this visit, not held, not Home)",
+    /if \(!R\.settled && resumeWanted\(\) && trackById\(S\.track_id\)\) \{\s*setTimeout\(resumeAfterNavigation, RESUME_WAIT_MS\);/.test(bootCode) &&
+    once(M, "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }"), boot.slice(0, 200));
   check("A3. on load, 'Play when I open BizForce' plays only when it is allowed, on every page alike (the dashboard's icon no longer left out)",
     /if \(loadPlayAllowed\(\) && LIB\.tracks\.length\) play\(\{ auto: true \}\);/.test(bootCode) && (bootCode.match(/play\(/g) || []).length === 1 && !/state\(\) === "icon"/.test(bootCode));
-  check("A4. the carry-on itself checks the rule first", /function resumeAfterNavigation\(\) \{\n    R\.settled = true;\n    if \(!loadPlayAllowed\(\)\) \{ save\(\); render\(\); return Promise\.resolve\(false\); \}/.test(M));
+  // NAMED (Nov 26 2026, FX4M): BEFORE the carry-on checked loadPlayAllowed() first; AFTER it runs once (R.settled) and checks resumeWanted() first
+  check("A4. the carry-on itself checks the rule first", /function resumeAfterNavigation\(\) \{\n    if \(R\.settled\) return Promise\.resolve\(false\);[^\n]*\n    R\.settled = true;\n    if \(!resumeWanted\(\)\) \{ save\(\); render\(\); return Promise\.resolve\(false\); \}/.test(M));
   check("A5. a pause or a stop by the member is remembered for the visit; pressing play (or a track) clears it; the automatic start does not",
     has(M, "  function pause() { hold(true); if (popoutAlive())") && /function stop\(\) \{\n    hold\(true\);/.test(M) && has(M, "    if (!(opts && opts.auto)) hold(false);") && /function playTrack\(id\) \{\n    hold\(false\);/.test(M) &&
     has(M, "var HELD_KEY = \"bf_music_live_held\";") && has(M, "sessionStorage.getItem(HELD_KEY) === UID"));
@@ -653,8 +661,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 26 2026, FX4A): BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  check("W1. SHELL_REV \"fx4a\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", /var SHELL_REV = "fx4a";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]) &&
+  // NAMED (Nov 26 2026, FX4M): BEFORE "fx4a"; AFTER "fx4m" (music carries on across pages and stops on Home; the Guide tab on the Inbox). FX4A: BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  check("W1. SHELL_REV \"fx4m\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", /var SHELL_REV = "fx4m";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]) &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js (NAMED, Nov 22 2026, FX3: bf-abyss.js, the abyss sun's stars, just before bf-oracle-moon.js)", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-abyss\.js"><\/script>\n<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

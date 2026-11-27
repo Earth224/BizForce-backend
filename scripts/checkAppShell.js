@@ -72,6 +72,11 @@ const G1_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.
 // the 44 px rule; the Oracle chat row and sync card). FX4A's hunks: [file, now, was]; undone before all the others (they are
 // the newest), each found exactly once, they return the five files to frontend 44daec4 exactly (checkHqViews U1 reads them too).
 const FX4A_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4a.json"), "utf8"));
+// NAMED (Nov 26 2026, FX4M): the owner chose that music carries on across pages and stops on Home, and the Guide tab on the
+// Inbox, so scripts/bf-music.js (16 hunks), scripts/termaximus-guide.js (the Inbox's tips, 1 hunk) and css/bf-phone.css (the
+// Inbox's four controls cleared from under the tab, 1 hunk) change. FX4M's hunks: [file, now, was]; undone before all the
+// others (they are the newest), each found exactly once, they return the three files to frontend 53becf5 exactly.
+const FX4M_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4m.json"), "utf8"));
 // NAMED (Nov 25 2026, LR-4): music-popout.html scrolled sideways on a phone (401 px at 360; LR-4 PART E asks for none): its
 // boombox is drawn smaller on a phone (a rule inside @media (max-width: 760px) and the script that sets its scale). [file, now,
 // was]; undone before LR-3B's (they are the newest), each found exactly once, they return music-popout.html to frontend 5f560dd
@@ -142,8 +147,8 @@ const MUTATIONS = {
   // NAMED (Nov 21 2026, P3-1C): BEFORE SHELL_REV "p31b". AFTER "p31c" (the wallet's member-welcome sentence and ledger labels).
   // NAMED (Nov 22 2026, FX3): BEFORE SHELL_REV "p31c". AFTER "fx3" (the abyss sun, Termaximus on the phone, the agent cards).
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 26 2026, FX4A): BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  "sw-old-rev": [[SW, "var SHELL_REV = \"fx4a\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
+  // NAMED (Nov 26 2026, FX4M): BEFORE "fx4a"; AFTER "fx4m" (music carries on across pages and stops on Home; the Guide tab on the Inbox). FX4A: BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  "sw-old-rev": [[SW, "var SHELL_REV = \"fx4m\";",   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter). NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
     "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   // NAMED (Nov 20 2026, FX1): BEFORE the anchor had no comma after "inbox.html" (P2-2 added one; a MUTATION ANCHOR ERROR since)
@@ -311,8 +316,8 @@ async function page(pathname, opts) {
   // NAMED (Nov 22 2026, FX3B): BEFORE "fx3"; AFTER "fx3b"
   // NAMED (Nov 23 2026, P3-3): BEFORE "fx3b"; AFTER "p33" (Share, Offer or Need, the Need post and I can help, the Market filter)
   // NAMED (Nov 23 2026, LR-1): BEFORE "p33"; AFTER "lr1" (approve each reply before it posts, the Lead Radar sign-in prompt, tidy-ups). sw.js now carries its note on the SHELL_REV line, so the line may end in a // comment.
-  // NAMED (Nov 26 2026, FX4A): BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
-  check("W1. SHELL_REV \"fx4a\" in the cache's name", /var SHELL_REV = "fx4a";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
+  // NAMED (Nov 26 2026, FX4M): BEFORE "fx4a"; AFTER "fx4m" (music carries on across pages and stops on Home; the Guide tab on the Inbox). FX4A: BEFORE "h1b"; AFTER "fx4a" (the boombox, AI Agent Tasks, the Oracle pages and the calendar on phones). H1B: BEFORE "h1"; AFTER "h1b" (no mist on Home or the composer; room under the mist at the end of card-view and proposals). H1: BEFORE "g1"; AFTER "h1" (the home tabs, Search and the storefront badge). HOTFIX-G1: BEFORE "lr4b"; AFTER "g1" (phone layouts restored; only the controls under the Guide tab moved). LR-4B: BEFORE "lr4"; AFTER "lr4b" (the storefront menu draws whichever loads first). LR-4: BEFORE "lr3b"; AFTER "lr4" (Get found). LR-3B: BEFORE "lr3"; AFTER "lr3b" (nothing to tap under the Guide tab on the phone). LR-3: BEFORE "lr2b"; AFTER "lr3" (Inbound, the storefront Message button). LR-2B: BEFORE "lr2"; LR-2: BEFORE "lr1b".
+  check("W1. SHELL_REV \"fx4m\" in the cache's name", /var SHELL_REV = "fx4m";[ \t]*(?:\/\/[^\n]*)?\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(sw));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));
@@ -326,6 +331,8 @@ async function page(pathname, opts) {
     // (P22_DASH_LINES); with exactly those removed it must still be byte for byte the old file.
     let now = FILES[f];
     if (f === "dashboard.html") P22_DASH_LINES.forEach(function (l) { now = now.split(l + "\n").length === 2 ? now.replace(l + "\n", "") : now + "\u0000missing"; });
+    // NAMED (Nov 26 2026, FX4M): FX4M's hunks undone first of all, the same way
+    FX4M_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4m hunk missing"; });
     // NAMED (Nov 26 2026, FX4A): FX4A's hunks undone before all the others, the same way
     FX4A_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4a hunk missing"; });
     // NAMED (Nov 25 2026, HOTFIX-G1): HOTFIX-G1's hunk undone before all the others, the same way

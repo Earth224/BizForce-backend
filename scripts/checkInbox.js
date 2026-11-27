@@ -22,6 +22,7 @@
 const H = require("./_p21Harness");
 
 const SERVER = "@server.js", INBOXLIB = "@lib/inbox.js";
+const PHONECSS = "css/bf-phone.css";   // NAMED (Nov 26 2026, FX4M)
 const PAGE = "inbox.html", MESSAGES = "messages.html", PROPOSALS = "proposals.html";
 
 const MUTATIONS = {
@@ -47,10 +48,15 @@ const MUTATIONS = {
   "page-no-email-link": [[PAGE, "<a href=\"mailbox.html\">Your email</a> is separate.", "Your email is separate."]],
   "page-unsafe-link": [[PAGE, "    var link = safeUrl(n.link);", "    var link = n.link;"]],
   "messages-page-unlinked": [[MESSAGES, " They are in your <a class=\"inbox-ref\" href=\"inbox.html\">Inbox</a> too.", ""]],
-  "proposals-page-unlinked": [[PROPOSALS, " Waiting ones are in your <a class=\"inbox-ref\" href=\"inbox.html?tab=approvals\">Inbox</a> too.", ""]]
+  "proposals-page-unlinked": [[PROPOSALS, " Waiting ones are in your <a class=\"inbox-ref\" href=\"inbox.html?tab=approvals\">Inbox</a> too.", ""]],
+  // NAMED (Nov 26 2026, FX4M): the Guide tag dropped from the Inbox (P11), and a control left under the tab (P12)
+  "fx4m-inbox-guide-dropped": [[PAGE, "<script src=\"/scripts/termaximus-guide.js\"></script>\n<footer", "<footer"]],
+  "fx4m-items-under-tab": [[PHONECSS, "  #listBody .item { margin-left: 15px; width: calc(100% - 15px); padding-left: 4px; padding-right: 5px; }\n", ""]],
+  "fx4m-item-grows": [[PHONECSS, "  #listBody .item { margin-left: 15px; width: calc(100% - 15px); padding-left: 4px; padding-right: 5px; }\n", "  #listBody .item { margin-left: 15px; width: calc(100% - 15px); }\n"]],
+  "fx4m-back-moves-title": [[PHONECSS, "  #paneBack { margin-left: 9px; margin-right: -9px; }\n", "  #paneBack { margin-left: 9px; }\n"]]
 };
 
-const T = H.setup(__filename, MUTATIONS, [SERVER, INBOXLIB, PAGE, MESSAGES, PROPOSALS]);
+const T = H.setup(__filename, MUTATIONS, [SERVER, INBOXLIB, PAGE, MESSAGES, PROPOSALS, PHONECSS]);
 const { FILES, check, has, J } = T;
 const ME = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8222-222222222222", THIRD = "33333333-3333-4333-8333-333333333333";
 const SRC = FILES[SERVER] || "";
@@ -239,8 +245,21 @@ const run = (method, routePath, db, req) => {
   check("P8. a link to Your email (mailbox.html)", has(pg, "<a href=\"mailbox.html\">Your email</a> is separate."));
   check("P9. messages.html stays and links to the Inbox", has(FILES[MESSAGES], "They are in your <a class=\"inbox-ref\" href=\"inbox.html\">Inbox</a> too.") && has(FILES[MESSAGES], "threadMessages = d.messages || [];"));
   check("P10. proposals.html stays and links to the Approvals tab", has(FILES[PROPOSALS], "Waiting ones are in your <a class=\"inbox-ref\" href=\"inbox.html?tab=approvals\">Inbox</a> too."));
-  check("P11. no Guide on the Inbox (its page end is the bar's spacer), the bfc notice and the legal footer are there",
-    !has(pg, "termaximus-guide.js") && has(pg, "data-bf-legal-footer") && has(pg, "<script src=\"/scripts/bf-offline.js\"></script>"));
+  /* NAMED BEFORE → AFTER (Nov 26 2026, FX4M, the owner's order). BEFORE: "P11. no Guide on the Inbox (its page end is the bar's
+     spacer)", asserting termaximus-guide.js absent. AFTER: the Guide tab on the Inbox, as on the dashboard and the profile: its tag on
+     its own line just before the legal footer. */
+  check("P11. the Guide on the Inbox (its tag just before the legal footer), the bfc notice and the legal footer are there",
+    has(pg, "<script src=\"/scripts/termaximus-guide.js\"></script>\n<footer class=\"bf-legal-footer\" data-bf-legal-footer></footer>") &&
+    has(pg, "data-bf-legal-footer") && has(pg, "<script src=\"/scripts/bf-offline.js\"></script>"));
+
+  /* NAMED (Nov 26 2026, FX4M): with the Guide tab on the Inbox, each control it would cover on a phone is cleared to 40 px, one
+     control at a time (css/bf-phone.css, as HOTFIX-G1 did): the tab row, each list item, Back to the list, the message box's
+     row. Each gives its room back where it would otherwise move something: the tab buttons and the items from their own side
+     padding (so no text wraps differently and no item grows), Back to the list on its right (so the title stays). */
+  const PC = FILES[PHONECSS] || "";
+  check("P12. on a phone the Inbox's controls are cleared from under the Guide tab, one control at a time, nothing else moving",
+    ["  .tabs:has(> #tab-messages) { padding-left: 23px; }\n", "  .tabs:has(> #tab-messages) > .tab-btn { padding-left: calc(8px - 19px / 6); padding-right: calc(8px - 19px / 6); }\n", "  #listBody .item { margin-left: 15px; width: calc(100% - 15px); padding-left: 4px; padding-right: 5px; }\n", "  #paneBack { margin-left: 9px; margin-right: -9px; }\n", "  .compose:has(> #composeInput) { padding-left: 23px; }\n"].every(r => PC.split(r).length === 2) &&
+    PC.indexOf("  .tabs:has(> #tab-messages) { padding-left: 23px; }\n") > PC.indexOf("@media (max-width: 760px)"));
 
   T.finish();
 })().catch(e => { console.log("    FAIL  the check itself threw: " + (e && e.stack || e)); process.exit(1); });

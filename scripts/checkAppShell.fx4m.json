@@ -1,0 +1,92 @@
+[
+ [
+  "scripts/bf-music.js",
+  "    EQ_HZ: EQ_HZ, EQ_TYPE: EQ_TYPE, EQ_MAX: EQ_MAX, PLAYER_LOCAL: PLAYER_LOCAL, clampDb: clampDb, setEq: setEq, setFinish: setFinish,\n    _filters: function () { return filters; }, _meters: function () { return { left: meterL, right: meterR }; }, RESUME_WAIT_MS: RESUME_WAIT_MS, URL_STASH_KEY: URL_STASH_KEY, HOME_FEED: HOME_FEED, resumeWanted: function () { return resumeWanted(); }, CROSSFADE_MAX: CROSSFADE_MAX, ENERGY_HZ: ENERGY_HZ, STORE_KEY: STORE_KEY, CHANNEL_NAME: CHANNEL_NAME,\n    fadeGains: fadeGains, energyStep: energyStep, easeOut: easeOut, clamp01: clamp01,",
+  "    EQ_HZ: EQ_HZ, EQ_TYPE: EQ_TYPE, EQ_MAX: EQ_MAX, PLAYER_LOCAL: PLAYER_LOCAL, clampDb: clampDb, setEq: setEq, setFinish: setFinish,\n    _filters: function () { return filters; }, _meters: function () { return { left: meterL, right: meterR }; }, RESUME_WAIT_MS: RESUME_WAIT_MS, CROSSFADE_MAX: CROSSFADE_MAX, ENERGY_HZ: ENERGY_HZ, STORE_KEY: STORE_KEY, CHANNEL_NAME: CHANNEL_NAME,\n    fadeGains: fadeGains, energyStep: energyStep, easeOut: easeOut, clamp01: clamp01,"
+ ],
+ [
+  "scripts/bf-music.js",
+  "         music. AFTER: both only when loadPlayAllowed(): the setting on, and no pause or stop by the member in this visit. */\n      // NAMED (Nov 26 2026, FX4M): BEFORE loadPlayAllowed() (the setting); AFTER resumeWanted() (it was playing, in this visit)\n      if (!R.settled && resumeWanted() && trackById(S.track_id)) {\n        /* Music was playing when the last page went: carry on, once a",
+  "         music. AFTER: both only when loadPlayAllowed(): the setting on, and no pause or stop by the member in this visit. */\n      if (loadPlayAllowed() && S.was_playing && S.track_id && trackById(S.track_id)) {\n        /* Music was playing when the last page went: carry on, once a"
+ ],
+ [
+  "scripts/bf-music.js",
+  "    loadLibrary().then(function () {\n      if (fastResume) { render(); return; }\n      /* HQ1 (Nov 19 2026). NAMED BEFORE: music that was playing when the last page went carried on here by itself (the",
+  "    loadLibrary().then(function () {\n      /* HQ1 (Nov 19 2026). NAMED BEFORE: music that was playing when the last page went carried on here by itself (the"
+ ],
+ [
+  "scripts/bf-music.js",
+  "    ticker = setInterval(tick, TICK_MS);\n    post({ type: \"ping\", from: ID });   // FX4M: a pop-out answers at once\n    /* NAMED (Nov 26 2026, FX4M): HOME STOPS THE MUSIC. Opening home.html pauses it where it was (the player still shows\n       here, paused, for a play by hand), clears \"it was playing\" so the next page does not carry on, and counts as the\n       member's own stop for this visit (held), so \"Play when I open BizForce\" does not start it again on the next page\n       either. A pop-out that is playing is paused too, once it has answered. */\n    if (onHomeFeed()) {\n      R.settled = true;\n      hold(true);\n      save();\n      setTimeout(function () { if (popoutAlive()) relay(\"pause\"); }, RESUME_WAIT_MS);\n    }\n    /* FX4M: the fast carry-on. With the last signed URL still good, it starts RESUME_WAIT_MS after the page's start,\n       without waiting for the library or a new URL. */\n    var fastResume = resumeWanted() && !!stashedUrl(S.track_id);\n    if (fastResume) setTimeout(resumeAfterNavigation, RESUME_WAIT_MS);\n    loadLibrary().then(function () {",
+  "    ticker = setInterval(tick, TICK_MS);\n    loadLibrary().then(function () {"
+ ],
+ [
+  "scripts/bf-music.js",
+  "    if (R.playing && Date.now() - R.lastSave >= SAVE_EVERY_MS) { R.lastSave = Date.now(); save(); }\n    if (R.playing || MODE === \"popout\") postStatus();\n    if (R.playing && !energyTimer) startEnergy();",
+  "    if (R.playing && Date.now() - R.lastSave >= SAVE_EVERY_MS) { R.lastSave = Date.now(); save(); }\n    if (R.playing || MODE === \"popout\") {\n      var t = trackById(S.track_id);\n      post({ type: \"status\", from: ID, role: MODE, playing: R.playing, track_id: S.track_id, title: t ? t.title : \"\", artist: t ? t.artist : \"\",\n        position: currentPosition(), duration: currentDuration(), shuffle: S.shuffle, repeat: S.repeat, volume: S.volume, muted: S.muted });\n    }\n    if (R.playing && !energyTimer) startEnergy();"
+ ],
+ [
+  "scripts/bf-music.js",
+  "  var ticker = null;\n  function postStatus() {\n    var t = trackById(S.track_id);\n    post({ type: \"status\", from: ID, role: MODE, playing: R.playing, track_id: S.track_id, title: t ? t.title : \"\", artist: t ? t.artist : \"\",\n      position: currentPosition(), duration: currentDuration(), shuffle: S.shuffle, repeat: S.repeat, volume: S.volume, muted: S.muted });\n  }\n  function tick() {",
+  "  var ticker = null;\n  function tick() {"
+ ],
+ [
+  "scripts/bf-music.js",
+  "    /* the pop-out */\n    // NAMED (Nov 26 2026, FX4M): a page that has just opened asks; the pop-out says at once whether it is there and playing\n    if (m.type === \"ping\") { postStatus(); return; }\n    if (m.type === \"handoff\" && m.to === ID) {",
+  "    /* the pop-out */\n    if (m.type === \"handoff\" && m.to === ID) {"
+ ],
+ [
+  "scripts/bf-music.js",
+  "  function loadPlayAllowed() { return S.autoplay === true && !held(); }\n  /* NAMED (Nov 26 2026, FX4M, the owner's option b): BEFORE music playing when the last page went carried on here only\n     with \"Play when I open BizForce\" on (loadPlayAllowed). AFTER it carries on whatever that setting says, but only when it\n     was playing at that moment (was_playing), in this visit (sessionLive: this tab has played and was not stopped), and\n     the member has not paused or stopped since (held). A fresh visit never starts sound by itself; a paused player stays\n     paused. Opening Home (HOME_FEED) stops it, so nothing carries on from there. */\n  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }\n  function onHomeFeed() { var T = themeEngine(); return MODE !== \"popout\" && !!T && T.pageKey() === HOME_FEED; }\n  function sessionLive() { try { return !!UID && sessionStorage.getItem(LIVE_KEY) === UID; } catch (e) { return false; } }",
+  "  function loadPlayAllowed() { return S.autoplay === true && !held(); }\n  function sessionLive() { try { return !!UID && sessionStorage.getItem(LIVE_KEY) === UID; } catch (e) { return false; } }"
+ ],
+ [
+  "scripts/bf-music.js",
+  "    R.settled = true;\n    if (!resumeWanted()) { save(); render(); return Promise.resolve(false); }   // FX4M (was HQ1's loadPlayAllowed)\n    if (popoutAlive() || R.playing || (!trackById(S.track_id) && !stashedUrl(S.track_id))) { render(); return Promise.resolve(false); }\n    R.resuming = true;",
+  "    R.settled = true;\n    if (!loadPlayAllowed()) { save(); render(); return Promise.resolve(false); }   // HQ1\n    if (popoutAlive() || R.playing || !S.was_playing || !S.track_id || !trackById(S.track_id)) { render(); return Promise.resolve(false); }\n    R.resuming = true;"
+ ],
+ [
+  "scripts/bf-music.js",
+  "  function resumeAfterNavigation() {\n    if (R.settled) return Promise.resolve(false);   // FX4M: settled already (Home, a pause, or the other path started it)\n    R.settled = true;",
+  "  function resumeAfterNavigation() {\n    R.settled = true;"
+ ],
+ [
+  "scripts/bf-music.js",
+  "    var d = decks[active];\n    // FX4M: until the track has loaded here (a carry-on still starting), the saved position stands, exactly\n    return d && d.track && d.el.readyState !== 0 ? (Number(d.el.currentTime) || 0) : (Number(S.position) || 0);\n  }",
+  "    var d = decks[active];\n    return d && d.track ? (Number(d.el.currentTime) || 0) : (Number(S.position) || 0);\n  }"
+ ],
+ [
+  "scripts/bf-music.js",
+  "  }\n  /* FX4M: the last signed URL, for this member and this track, while it has a minute left; null otherwise. */\n  function stashedUrl(id) {\n    var s = null;\n    try { s = JSON.parse(sessionStorage.getItem(URL_STASH_KEY) || \"null\"); } catch (e) { s = null; }\n    if (!s || !UID || s.uid !== UID || s.id !== id || typeof s.url !== \"string\" || !(s.expires - Date.now() > URL_MARGIN_MS)) return null;\n    return { url: s.url, expires: s.expires };\n  }\n  function stashUrl(id, u) {\n    try { if (UID && u && u.expires) sessionStorage.setItem(URL_STASH_KEY, JSON.stringify({ uid: UID, id: id, url: u.url, expires: u.expires })); } catch (e) { /* storage unavailable */ }\n  }\n",
+  "  }\n"
+ ],
+ [
+  "scripts/bf-music.js",
+  "      urls[id] = { url: r.body.url, expires: Date.parse(r.body.expires_at) || 0 };\n      stashUrl(id, urls[id]);\n      return r.body.url;",
+  "      urls[id] = { url: r.body.url, expires: Date.parse(r.body.expires_at) || 0 };\n      return r.body.url;"
+ ],
+ [
+  "scripts/bf-music.js",
+  "  function urlFor(id, fresh) {\n    var held = urls[id] || (fresh ? null : stashedUrl(id));\n    if (!fresh && held && held.expires - Date.now() > URL_MARGIN_MS) return Promise.resolve(held.url);",
+  "  function urlFor(id, fresh) {\n    var held = urls[id];\n    if (!fresh && held && held.expires - Date.now() > URL_MARGIN_MS) return Promise.resolve(held.url);"
+ ],
+ [
+  "scripts/bf-music.js",
+  "  var PEAK_FALL = 0.012;\n  /* NAMED (Nov 26 2026, FX4M): BEFORE 400 ms after the library arrived (long enough to hear a pop-out's next status, sent\n     every TICK_MS); AFTER 150 ms from the page's start: the page asks (\"ping\") and a pop-out answers at once. */\n  var RESUME_WAIT_MS = 150;\n  /* NAMED (Nov 26 2026, FX4M): sessionStorage, the signed URL of the track that was playing, kept while it has a minute\n     left, so the next page plays without asking the server first. Its name starts with LIVE_KEY, so sign-out clears it. */\n  var URL_STASH_KEY = \"bf_music_live_url\";\n  /* NAMED (Nov 26 2026, FX4M): opening Home (For You, Local, Following, Market, Search) stops the music. */\n  var HOME_FEED = \"home.html\";\n  var LEVELS_MS = 33;",
+  "  var PEAK_FALL = 0.012;\n  var RESUME_WAIT_MS = 400;\n  var LEVELS_MS = 33;"
+ ],
+ [
+  "scripts/bf-music.js",
+  "   volume (bf_music), and if the music was playing it resumes by itself\n   (FX4M, Nov 26 2026, the owner's option b: whatever \"Play when I open\n   BizForce\" says, when it was playing as the last page went, in this visit,\n   with no pause or stop since, resumeWanted; a paused or stopped player and a\n   fresh visit stay silent; opening Home stops it, HOME_FEED. HQ1's rule, only\n   with the setting on, is replaced)\n   (after RESUME_WAIT_MS, long enough for a pop-out to answer the page's ping;\n   with the last signed URL still good, URL_STASH_KEY, without asking for a\n   new one or waiting for the library). A\n   continuation is tried without waiting for a click; if the browser refuses",
+  "   volume (bf_music), and if the music was playing it resumes by itself\n   (HQ1, Nov 19 2026: only with \"Play when I open BizForce\" on and no pause or\n   stop by the member in this visit, loadPlayAllowed; otherwise it waits,\n   paused, for play)\n   (after RESUME_WAIT_MS, long enough to hear a pop-out that is playing). A\n   continuation is tried without waiting for a click; if the browser refuses"
+ ],
+ [
+  "scripts/termaximus-guide.js",
+  "    ],\n    /* NAMED (Nov 26 2026, FX4M): the Inbox shows the Guide tab, as on the dashboard and the profile. */\n    \"inbox.html\": [\n      \"Under \\\"Messages\\\", press a conversation, type in \\\"Write a message\\\" and press \\\"Send\\\"; a number on a tab counts what is unread or waiting.\",\n      \"Under \\\"Approvals\\\", open what an agent proposes and press \\\"Approve\\\" or \\\"Reject\\\"; \\\"See every detail\\\" opens it on the Proposals page.\",\n      \"\\\"Notifications\\\" lists what happened on your account; press \\\"Mark all read\\\" to clear the dots, or \\\"Turn on push notifications\\\" for this device.\",\n      \"A list says it \\\"could not be loaded just now\\\"? The read failed, not your messages; reload the page. Email lives under \\\"Your email\\\", not here.\"\n    ],\n    \"mychart.html\": [",
+  "    ],\n    \"mychart.html\": ["
+ ],
+ [
+  "css/bf-phone.css",
+  "  body:has(#lrTabFp) .bf-legal-footer nav, body:has(#neverExported) .bf-legal-footer nav { padding-left: 16px; }\n  /* NAMED (Nov 26 2026, FX4M): the Inbox shows the Guide tab now (the owner's order), so its controls under the tab are\n     cleared the same way, one control at a time, each to 40 px: the Messages / Approvals / Notifications tab row (21 px;\n     the three buttons share the 19 px, and each gives it back from its own side padding, so every label and count keeps\n     its width), each item in the list, a conversation, an approval or a notification (25 px; it gives the 15 px back from\n     its side padding, 12 + 12 to 4 + 5, so its text keeps its width and wraps as before: no item grows and nothing below\n     it moves), Back to the list (31 px: it gives the same 9 px back on its right, so the title beside it does not move)\n     and the message box's row (27 px: the box starts at 40 px and Send stays where it was). */\n  .tabs:has(> #tab-messages) { padding-left: 23px; }\n  .tabs:has(> #tab-messages) > .tab-btn { padding-left: calc(8px - 19px / 6); padding-right: calc(8px - 19px / 6); }\n  #listBody .item { margin-left: 15px; width: calc(100% - 15px); padding-left: 4px; padding-right: 5px; }\n  #paneBack { margin-left: 9px; margin-right: -9px; }\n  .compose:has(> #composeInput) { padding-left: 23px; }\n}",
+  "  body:has(#lrTabFp) .bf-legal-footer nav, body:has(#neverExported) .bf-legal-footer nav { padding-left: 16px; }\n}"
+ ]
+]

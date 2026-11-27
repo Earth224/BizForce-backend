@@ -229,6 +229,26 @@ const MUTATIONS = {
   /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: "if (library) setLibrary(false, true); else setState(\"tag\", true);". AFTER: Escape
      steps back one stage (stepBack), the library first. */
   "escape-keeps-library": [[BOOMBOX, "        if (state === \"box\" && library) setLibrary(false, true); else stepBack(true);", "        stepBack(true);"]],
+  /* NAMED (Nov 26 2026, FX4M): the carry-on rules (the owner's option b) and Home. */
+  // FX4M: the carry-on still needing "Play when I open BizForce" (HQ1's rule)
+  "fx4m-resume-needs-setting": [[MUSIC, "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }", "  function resumeWanted() { return S.was_playing === true && S.autoplay === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }"]],
+  // FX4M: sound by itself on a fresh visit (no music yet in this tab)
+  "fx4m-resume-on-fresh-visit": [[MUSIC, "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }", "  function resumeWanted() { return S.was_playing === true && !!S.track_id && !held() && !onHomeFeed(); }"]],
+  // FX4M: a player paused when the last page went carried on anyway
+  "fx4m-resume-when-paused": [[MUSIC, "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }", "  function resumeWanted() { return !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }"]],
+  // FX4M: a pause or stop made in this visit ignored by the next page
+  "fx4m-resume-when-held": [[MUSIC, "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }", "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !onHomeFeed(); }"]],
+  // FX4M: Home carrying the music on
+  "fx4m-home-plays": [[MUSIC, "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held() && !onHomeFeed(); }", "  function resumeWanted() { return S.was_playing === true && !!S.track_id && sessionLive() && !held(); }"],
+    [MUSIC, "    if (onHomeFeed()) {\n      R.settled = true;", "    if (false) {\n      R.settled = true;"]],
+  // FX4M: Home leaving "it was playing" saved (so the next page would carry on) and the visit not held
+  "fx4m-home-not-cleared": [[MUSIC, "      R.settled = true;\n      hold(true);\n      save();\n", "      R.settled = true;\n"]],
+  // FX4M: the signed URL not kept for the next page (it asks the server again first)
+  "fx4m-url-not-kept": [[MUSIC, "    var held = urls[id] || (fresh ? null : stashedUrl(id));", "    var held = urls[id];"]],
+  // FX4M: the carry-on wait back at HQ1's 400 ms
+  "fx4m-slow-resume": [[MUSIC, "  var RESUME_WAIT_MS = 150;", "  var RESUME_WAIT_MS = 400;"]],
+  // FX4M: a refused carry-on not offering "Tap to resume"
+  "fx4m-no-tap-to-resume": [[MUSIC, "      if (R.resuming) { R.armed = true; say(RESUME_TAP, \"info\"); }", "      if (false) { R.armed = true; say(RESUME_TAP, \"info\"); }"]],
   "503-as-internal-error": [[SERVER, "  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: \"music_not_set_up\" });\n", ""]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -778,6 +798,8 @@ async function openPage(o) {
       if (o.live) win.sessionStorage.setItem("bf_music_live", UID);
       /* NAMED (Nov 19 2026, HQ1): the member paused or stopped the music earlier in this visit (bf-music.js HELD_KEY) */
       if (o.held) win.sessionStorage.setItem("bf_music_live_held", UID);
+      /* NAMED (Nov 26 2026, FX4M): this tab's other session items, as the last page left them (the signed-URL stash) */
+      if (o.session) Object.keys(o.session).forEach(k => { if (o.session[k] !== null) win.sessionStorage.setItem(k, o.session[k]); });
       win.localStorage.setItem("bf_theme", themeCache(o.theme || MUSIC_THEME));
       win.matchMedia = q => ({ matches: !!o.reduce && /prefers-reduced-motion: reduce/.test(q), addEventListener() {}, addListener() {} });
       win.Audio = makeFakeAudio(win);
@@ -1575,32 +1597,58 @@ async function boomboxChecks(c) {
   const left = JSON.parse(P1.localStorage.getItem("bf_music") || "{}");
   check("G8. leaving a page while it plays saves the track, the place, the queue, the volume, and that it was playing",
     left.was_playing === true && left.track_id === T2 && near(left.position, 50, 0.01) && near(left.volume, 0.4) && left.queue.length >= 3, JSON.stringify(left));
+  /* NAMED (Nov 26 2026, FX4M): this tab's session as P1 left it, playing: music live in this visit, and the track's signed URL */
+  const tabLive = { bf_music_live: P1.sessionStorage.getItem("bf_music_live"), bf_music_live_url: P1.sessionStorage.getItem("bf_music_live_url") };
+  const stashOk = (() => { try { const s = JSON.parse(tabLive.bf_music_live_url); return s.uid === UID && s.id === T2 && typeof s.url === "string" && s.expires > Date.now(); } catch (e) { return false; } })();
+  check("G8. while it plays, this tab remembers that music is on in this visit and keeps the track's signed URL for the next page (bf_music_live_url: this member, this track, with its expiry)",
+    tabLive.bf_music_live === UID && stashOk, JSON.stringify(tabLive).slice(0, 200));
   P1.BFMusic.pause(); closeOne(P1);
   /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: timed from before jsdom built the page, which counts jsdom compiling the scripts (140 to 740 ms
      on this machine, more with the mixer). AFTER: timed from the page's DOMContentLoaded, when a browser's page
      has its scripts ready, to the first moment it plays; still within a second, and RESUME_WAIT_MS at most 500. */
   /* NAMED BEFORE → AFTER (Nov 19 2026, HQ1). BEFORE: the next page carried the music on whatever "Play when I open BizForce" said.
      AFTER: only with it on (bf-music.js loadPlayAllowed); with it off the place is kept and nothing plays (checked below). */
+  /* NAMED BEFORE → AFTER (Nov 26 2026, FX4M, the owner's option b). BEFORE (HQ1): only with "Play when I open BizForce" on.
+     AFTER: whatever the setting says, when the music was playing as the last page went, in this visit (bf_music_live), with no
+     pause or stop since (bf-music.js resumeWanted); RESUME_WAIT_MS at most 200; with the signed URL kept, no new URL is asked
+     for. A fresh visit, a paused player, a held one and Home stay silent. */
   const leftOff = JSON.parse(JSON.stringify(left));
-  const P2 = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }) }));
+  const P2 = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: false }), session: { bf_music_live: tabLive.bf_music_live } }));
   const t0 = P2.__loadedAt;
   while (!P2.BFMusic.playing() && Date.now() - t0 < 2000) await wait(5);
   const took = Date.now() - t0;
-  check("G8. the next page carries on by itself, from the same track and place, with the same queue and volume, within a second (" + took + " ms)",
+  check("G8. the next page carries on by itself, with \"Play when I open BizForce\" off, from the same track and place, with the same queue and volume, within a second (" + took + " ms)",
     P2.BFMusic.playing() && P2.BFMusic.state().track_id === T2 && near(P2.BFMusic.position(), 50, 0.01) && near(P2.BFMusic.state().volume, 0.4) &&
-    P2.BFMusic.state().queue.join() === left.queue.join() && took < 1000 && P2.BFMusic.RESUME_WAIT_MS <= 500, took);
+    P2.BFMusic.state().queue.join() === left.queue.join() && took < 1000 && P2.BFMusic.RESUME_WAIT_MS <= 200, took);
   P2.BFMusic.pause(); await settle(); closeOne(P2);
-  const POFF = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, leftOff, { autoplay: false }) }));
+  const PF = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: false }), session: tabLive }));
+  const tf = PF.__loadedAt;
+  while (!PF.BFMusic.playing() && Date.now() - tf < 2000) await wait(5);
+  check("G8. ... with the signed URL kept, it plays without asking for a new one (no GET .../url), from the same place",
+    PF.BFMusic.playing() && PF.__calls.filter(c => /\/url$/.test(c)).length === 0 && near(PF.BFMusic.position(), 50, 0.01), PF.__calls.join(" "));
+  PF.BFMusic.pause(); await settle(); closeOne(PF);
+  const POFF = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, leftOff, { autoplay: false }), session: { bf_music_live_url: tabLive.bf_music_live_url } }));
   await wait(POFF.BFMusic.RESUME_WAIT_MS + 150); await settle();
-  check("G8. with \"Play when I open BizForce\" off, the next page does not carry on: silent, nothing armed, the track and place kept",
+  check("G8. a fresh visit (no music yet in this tab) does not carry on: silent, nothing armed, the track and place kept",
     !POFF.BFMusic.playing() && !POFF.BFMusic.armed() && AUDIOS.filter(x => x.win === POFF).reduce((n, x) => n + x.plays, 0) === 0 &&
     POFF.BFMusic.state().track_id === T2 && near(POFF.BFMusic.position(), 50, 0.01), POFF.BFMusic.playing() + " " + POFF.BFMusic.armed());
   closeOne(POFF);
-  const PHELD = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }), held: true }));
+  const PON = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }) }));
+  await wait(PON.BFMusic.RESUME_WAIT_MS + 150); await settle();
+  check("G8. ... nor with \"Play when I open BizForce\" on: no sound by itself on a fresh visit (the setting only arms the first tap)",
+    !PON.BFMusic.playing() && AUDIOS.filter(x => x.win === PON).reduce((n, x) => n + x.plays, 0) === 0, PON.BFMusic.playing());
+  closeOne(PON);
+  const PPAUSED = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: false, was_playing: false }), session: tabLive }));
+  await wait(PPAUSED.BFMusic.RESUME_WAIT_MS + 150); await settle();
+  check("G8. music paused (or stopped) when the last page went stays paused on the next page: silent, nothing armed, the place kept",
+    !PPAUSED.BFMusic.playing() && !PPAUSED.BFMusic.armed() && AUDIOS.filter(x => x.win === PPAUSED).reduce((n, x) => n + x.plays, 0) === 0 &&
+    near(PPAUSED.BFMusic.position(), 50, 0.01), PPAUSED.BFMusic.playing() + " " + PPAUSED.BFMusic.armed());
+  closeOne(PPAUSED);
+  const PHELD = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }), held: true, session: tabLive }));
   await wait(PHELD.BFMusic.RESUME_WAIT_MS + 150); await settle();
-  check("G8. with it on but a pause or stop made in this visit, the next page stays silent too", !PHELD.BFMusic.playing() && !PHELD.BFMusic.armed(), PHELD.BFMusic.playing() + " " + PHELD.BFMusic.armed());
+  check("G8. after a pause or stop made in this visit, the next page stays silent too", !PHELD.BFMusic.playing() && !PHELD.BFMusic.armed(), PHELD.BFMusic.playing() + " " + PHELD.BFMusic.armed());
   closeOne(PHELD);
-  const P3 = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }), blockPlay: true }));
+  const P3 = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: false }), blockPlay: true, session: tabLive }));
   await wait(P3.BFMusic.RESUME_WAIT_MS + 150); await settle();
   const ttag = P3.document.querySelector(".bfm-tag-title");
   check("G8. where the browser will not play before a tap, the tag says \"Tap to resume\" and nothing is heard",
@@ -1610,6 +1658,27 @@ async function boomboxChecks(c) {
   gesture(P3); await settle();
   check("G8. ... and the tap resumes it at the saved place", P3.BFMusic.playing() && P3.BFMusic.state().track_id === T2 && near(P3.BFMusic.position(), 50, 0.01));
   P3.BFMusic.pause(); await settle(); closeOne(P3);
+  /* NAMED (Nov 26 2026, FX4M): HOME STOPS THE MUSIC (bf-music.js HOME_FEED). Arriving on home.html while it was playing: no sound,
+     nothing armed, "it was playing" cleared at once, the visit held; the player still shows there, paused, at its place. */
+  const PHOME = await openPage(Object.assign({}, base, { page: "home.html", store: Object.assign({}, left, { autoplay: true }), session: tabLive }));
+  const savedAtOnce = JSON.parse(PHOME.localStorage.getItem("bf_music") || "{}");
+  await wait(PHOME.BFMusic.RESUME_WAIT_MS + 150); await settle();
+  const homeLeft = JSON.parse(PHOME.localStorage.getItem("bf_music") || "{}");
+  check("G8. opening Home stops the music: silent, nothing armed, \"it was playing\" cleared at once, the visit held, and the player still shows there, paused, at its place",
+    PHOME.BFMusic.HOME_FEED === "home.html" && !PHOME.BFMusic.playing() && !PHOME.BFMusic.armed() && AUDIOS.filter(x => x.win === PHOME).reduce((n, x) => n + x.plays, 0) === 0 &&
+    savedAtOnce.was_playing === false && homeLeft.was_playing === false && PHOME.sessionStorage.getItem("bf_music_live_held") === UID &&
+    shown(PHOME) && PHOME.BFMusic.musicOn() && near(PHOME.BFMusic.position(), 50, 0.01),
+    [PHOME.BFMusic.playing(), PHOME.BFMusic.armed(), savedAtOnce.was_playing, homeLeft.was_playing, shown(PHOME)].join(" "));
+  const homeTab = { bf_music_live: PHOME.sessionStorage.getItem("bf_music_live"), bf_music_live_url: PHOME.sessionStorage.getItem("bf_music_live_url"),
+    bf_music_live_held: PHOME.sessionStorage.getItem("bf_music_live_held") };
+  const PAH = await openPage(Object.assign({}, base, { page: "tasks.html", store: homeLeft, session: homeTab }));
+  await wait(PAH.BFMusic.RESUME_WAIT_MS + 150); await settle();
+  check("G8. ... and moving on from Home does not carry it on, even with \"Play when I open BizForce\" on: silent, nothing armed",
+    !PAH.BFMusic.playing() && !PAH.BFMusic.armed() && AUDIOS.filter(x => x.win === PAH).reduce((n, x) => n + x.plays, 0) === 0, PAH.BFMusic.playing() + " " + PAH.BFMusic.armed());
+  closeOne(PAH);
+  gesture(PHOME); PHOME.BFMusic.play(); await settle();
+  check("G8. ... while on Home the member can still play by hand", PHOME.BFMusic.playing() && PHOME.BFMusic.state().track_id === T2);
+  PHOME.BFMusic.pause(); await settle(); closeOne(PHOME);
   /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "... For unbroken music, use Pop out." AFTER: it names the panel's option. */
   check("G8. the help text says so, word for word", F.document.querySelector(".bfm-continuity").textContent === "Moving between pages pauses for a moment. For unbroken music, choose Keep playing between pages." &&
     F.BFMusic.CONTINUITY_NOTE === "Moving between pages pauses for a moment. For unbroken music, choose Keep playing between pages.");
@@ -2184,7 +2253,8 @@ async function stageChecks(c) {
   Q0.BFMusic.pause(); closeOne(Q0);
   /* NAMED (Nov 19 2026, HQ1): the music carries on to the next page only with "Play when I open BizForce" on (bf-music.js
      loadPlayAllowed); BEFORE it carried on whatever the setting said. */
-  const Q1 = await openPage(Object.assign({}, base, { page: "crm.html", store: Object.assign({}, leftQ, { autoplay: true }), boombox: prefsQ }));
+  // NAMED (Nov 26 2026, FX4M): in the same visit (live), as the carry-on now needs; the setting no longer matters
+  const Q1 = await openPage(Object.assign({}, base, { page: "crm.html", store: Object.assign({}, leftQ, { autoplay: true }), boombox: prefsQ, live: true }));
   const atOnce = shown(Q1) && boxOf(Q1).getAttribute("data-state") === "box";
   for (let i = 0; i < 200 && !Q1.BFMusic.playing(); i++) await wait(5);
   check("I5. the next page, while the music carries on, shows the player at once at its last stage (the boombox), and it plays",
@@ -2608,7 +2678,8 @@ async function nowPlayingChecks(c) {
   /* NAMED (Nov 19 2026, HQ1): the carry-on runs only with "Play when I open BizForce" on (bf-music.js loadPlayAllowed). */
   const left = JSON.parse(JSON.stringify(Object.assign({}, N.BFMusic.state(), { was_playing: true, autoplay: true })));
   closeOne(N);
-  const P = await openPage(Object.assign({}, base, { page: "tasks.html", store: left }));
+  // NAMED (Nov 26 2026, FX4M): in the same visit (live), as the carry-on now needs
+  const P = await openPage(Object.assign({}, base, { page: "tasks.html", store: left, live: true }));
   const t0 = Date.now();
   while (!P.BFMusic.playing() && Date.now() - t0 < 2000) await wait(20);
   check("G13. when the next page carries the track on, no sweep runs: it is not a new track", P.BFMusic.playing() && P.BFMusic._box().sweeps() === 0 &&
