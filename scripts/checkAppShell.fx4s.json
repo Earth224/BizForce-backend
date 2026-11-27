@@ -1,0 +1,12 @@
+[
+ [
+  "scripts/bf-boombox.js",
+  "    var state = popout ? \"box\" : stageOf(prefs.state, home);\n    /* NAMED (Nov 26 2026, FX4S): BEFORE popout ? true : prefs.library === true, so a phone reopened with the library over most of the\n       page. AFTER on a phone (the dock's own phone() test) the library is not reopened by itself at launch; Library opens it by hand\n       as before. The pop-out keeps its library always open, and a desktop restores it as before. */\n    var library = popout ? true : (prefs.library === true && !phone());\n    var position = POSITIONS.indexOf(opts.position) !== -1 ? opts.position : \"follow\";",
+  "    var state = popout ? \"box\" : stageOf(prefs.state, home);\n    var library = popout ? true : prefs.library === true;\n    var position = POSITIONS.indexOf(opts.position) !== -1 ? opts.position : \"follow\";"
+ ],
+ [
+  "scripts/bf-boombox.js",
+  "    \".bfm-float[data-dock=phone] .bfm-drawer{position:static;width:100%;margin-top:8px;display:none}\",\n    /* NAMED (Nov 26 2026, FX4S): BEFORE [data-dock=phone][data-library=true], which outweighed the stage rule above (the drawer\n       hidden at the bar and the icon), so Library then Minimise left the whole library showing above the bar: the bar and its keys\n       pushed off the top of the screen, the drawer inert, the screen covered, and bf_boombox brought it back on every launch.\n       AFTER the drawer shows on a phone only in the open boombox, as everywhere else. */\n    \".bfm-float[data-dock=phone][data-state=box][data-library=true] .bfm-drawer{display:block}\",\n    \".bfm-float[data-dock=phone] .bfm-panel{transform:none;max-height:none}\",",
+  "    \".bfm-float[data-dock=phone] .bfm-drawer{position:static;width:100%;margin-top:8px;display:none}\",\n    \".bfm-float[data-dock=phone][data-library=true] .bfm-drawer{display:block}\",\n    \".bfm-float[data-dock=phone] .bfm-panel{transform:none;max-height:none}\","
+ ]
+]

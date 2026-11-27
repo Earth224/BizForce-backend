@@ -249,6 +249,9 @@ const MUTATIONS = {
   "fx4m-slow-resume": [[MUSIC, "  var RESUME_WAIT_MS = 150;", "  var RESUME_WAIT_MS = 400;"]],
   // FX4M: a refused carry-on not offering "Tap to resume"
   "fx4m-no-tap-to-resume": [[MUSIC, "      if (R.resuming) { R.armed = true; say(RESUME_TAP, \"info\"); }", "      if (false) { R.armed = true; say(RESUME_TAP, \"info\"); }"]],
+  // NAMED (Nov 26 2026, FX4S): the phone library trap (FX4-STUCK-READ) back: the drawer in any stage, the library reopened at a phone launch
+  "fx4s-drawer-any-stage": [[BOOMBOX, "    \".bfm-float[data-dock=phone][data-state=box][data-library=true] .bfm-drawer{display:block}\",\n", "    \".bfm-float[data-dock=phone][data-library=true] .bfm-drawer{display:block}\",\n"]],
+  "fx4s-library-restored-on-phone": [[BOOMBOX, "    var library = popout ? true : (prefs.library === true && !phone());\n", "    var library = popout ? true : prefs.library === true;\n"]],
   "503-as-internal-error": [[SERVER, "  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: \"music_not_set_up\" });\n", ""]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -626,6 +629,16 @@ const upload = (buffer, name, mimetype) => ({ field: "track", buffer, originalna
     FILES[POPOUT].indexOf('<script src="/scripts/bf-session.js"></script>') !== -1 && FILES[POPOUT].indexOf(boomboxTag) !== -1 && FILES[POPOUT].indexOf(boomboxTag) < FILES[POPOUT].indexOf(musicTag));
   const appMap = JSON.parse(fs.readFileSync(path.join(REPO, "lib", "appMap.json"), "utf8"));
   check("D0. the app map knows the pop-out page", JSON.stringify(appMap).indexOf("music-popout.html") !== -1);
+  /* NAMED (Nov 26 2026, FX4S): the phone music library trap. BEFORE on a phone, Library then Minimise left the library showing above
+     the bar ([data-dock=phone][data-library=true] outweighed the stage rule), the bar's keys pushed off the top of the screen, the
+     drawer inert, the screen covered, and bf_boombox restored it at every launch. AFTER the drawer shows on a phone only in the open
+     boombox, and a phone launch never reopens the library by itself (the pop-out keeps it open; a desktop restores it as before). */
+  const BXS = FILES[BOOMBOX] || "";
+  check("FX4S-1. on a phone the library drawer shows only in the open boombox (never above the bar or the icon)",
+    BXS.split("    \".bfm-float[data-dock=phone][data-state=box][data-library=true] .bfm-drawer{display:block}\",\n").length === 2 && BXS.indexOf("[data-dock=phone][data-library=true] .bfm-drawer") === -1 &&
+    BXS.split("\".bfm-float[data-state=tag] .bfm-drawer,.bfm-float[data-state=icon] .bfm-drawer{display:none}\"").length === 2);
+  check("FX4S-2. a phone launch does not reopen the library by itself (the dock's own phone() test); the pop-out keeps it open",
+    BXS.split("    var library = popout ? true : (prefs.library === true && !phone());\n").length === 2 && BXS.indexOf("function phone() { return window.innerWidth <= PHONE_MAX; }") !== -1);
   await playerChecks();
   finish();
 })().catch(e => { check("the check ran to the end", false, e && e.stack); finish(); });
