@@ -830,10 +830,14 @@ async function oracleChecks() {
   // NAMED (Nov 26 2026, FX4A): the owner asked for the Oracle pages to be fixed on phones. FX4A's own hunks
   // (checkAppShell.fx4a.json, [file, now, was], each found exactly once) are undone first; every other line is held as before.
   const FX4A_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4a.json"), "utf8"));
+  // NAMED (Nov 26 2026, FX4B): BEFORE FX4A's hunks alone; AFTER FX4B's (My Chart fits the phone; the Oracle's Profile and Celestial
+  // panels solid on a phone; checkAppShell.fx4b.json) are undone first, then FX4A's.
+  const FX4B_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4b.json"), "utf8"));
   const drift = ORACLE_PAGES.filter(f => {
     const was = gitShow(BEFORE, f);
     let now = FILES[f];
     if (was === null || now === null) return true;
+    FX4B_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4b hunk missing"; });
     FX4A_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4a hunk missing"; });
     // NAMED (Nov 19 2026, PH1): two named phone edits on every page are set aside, each exactly once: the viewport meta
     // gains ", viewport-fit=cover", and the phone layout's stylesheet (css/bf-phone.css) is linked last in the head.

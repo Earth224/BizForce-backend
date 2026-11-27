@@ -904,16 +904,30 @@ const MIST_CLEAR = String.raw`(function(){
   var els = [].slice.call(document.querySelectorAll(SEL));
   [].forEach.call(document.querySelectorAll("body *"), function(n){ if (els.indexOf(n) !== -1) return; var c = getComputedStyle(n);
     if ((/(auto|scroll)/.test(c.overflowX) && n.scrollWidth > n.clientWidth + 1) || (/(auto|scroll)/.test(c.overflowY) && n.scrollHeight > n.clientHeight + 1)) { var q = n.getBoundingClientRect(); if (!(q.left <= m.left && q.right >= m.right && q.top <= m.top && q.bottom >= m.bottom)) els.push(n); } });   // a scroller that holds the whole mist is the canvas, not under it
-  var hits = [];
+  /* NAMED (Nov 26 2026, FX4B): BEFORE a fixed control was a hit whenever its box met the mist's, even where a sheet drawn above
+     the mist held it (the members panel's "Go to Home" and "Not now" at z-index 1000, the List a Product and Edit Listing windows
+     at 200, the mist at 46): the mist sat beneath them and covered nothing. AFTER a fixed control counts only where the mist is
+     drawn ABOVE it at some point of their overlap (elementsFromPoint order, the mist made hit-testable for the test); one the
+     mist is beneath is listed, not failed. A control in the page's flow is judged by its box, as before. */
+  function mistAbove(n, r){ var L = Math.max(r.left, m.left), Rr = Math.min(r.right, m.right), T = Math.max(r.top, m.top), B = Math.min(r.bottom, m.bottom);
+    var pe = mist.style.getPropertyValue("pointer-events"), pp = mist.style.getPropertyPriority("pointer-events"), above = false;
+    mist.style.setProperty("pointer-events", "auto", "important");
+    for (var y = T + Math.min(1, (B - T) / 2); y < B && !above; y += 4) for (var x = L + Math.min(1, (Rr - L) / 2); x < Rr && !above; x += 4) {
+      var st = document.elementsFromPoint(x, y), im = -1, ic = -1;
+      for (var i = 0; i < st.length; i++) { if (im < 0 && mist.contains(st[i])) im = i; if (ic < 0 && (st[i] === n || n.contains(st[i]))) ic = i; }
+      if (im >= 0 && ic >= 0 && im < ic) above = true; }   // a point counts only where the control itself is there (not its rounded corner)
+    if (pe) mist.style.setProperty("pointer-events", pe, pp); else mist.style.removeProperty("pointer-events");
+    return above; }
+  var hits = [], beneath = [];
   els.forEach(function(n){
     if (mist.contains(n) || (guide && guide.contains(n))) return;
     var r = n.getBoundingClientRect(); if (r.width < 2 || r.height < 2 || !shown(n)) return;
     if (r.left >= m.right - 0.5 || r.right <= m.left + 0.5) return;
     var top = fixedUp(n) ? r.top : r.top + scrollY - maxS, bottom = top + r.height;   // where it sits once the page is at its end
-    if (top < m.bottom - 0.5 && bottom > m.top + 0.5) hits.push(name(n) + " \"" + (n.innerText || n.getAttribute("aria-label") || n.value || "").replace(/\s+/g, " ").trim().slice(0, 24) + "\" " +
+    if (top < m.bottom - 0.5 && bottom > m.top + 0.5) (fixedUp(n) && !mistAbove(n, r) ? beneath : hits).push(name(n) + " \"" + (n.innerText || n.getAttribute("aria-label") || n.value || "").replace(/\s+/g, " ").trim().slice(0, 24) + "\" " +
       Math.round(r.left) + "," + Math.round(r.top + scrollY) + " " + Math.round(r.width) + "x" + Math.round(r.height) + (fixedUp(n) ? " fixed" : ""));
   });
-  return { mist: [Math.round(m.left), Math.round(m.top), Math.round(m.width), Math.round(m.height)], end: maxS, hits: hits };
+  return { mist: [Math.round(m.left), Math.round(m.top), Math.round(m.width), Math.round(m.height)], end: maxS, hits: hits, beneath: beneath };
 })()`;
 const mistHits = {};   // page@width -> every hit
 let mistPages = 0;
@@ -922,7 +936,7 @@ async function mistRule(cdp, page, w, at) {
   if (!g) return;   // no mist on this page
   mistPages++;
   if (g.hits.length) mistHits[page + "@" + w] = g.hits;
-  check((at || page + " at " + w + ": ") + "MIST_CLEAR: nothing to tap under the resting mist with the page at its end (" + g.mist.join(",") + ")", g.hits.length === 0, g.hits.length + " " + J(g.hits.slice(0, 8)));
+  check((at || page + " at " + w + ": ") + "MIST_CLEAR: nothing to tap under the resting mist with the page at its end (" + g.mist.join(",") + ")", g.hits.length === 0, g.hits.length + " " + J(g.hits.slice(0, 8)) + (g.beneath && g.beneath.length ? " (the mist beneath: " + J(g.beneath.slice(0, 4)) + ")" : ""));
 }
 
 /* ── open a page at a size ── */
@@ -2958,9 +2972,13 @@ async function fx3Run(cdp, origin) {
     // 3. another page: Home's feed (the mist over the feed, under its sheets); oracle.html (no mist)
     await open(cdp, origin, "home.html", w, h, true);
     s = await ev(FX3_READ);
-    // Home loads no Guide (as before FX3), so only the mist is here
-    check("FX3 Home at " + w + ": the mist in its place over the feed, no book button", !!s.mist && near(s.W - s.mist.r, TM.MIST.RIGHT) && !!s.bar && near(s.bar.t - s.mist.b, TM.MIST.ABOVE_BAR) && !s.fab, J([s.mist, s.bar]));
+    /* NAMED (Nov 26 2026, FX4B): BEFORE "the mist in its place over the feed": stale since H1B, which took the mist off Home and
+       the composer on the owner's order (TMX_NO_MIST_PAGES). AFTER no mist on Home or on Compose, and no book button. */
+    check("FX3 Home at " + w + ": no mist on Home (H1B), no book button", !s.mist && !s.fab, J([s.mist, s.fab]));
     await pageChecks("FX3 Home at " + w + ": ");
+    await open(cdp, origin, "compose.html", w, h, true);
+    s = await ev(FX3_READ);
+    check("FX3 compose.html at " + w + ": no mist on Compose (H1B), no book button", !s.mist && !s.fab, J([s.mist, s.fab]));
     await open(cdp, origin, "oracle.html", w, h, true);
     s = await ev(FX3_READ);
     check("FX3 oracle.html at " + w + ": no mist (TMX_NO_MIST_PAGES, as before)", !s.mist, J(s.mist));
