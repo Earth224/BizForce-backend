@@ -1,0 +1,47 @@
+[
+ [
+  "mychart.html",
+  "      /* NAMED (Nov 27 2026, FX4B3): on a phone whose content width has just changed (a turn back from landscape, where the\n         ring and the triangle were sized for a different stage), the ring is drawn again at once (FX4B4: the view it returns to is\n         the whole chart), so the start view shows\n         the triangle at its size straight away rather than 150 ms later; the redraw below still follows, the same */",
+  "      /* NAMED (Nov 27 2026, FX4B3): on a phone whose content width has just changed (a turn back from landscape, where the\n         ring and the triangle were sized for a different stage), the ring is drawn again at once, so the start view shows\n         the triangle at its size straight away rather than 150 ms later; the redraw below still follows, the same */"
+ ],
+ [
+  "mychart.html",
+  "      stage.classList.add(\"mc-fit\");\n      /* NAMED (Nov 27 2026, FX4B4): BEFORE a width change returned to the start view (the triangle large); AFTER to the whole chart */\n      if (widthChanged) { mcZoom.z = s; mcZoom.tx = 0; mcZoom.ty = 0; mcZoom.mode = \"whole\"; }\n      if (widthChanged) { mcZoomMeasure(); mcZoomWhole(false); }\n      else if (mcZoom.mode === \"start\") { mcZoomMeasure(); mcZoomStart(false); }\n      else mcZoomClampApply(false);",
+  "      stage.classList.add(\"mc-fit\");\n      if (widthChanged) { mcZoom.z = s; mcZoom.tx = 0; mcZoom.ty = 0; mcZoom.mode = \"start\"; }\n      if (widthChanged || mcZoom.mode === \"start\") { mcZoomMeasure(); mcZoomStart(false); }\n      else mcZoomClampApply(false);"
+ ],
+ [
+  "mychart.html",
+  "        hint.id = \"mcZoomHint\";\n        hint.textContent = \"Double-tap or pinch to zoom in · Drag to explore\";   // NAMED (Nov 27 2026, FX4B4): BEFORE \"Drag to explore · Double-tap to see your whole chart\"\n        box.parentNode.insertBefore(hint, box.nextSibling);",
+  "        hint.id = \"mcZoomHint\";\n        hint.textContent = \"Drag to explore · Double-tap to see your whole chart\";\n        box.parentNode.insertBefore(hint, box.nextSibling);"
+ ],
+ [
+  "mychart.html",
+  "          clearTimeout(tapTimer); tapTimer = null; lastTap = null;\n          if (zoomed()) mcZoomWhole(true); else mcZoomStart(true);   // FX4B3: the whole chart and the start view, in turn; FX4B4: from the whole chart (where it opens) to the triangle large\n          return;",
+  "          clearTimeout(tapTimer); tapTimer = null; lastTap = null;\n          if (zoomed()) mcZoomWhole(true); else mcZoomStart(true);   // FX4B3: the whole chart and the start view, in turn\n          return;"
+ ],
+ [
+  "mychart.html",
+  "      if (tri && tri.offsetWidth) mcZoom.triW = tri.offsetWidth;\n      if (mcZoom.mode === \"whole\") { mcZoomMeasure(); mcZoomWhole(false); }   // NAMED (Nov 27 2026, FX4B4): the whole chart, in the box measured again\n      else if (mcZoom.mode === \"start\") { mcZoomMeasure(); mcZoomStart(false); }\n      else mcZoomClampApply(false);",
+  "      if (tri && tri.offsetWidth) mcZoom.triW = tri.offsetWidth;\n      if (mcZoom.mode === \"start\") { mcZoomMeasure(); mcZoomStart(false); }\n      else mcZoomClampApply(false);"
+ ],
+ [
+  "mychart.html",
+  "    var MC_TAP_SLOP = 8, MC_TAP_WAIT = 250, MC_TAP_NEAR = 40, MC_START_SIDE = 16, MC_BOX_VH = 0.72;\n    var mcZoom = { box: null, hint: null, s: 1, z0: 1, triW: 0, avail: 0, bh: 0, z: 1, tx: 0, ty: 0, raf: 0, mode: \"whole\" };   // NAMED (Nov 27 2026, FX4B4): BEFORE mode \"start\"\n",
+  "    var MC_TAP_SLOP = 8, MC_TAP_WAIT = 250, MC_TAP_NEAR = 40, MC_START_SIDE = 16, MC_BOX_VH = 0.72;\n    var mcZoom = { box: null, hint: null, s: 1, z0: 1, triW: 0, avail: 0, bh: 0, z: 1, tx: 0, ty: 0, raf: 0, mode: \"start\" };\n"
+ ],
+ [
+  "mychart.html",
+  "         s      the whole chart: the page's content width over the desktop stage's 1052 px (every card and the triangle in the box);\n         NAMED (Nov 27 2026, FX4B4): BEFORE the chart opened at z0; AFTER it opens at s, the whole chart (mode \"whole\"), and\n                again after a width change (a turn of the phone); a double-tap there goes to z0, and from any zoom above s\n                back to s. The box keeps the height below (from z0), so the whole chart sits centred in it.\n         z0     the big-triangle view (FX4B3's starting view, mode \"start\"): the triangle fills the box's width less 16 px, (box width - 16) / the triangle's\n                desktop width, measured; at most 1; the triangle's measured centre in the middle of the box;",
+  "         s      the whole chart: the page's content width over the desktop stage's 1052 px (every card and the triangle in the box);\n         z0     the starting view (FX4B3): the triangle fills the box's width less 16 px, (box width - 16) / the triangle's\n                desktop width, measured; at most 1; the triangle's measured centre in the middle of the box;"
+ ],
+ [
+  "mychart.html",
+  "    <div class=\"mychart-sigil-panel\" id=\"mychartSigilPanel\">\n      <!-- NAMED (Nov 27 2026, FX4B4): BEFORE \"Sigil\"; AFTER \"Your Sigil\" (the owner: a symbol from the member's own chart) -->\n      <div class=\"mychart-sigil-title\">Your Sigil</div>\n      <div class=\"mychart-sigil-figure\" id=\"mychartSigilFigure\"></div>",
+  "    <div class=\"mychart-sigil-panel\" id=\"mychartSigilPanel\">\n      <div class=\"mychart-sigil-title\">Sigil</div>\n      <div class=\"mychart-sigil-figure\" id=\"mychartSigilFigure\"></div>"
+ ],
+ [
+  "mychart.html",
+  "       tall); a drag explores the rest, a double-tap shows the whole chart (every card inside the box, centred) and another\n       brings the start back, and a pinch goes from the whole chart up to the desktop size. NAMED (Nov 27 2026, FX4B4): BEFORE it\n       opened with the triangle large; AFTER it opens on the whole chart (the owner: it looks better, and the page scrolls\n       past it smoothly), the box the same size; a double-tap or a pinch zooms in to the triangle large, a double-tap again\n       comes back. At the whole chart a one-finger\n       drag scrolls the page (touch-action pan-y); zoomed in the box takes the touch (none), and the part of a vertical drag",
+  "       tall); a drag explores the rest, a double-tap shows the whole chart (every card inside the box, centred) and another\n       brings the start back, and a pinch goes from the whole chart up to the desktop size. At the whole chart a one-finger\n       drag scrolls the page (touch-action pan-y); zoomed in the box takes the touch (none), and the part of a vertical drag"
+ ]
+]

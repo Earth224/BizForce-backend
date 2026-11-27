@@ -833,10 +833,16 @@ async function oracleChecks() {
   // NAMED (Nov 26 2026, FX4B): BEFORE FX4A's hunks alone; AFTER FX4B's (My Chart fits the phone; the Oracle's Profile and Celestial
   // panels solid on a phone; checkAppShell.fx4b.json) are undone first, then FX4A's.
   const FX4B_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4b.json"), "utf8"));
+  // NAMED (Nov 27 2026, FX4B4): My Chart opens on the whole chart on a phone, and the sigil card's heading is "Your Sigil"
+  // (mychart.html, 9 hunks, [file, now, was]); undone before FX4B's (they are the newest), each found exactly once, they
+  // return mychart.html to frontend d3e0f57 exactly.
+  const FX4B4_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4b4.json"), "utf8"));
   const drift = ORACLE_PAGES.filter(f => {
     const was = gitShow(BEFORE, f);
     let now = FILES[f];
     if (was === null || now === null) return true;
+    // NAMED (Nov 27 2026, FX4B4): FX4B4's hunks undone before FX4B's, the same way
+    FX4B4_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4b4 hunk missing"; });
     FX4B_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4b hunk missing"; });
     FX4A_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4a hunk missing"; });
     // NAMED (Nov 19 2026, PH1): two named phone edits on every page are set aside, each exactly once: the viewport meta
