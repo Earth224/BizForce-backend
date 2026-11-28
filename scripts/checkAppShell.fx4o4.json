@@ -1,0 +1,22 @@
+[
+ [
+  "mychart.html",
+  "      mcZoom.z0 = triW > 0 ? Math.max(mcZoom.s, Math.min(1, (mcZoom.avail - MC_START_SIDE) / triW)) : mcZoom.s;\n      /* NAMED (Nov 27 2026, FX4O4): BEFORE the box was max(1100 s, min(1100 z0, 72% of the screen's height)) tall, so the whole\n         chart (1100 s tall) sat centred in 113 to 143 px of blank band (360 to 430 px wide); AFTER the box is exactly the whole\n         chart's height. The large triangle (z0) and every zoom between are drawn and panned inside it as before; at z0 the\n         chart is now taller than the box, so a drag also moves it up and down (the same drag, both axes, already clamped). */\n      mcZoom.bh = MC_FIT_H * mcZoom.s;\n      mcZoom.box.style.height = mcZoom.bh + \"px\";",
+  "      mcZoom.z0 = triW > 0 ? Math.max(mcZoom.s, Math.min(1, (mcZoom.avail - MC_START_SIDE) / triW)) : mcZoom.s;\n      mcZoom.bh = Math.max(MC_FIT_H * mcZoom.s, Math.min(MC_FIT_H * mcZoom.z0, MC_BOX_VH * window.innerHeight));\n      mcZoom.box.style.height = mcZoom.bh + \"px\";"
+ ],
+ [
+  "mychart.html",
+  "    var MC_FIT_QUERY = \"(max-width: 599.98px)\", MC_FIT_W = 1052, MC_FIT_H = 1100;\n    var MC_TAP_SLOP = 8, MC_TAP_WAIT = 250, MC_TAP_NEAR = 40, MC_START_SIDE = 16;   // NAMED (Nov 27 2026, FX4O4): BEFORE also MC_BOX_VH = 0.72 (see mcZoomMeasure)\n    var mcZoom = { box: null, hint: null, s: 1, z0: 1, triW: 0, avail: 0, bh: 0, z: 1, tx: 0, ty: 0, raf: 0, mode: \"whole\" };   // NAMED (Nov 27 2026, FX4B4): BEFORE mode \"start\"",
+  "    var MC_FIT_QUERY = \"(max-width: 599.98px)\", MC_FIT_W = 1052, MC_FIT_H = 1100;\n    var MC_TAP_SLOP = 8, MC_TAP_WAIT = 250, MC_TAP_NEAR = 40, MC_START_SIDE = 16, MC_BOX_VH = 0.72;\n    var mcZoom = { box: null, hint: null, s: 1, z0: 1, triW: 0, avail: 0, bh: 0, z: 1, tx: 0, ty: 0, raf: 0, mode: \"whole\" };   // NAMED (Nov 27 2026, FX4B4): BEFORE mode \"start\""
+ ],
+ [
+  "mychart.html",
+  "    }\n    /* NAMED (Nov 27 2026, FX4O4): MY CHART ON AN IPHONE (the owner's board \"MyChartFix\", approved). BEFORE the page's content\n       began under the iPhone's top safe area (css/bf-phone.css pads <html> by env(safe-area-inset-top)) but the moon, fixed in\n       the abyss, did not: with a 47 px safe area Back to Oracle sat at 79 to 123 px and the moon (top 96 px) covered it, and\n       MY CHART began 67 px under the moon; the chart began 28 px under the Sun / Moon / ASC line. AFTER the moon's top adds the\n       same env(safe-area-inset-top), so it is 20 px under the header row on every phone, with or without a safe area, and MY\n       CHART stays 20 px under the moon (the row's margin, FX4O2); the chart begins 16 px under the Sun line, so the first\n       house card (63 desktop px down the chart, 19 to 23 px here) is 35 to 39 px under it (the box no longer centres the whole\n       chart in extra height: see FX4O4 in the zoom code). At 600 px and up nothing changes. */\n    @media (max-width: 599.98px) {\n      .abyss-moon { top: calc(96px + env(safe-area-inset-top, 0px)); }\n      .mychart-title-row { margin-bottom: 16px; }\n    }\n  </style>",
+  "    }\n  </style>"
+ ],
+ [
+  "oracle.html",
+  "    }\n    /* NAMED (Nov 27 2026, FX4O4): THE ORACLE ON AN IPHONE (checked with My Chart's fix, \"MyChartFix\"). BEFORE the page's content\n       began under the iPhone's top safe area (css/bf-phone.css pads <html> by env(safe-area-inset-top)) but the moon, fixed in\n       the abyss, did not: with a 47 px safe area BIZFORCE AI (137 to 154 px) touched the moon's circle at 360 px, and the title\n       block began 67 px under the moon. AFTER the moon's top adds the same env(safe-area-inset-top): it is 20 px under BIZFORCE\n       AI on every phone, and the title block stays 20 px under it (the nav's margin, FX4O). At 600 px and up nothing changes. */\n    @media (max-width: 599.98px) {\n      .abyss-moon { top: calc(127px + env(safe-area-inset-top, 0px)); }\n    }\n  </style>",
+  "    }\n  </style>"
+ ]
+]

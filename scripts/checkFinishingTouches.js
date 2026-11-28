@@ -833,6 +833,11 @@ async function oracleChecks() {
   // NAMED (Nov 26 2026, FX4B): BEFORE FX4A's hunks alone; AFTER FX4B's (My Chart fits the phone; the Oracle's Profile and Celestial
   // panels solid on a phone; checkAppShell.fx4b.json) are undone first, then FX4A's.
   const FX4B_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4b.json"), "utf8"));
+  // NAMED (Nov 27 2026, FX4O4): My Chart and the Oracle moon on iPhones (mychart.html, 3 hunks: the moon's top with the
+  // safe area and the title row's margin; the zoom box's height, 1100 x s; oracle.html, 1 hunk: the moon's top with the safe
+  // area), [file, now, was]; undone before FX4O's (they are the newest), each found exactly once, they return both files to
+  // frontend 7a84ebc exactly.
+  const FX4O4_SWAPS = JSON.parse(fs.readFileSync(path.join(__dirname, "checkAppShell.fx4o4.json"), "utf8"));
   // NAMED (Nov 27 2026, FX4O): the Oracle's top section on a phone (oracle.html, 1 hunk) and My Chart's order on a phone
   // (mychart.html, 1 hunk), [file, now, was]; undone before FX4B4's (they are the newest), each found exactly once, they
   // return both files to frontend 2eb5800 exactly.
@@ -845,6 +850,8 @@ async function oracleChecks() {
     const was = gitShow(BEFORE, f);
     let now = FILES[f];
     if (was === null || now === null) return true;
+    // NAMED (Nov 27 2026, FX4O4): FX4O4's hunks undone before FX4O's, the same way
+    FX4O4_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4o4 hunk missing"; });
     // NAMED (Nov 27 2026, FX4O): FX4O's hunks undone before FX4B4's, the same way
     FX4O_SWAPS.filter(x => x[0] === f).forEach(([, a, b]) => { const i = now.indexOf(a); now = i >= 0 && now.indexOf(a, i + 1) < 0 ? now.slice(0, i) + b + now.slice(i + a.length) : now + " fx4o hunk missing"; });
     // NAMED (Nov 27 2026, FX4B4): FX4B4's hunks undone before FX4B's, the same way
